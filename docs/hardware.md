@@ -123,6 +123,15 @@
   `soc3_0_ram_*.bin`, `mt6631_fm_*` и т.п.). `/lib/firmware` отсутствует.
 - USB: MUSB-HDRC + XHCI (база `0x11200000`), OTG.
 
+## Отладка / консоль
+
+- **UART0**: `11002000.serial`, MMIO `0x11002000`, IRQ **286**, `mt6577-uart`
+  (`base_baud 1625000`), `/dev/ttyS0`; консоль в стоке включена
+  (`mtk_printk_ctrl.disable_uart=0`), но вывод идёт в `ram_console`/`pstore`.
+- **ramoops**: `0x54410000`, size `0xe0000` (`console_size 0x40000`,
+  `pmsg_size 0x10000`); `ram_console` — `0x54400000..0x54410000`.
+- Для mainline: `earlycon=mt6577,0x11002000 console=ttyS0,921600n8` (baud уточнить).
+
 ## Загрузка
 
 - A/B-слоты; текущий `_a`.
