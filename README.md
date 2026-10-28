@@ -72,6 +72,12 @@ t1100-ubuntu/
 - `../t1100/.opencode/skills/aurora-mediatek-security-off/` — перепаковка boot
   (`scripts/boot_patch.py`), recovery/прошивка.
 
+## С чего начать
+
+Входная точка — агент **`lead`** (оркестратор): он читает `docs/` и ведёт
+`docs/STATUS.md`. Дальше он делегирует `bringup` (фаза 1), затем
+`kernel-drm`/`gpu-mesa`, затем `distro-userspace`.
+
 ## Быстрый старт (когда начнём)
 
 1. Прочитать `docs/hardware.md`, `docs/research.md`, `docs/porting-plan.md`.

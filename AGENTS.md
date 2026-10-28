@@ -32,12 +32,24 @@
 7. TRM MT6771 **не публичен** — референс = исходники ядра; дизассемблирование —
    только как fallback (см. агента `reverse-engineer`).
 
+## Оркестрация
+
+- **Входная точка — агент `lead`** (tech lead/архитектор): ведёт `docs/STATUS.md`,
+  выбирает базовое дерево, выстраивает фазы и принимает результат.
+- Специалисты — рабочие; `lead` делегирует им через `subagent` или ты
+  переключаешься (Tab) на нужного.
+- Порядок: `bringup` → `kernel-drm` → `gpu-mesa` → `distro-userspace`;
+  `reverse-engineer` — только по конкретной блокировке.
+- Специалист отдаёт **фактический вывод**, `lead` обновляет `STATUS.md` и
+  принимает/возвращает.
+
 ## Роли (агенты)
 
 | Агент | Роль |
 |---|---|
-| `kernel-drm` | DRM/KMS-драйвер дисплея MT6771 |
+| `lead` | оркестратор: roadmap, STATUS, выбор базы, приёмка |
 | `bringup` | DTS, clock/pinctrl/regulator, SMI/IOMMU, загрузка |
+| `kernel-drm` | DRM/KMS-драйвер дисплея MT6771 |
 | `gpu-mesa` | panfrost, GPU-node, Mesa, GLES |
 | `distro-userspace` | Ubuntu rootfs, systemd, Wayland/GNOME, Wi-Fi/ввод |
 | `reverse-engineer` | опционально: дизассембл недостающих блобов |
