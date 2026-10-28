@@ -67,7 +67,10 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
 
 ## Фаза 6 — прошивка/откат
 
-- Перепаковка boot (kernel+DTB+initramfs), прошивка через recovery/`dd`.
+- Перепаковка boot: `scripts/repack_boot.py --ref <сток> --kernel Image.gz
+  --dtb mt6771.dtb --ramdisk <initramfs>` (заголовок и адреса наследуются от
+  стокового образа, DTB заворачивается в MTK-контейнер; round-trip проверен).
+- Прошивка через recovery/`dd`.
 - Бэкапы `boot_a`/`vbmeta`/`seccfg`; тест откатов.
 - **Готово:** воспроизводимая прошивка и возврат на сток.
 

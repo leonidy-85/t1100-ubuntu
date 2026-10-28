@@ -149,7 +149,13 @@
 ## Загрузка
 
 - A/B-слоты; текущий `_a`.
-- Android boot image **header v2** (gzip-ядро + ramdisk + DTB 111095 байт).
+- Android boot image **header v2** (gzip-ядро + ramdisk + DTB 111095 байт):
+  `kernel_addr=0x40080000`, `ramdisk_addr=0x55000000`, `tags_addr=0x54000000`,
+  `dtb_addr=0x54000000`, page 2048, `header_size=1660`, cmdline без `console=`.
+- DTB в образе — **не голый FDT**: MTK-контейнер 64 байта
+  (`magic d7 b7 ab 1e` BE, `total=0x40+len(fdt)`, `payload_len`, `payload_off=0x40`).
+  Поля контейнера — **big-endian**. Перепаковка: `scripts/repack_boot.py`
+  (round-trip стокового образа — **побайтово идентично**, sha256 совпадает).
 - Загрузчик — MTK `lk`; **verified boot не проверяет патченный boot** (проверено:
   модифицированный `boot_a` с IMA/diehard off загружается).
 - `fastboot` залочен: `devices`/`reboot-bootloader` отвечают, `getvar`/`flash`/
