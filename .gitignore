@@ -1,0 +1,16 @@
+# build artifacts
+/out/
+/build/
+*.o
+*.ko
+*.dtb
+*.img
+!docs/**/*.img
+
+# python
+__pycache__/
+*.pyc
+
+# local
+.venv/
+*.log
