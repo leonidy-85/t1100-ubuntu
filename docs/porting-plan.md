@@ -1,52 +1,86 @@
 # План порта
 
 Цель: **Ubuntu + Wayland/GNOME** с **DRM/KMS** и **GPU (panfrost)** на
-Fplus T1100 (MT6771). План — итеративный; каждая фаза заканчивается проверяемым
+Fplus T1100 (MT6771). План итеративный; каждая фаза заканчивается проверяемым
 результатом.
 
-## Фаза 0 — выбор базового дерева
-- Вариант A: mainline 6.x + патчи из `Helio-P22/linux-mainline` (MT6765) как
-  референс.
-- Вариант B: downstream 4.19/5.x MTK (если найдётся с `mtk_drm`).
-- Критерий: грузится до консоли/ramdisk, видны CPU/RAM/uart.
-- **Готово:** ядро стартует, есть serial/SSH.
+## Фаза 0 — выбор базового дерева ✅ (решение 28.10.2026)
 
-## Фаза 1 — SoC bring-up (DTS)
-- DTS: clock, pinctrl, regulator, `mmsys`, `disp`, `dsi`, `mali`, `smi`/`iommu`.
-- Источник: downstream DTS MT6771 + mainline MT6765.
-- **Готово:** `clk_summary`, питание, uart, USB-gadget.
+- **База: mainline LTS 6.12.y**, MT6771 добавляем в дерево как новый SoC.
+- Обоснование — `docs/research.md`: DISPSYS/GPU/PMIC MT6771 совпадают с
+  mainline **MT8183** (адреса блоков, IRQ, MT6358), GPU — тот же Mali-G72 MP3.
+- Downstream 4.14/4.4 MTK (Hadenix, Nokia, Realme) — **не база**, а референс
+  регистров/панели: DRM в них нет (`mtkfb`), плюс они вне mainline-подсистем.
+- Downstream 4.19/5.x с `mtk_drm` для MT6771 публично отсутствует.
+- **Готово:** решение записано в `docs/STATUS.md`; критерий фазы 1 — ниже.
+
+## Фаза 1 — SoC bring-up (DTS + подсистемы)
+
+Работа (по возрастанию сложности):
+1. **DTS `mt6771.dtsi` + `mt6771-t1100.dts`** — клон структуры `mt8183.dtsi`
+   с адресами/IRQ из `refs/stock-mt6771.dts`.
+2. **`clk-mt6771`** (`topckgen`, `infracfg_ao`, `pericfg`, `apmixedsys`, `mfgcfg`,
+   `mmsys`) — самая большая новая работа; за основу `clk-mt8183*.c`, сверить
+   gate-биты по downstream `clk-mt6771.c`.
+3. **`pinctrl-mt6771`** — на базе `pinctrl-mt8183.c`, сверить IO-конфиг/EINT.
+4. **pwrap + MT6358** (`mt6358-regulator`, `mt6358-keys`, `mt6358-rtc`) —
+   переиспользовать mainline-драйверы, нужен корректный `pwrap` для MT6771.
+5. **watchdog (`mtk-wdt`), `mt6577-uart` (console), MMC (`mtk-sd`), USB
+   (`mtu3`/`xhci-mtk`), `mtk-smi`/IOMMU (`mtk-iommu`)**.
+6. **ramoops/pstore** — единственный канал логов без UART (см. риски).
+
+**Готово:** ядро грузится до консоли/SSH, видны RAM и eMMC
+(`dmesg`, `clk_summary`, `free`, `lsblk`).
 
 ## Фаза 2 — DRM/KMS дисплей
-- Порт `dispsys` → `mediatek-drm`: DSI host, CRTC (OVL/RDMA), MMSYS/mutex/CMDQ.
-- DRM panel-драйвер для DSI-панели (init из LCM).
-- **Готово:** `modetest`/`kmscube` выводят картинку на панель.
+
+1. `mmsys`-route-таблица MT6771 для `drivers/soc/mediatek/mtk-mmsys.c`
+   (по `mt8183_mmsys_routing_table`).
+2. DRM-компоненты: OVL0/2L, RDMA0/1, COLOR, CCORR, AAL, GAMMA, DITHER, DSI,
+   MUTEX, PWM (compatible `mediatek,mt6771-*` → `mt8183-*` fallback, где совпадает).
+3. `mtk_dsi` + `mtk_mipi_tx`: сверить DSI PHY-тайминги (downstream `ddp_dsi.c`).
+4. DRM panel-драйвер **`panel-boe-tv110xum`** (1600×2176, 4 lane, video mode):
+   init-последовательность из вкомпилированного LCM `tv110xum_lb2_incell`.
+5. Backlight: `pwm-backlight` / `mtk-pwm` + GPIO питания.
+
+**Готово:** `modetest`/`kmscube` выводят картинку на панель.
 
 ## Фаза 3 — GPU (panfrost)
-- `CONFIG_DRM_PANFROST`, GPU-node в DTS (clock/regulator/power).
+
+- `CONFIG_DRM_PANFROST`, GPU-node (`mediatek,mt6771-mali` → `arm,mali-bifrost`),
+  MFG power-domain (`spm`), `mfgcfg`-клок.
 - Mesa panfrost; проверка `glmark2`/`es2gears`.
 - **Готово:** GLES-рендер на экране.
 
 ## Фаза 4 — Ubuntu userspace
+
 - Ubuntu-base arm64 rootfs (systemd), root на ext4 (p54 или LV).
 - Wayland + GNOME (или Weston для первых тестов).
 - **Готово:** рабочий стол на дисплее, ввод с тача.
 
 ## Фаза 5 — периферия
-- Wi-Fi: вендорный `wlan_drv_gen3` + `/vendor/firmware`, либо mainline `mt76`.
-- Тач/evdev, USB, (опционально) звук.
+
+- Wi-Fi: вендорный `wlan_drv_gen3` + `/vendor/firmware`, либо mainline `mt76`
+  (MT6631 в mainline не поддержан — вероятно, только вендорный модуль).
+- Тач Himax (`i2c@11007000`, 0x48), evdev/libinput.
 - **Готово:** сеть и ввод стабильны.
 
 ## Фаза 6 — прошивка/откат
+
 - Перепаковка boot (kernel+DTB+initramfs), прошивка через recovery/`dd`.
 - Бэкапы `boot_a`/`vbmeta`/`seccfg`; тест откатов.
 - **Готово:** воспроизводимая прошивка и возврат на сток.
 
 ## Риски
-- **Дисплей — главный риск**: нет TRM, только исходники; объём работы велик.
-- Панель: init/тайминги; тач-калибровка.
-- GPU: panfrost на G72 — ок, но нужен рабочий KMS/драйвер платформы.
-- Периферия: вендорные блобы/прошивки.
-- Кирпич при прошивке — только через recovery/с бэкапом.
+
+- **Clock-драйвер MT6771** — основной объём новой работы (gate-биты сверять
+  по downstream `clk-mt6771.c`).
+- **Логи при загрузке**: UART-доступ к плате не подтверждён; ставка на
+  `ramoops`/pstore + «тихий» boot (см. STATUS, блокеры).
+- **Панель**: init-последовательность только в бинарном LCM-драйвере →
+  возможен RE (fallback-агент `reverse-engineer`).
+- **Периферия**: вендорные блобы/прошивки (Wi-Fi/BT).
+- **Кирпич при прошивке** — только через recovery/с бэкапом.
 
 ## Критерии успеха v1
 1. `kmscube` на панели (KMS).

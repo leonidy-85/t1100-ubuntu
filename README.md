@@ -4,8 +4,10 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус: scaffold.** Здесь только описание, план, агенты, скилы и инструменты.
-> Kernel/DRM-порт ещё не начат — ничего не прошивалось и не реализовано.
+> **Статус: фаза 0 закрыта, идёт bring-up.** База — mainline LTS 6.12.y, MT6771
+> добавляется как новый SoC; шаблон — mainline MT8183 (совпадение DISPSYS/GPU/PMIC
+> доказано по стоковому DTB, см. `docs/research.md`). Ядро ещё не прошивалось.
+> Текущее состояние — `docs/STATUS.md`.
 
 ## Зачем
 
@@ -81,7 +83,8 @@ t1100-ubuntu/
 ## Быстрый старт (когда начнём)
 
 1. Прочитать `docs/hardware.md`, `docs/research.md`, `docs/porting-plan.md`.
-2. Выбрать базовое дерево (mainline + patches Helio-P22 / downstream 4.19+).
+2. ~~Выбрать базовое дерево~~ — выбрано: mainline 6.12.y + поддержка MT6771
+   по шаблону MT8183 (`docs/STATUS.md`).
 3. Собрать ядро, загрузить до serial/ramdisk (без дисплея).
 4. Портировать `mediatek-drm` под MT6771, поднять `kmscube`.
 5. Включить panfrost, проверить GLES.

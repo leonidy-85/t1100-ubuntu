@@ -21,12 +21,45 @@
 
 ## Mainline / near-mainline
 
-- **`drivers/gpu/drm/mediatek`** (mainline): поддерживает MT8173/8183/8186/8192/
-  8195/8196/8365/8395 и др. **MT6771 нет** — но это каркас для порта.
-- **`gitlab.com/Helio-P22/linux-mainline`** — mainline bring-up **MT6765
-  (Helio P22)**: то же поколение MMSYS/DISPSYS, что P60/P70 — **лучший референс**.
+- **`drivers/gpu/drm/mediatek`** (mainline): MT6771 нет — но это каркас порта.
 - **panfrost** (kernel `CONFIG_DRM_PANFROST` + Mesa): поддерживает Bifrost,
   включая **Mali-G72** (GLES 3.1 с Mesa 21.2+).
+
+### Главное открытие (28.10.2026): MT6771 ≈ MT8183
+
+Проверено по стоковому DTB устройства (`refs/stock-mt6771.dts`) и mainline
+`arch/arm64/boot/dts/mediatek/mt8183.dtsi`:
+
+| Что | MT6771 (сток) | MT8183 (mainline) | Совпадает |
+|---|---|---|---|
+| DISPSYS OVL0 / OVL_2L0 / OVL_2L1 | 0x14008000 / 9000 / a000 | то же | ✅ |
+| RDMA0 / RDMA1 / WDMA0 | 0x1400b000 / c000 / d000 | то же | ✅ |
+| COLOR0 / CCORR0 / AAL0 / GAMMA0 / DITHER0 | 0x1400e000…14012000 | то же | ✅ |
+| DSI0 / DPI0 / MUTEX / LARB0 / SMI | 0x14014000 / 15000 / 16000 / 17000 / 19000 | то же | ✅ |
+| `mmsys` | 0x14000000 | 0x14000000 | ✅ |
+| GPU | 0x13040000, IRQ 278/279/280 | 0x13040000, IRQ 278/279/280 | ✅ |
+| PMIC | MT6358 | MT6358 | ✅ |
+| topckgen / infracfg_ao / pericfg | 0x10000000 / 10001000 / 10003000 | то же | ✅ |
+| GPU | Mali-G72 MP3 | Mali-G72 MP3 | ✅ |
+
+Вывод: **MT6771 — это «MT8183 без части IPU/ISP»** (или наоборот, MT8183 —
+tablet-версия MT6771). Значит:
+- `mtk_disp_ovl/rdma/color/ccorr/aal/gamma/dither/dsi/mutex/smi` из mainline
+  применимы к MT6771 через новые `compatible`/mmsys-route-таблицу;
+- panfrost для G72 MP3 уже работает на MT8183;
+- MT6358-регуляторы/RTC можно переиспользовать;
+- главная новая работа — **clock-драйвер MT6771** (`clk-mt6771-top/infra/peri/
+  apmixed/mfg/mm`), **pinctrl-mt6771** и DTS/панель.
+
+Второй референс — **MT8365 (Genio 350)** в mainline: полный набор
+`mt8365-disp-*`, `mt8365-mmsys`, `mt8365-mali` (Bifrost) — полезен там, где
+у MT6771 отличия от MT8183 (MMSYS-раскладка у MT8365 другая: OVL0 @ 0x1400b000).
+
+> **Поправка к прежней версии документа:** ссылка на
+> `gitlab.com/Helio-P22/linux-mainline` (bring-up MT6765) **не подтвердилась** —
+> публичного проекта с таким именем нет (проверено через GitLab API 28.10.2026).
+> MT6765/MT6771 в mainline отсутствуют (`arch/arm64/boot/dts/mediatek` содержит
+> только mt6755/6779/6795/6797 из этого поколения). База — mainline + MT8183.
 - `ax12-research` → `docs/hardware/mt8788-research.md`: описание конвейера
   дисплея (OVL/COLOR/CCORR/AAL/GAMMA/DITHER/DSI, DIRECT_LINK vs DECOUPLE).
 

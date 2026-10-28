@@ -13,20 +13,23 @@ permission:
 отдавала узлы для DRM/GPU.
 
 ## Задача
-- Выбрать базовое дерево: mainline 6.x + патчи `Helio-P22/linux-mainline`
-  (MT6765) **или** downstream 4.19/5.x MTK (если есть `mtk_drm`).
+- База **уже выбрана** (см. `docs/STATUS.md`): mainline LTS 6.12.y, MT6771 —
+  новый SoC in-tree. Шаблон — mainline **MT8183**, второй референс — **MT8365**.
 - Собрать DTS: clock, pinctrl, regulator, `mmsys`, `disp`, `dsi`, `mali`,
   `smi`/`iommu`, uart, USB-gadget.
 - Довести загрузку: uart/консоль, USB, RAM, питание.
 
 ## Источники
 - `docs/hardware.md`, `docs/research.md`, `docs/porting-plan.md`.
-- Downstream DTS MT6771 (Hadenix / nokia mt6771).
-- Mainline DTS MT6765 (`Helio-P22/linux-mainline`) — ближайший аналог.
+- `refs/stock-mt6771.dts` — **карта регистров** со стокового DTB (главный
+  источник адресов/IRQ: DISPSYS 0x140xxxx, GPU 0x13040000, PMIC MT6358).
+- Mainline `arch/arm64/boot/dts/mediatek/mt8183.dtsi`, `mt8365.dtsi` — шаблон.
+- Downstream DTS/clk MT6771 (Hadenix 4.4, Realme 4.14) — сверка gate-битов.
 - Mainline `drivers/clk/mediatek`, `pinctrl`, `regulator`, `iommu`.
 
 ## Что делать
-1. Сверить downstream DTS с mainline MT6765: что уже есть, чего не хватает.
+1. Сверить `refs/stock-mt6771.dts` с mainline `mt8183.dtsi`: что уже есть,
+   чего не хватает (адреса дисплея/GPU/PMIC совпадают — см. `docs/research.md`).
 2. Написать минимальный DTS, поднять uart/консоль, затем USB-gadget/RNDIS.
 3. Добавить узлы `mmsys`/`disp`/`dsi`/`mali`/`smi` для `kernel-drm` и `gpu-mesa`.
 4. Валидировать: `clk_summary`, `regulator_summary`, `dmesg`, USB.
