@@ -1,0 +1,36 @@
+#!/usr/bin/expect -f
+# Drive `devel-su` on the Fplus T1100: password -> root shell -> command -> exit.
+# Called by scripts/t1100_root.sh; not meant to be used directly.
+#
+# argv: host user key pass command
+set host    [lindex $argv 0]
+set user    [lindex $argv 1]
+set key     [lindex $argv 2]
+set pass    [lindex $argv 3]
+set command [lindex $argv 4]
+
+set timeout 60
+
+spawn -noecho ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=10 -i $key $user@$host devel-su
+
+expect {
+    -re "(P|p)assword:" { send -- "$pass\r" }
+    timeout { puts stderr "ERROR: no password prompt"; exit 2 }
+}
+
+expect {
+    -re {[#\$] $} { }
+    "Auth failed" { puts stderr "ERROR: auth failed"; exit 3 }
+    timeout { puts stderr "ERROR: no root shell"; exit 4 }
+}
+
+# Disable echo/prompt noise is impossible on an interactive shell; use markers
+# and let the caller filter them out.
+send -- "echo __BEGIN__\r"
+expect -re {__BEGIN__}
+send -- "$command\r"
+send -- "echo __END__\r"
+expect -re {__END__}
+send -- "exit\r"
+expect eof

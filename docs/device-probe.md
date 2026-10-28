@@ -30,6 +30,8 @@ scripts/t1100_root.sh 'id; ls /sys/fs/pstore'     # обёртка: ssh -tt + de
 | `config-stock.gz` | `/proc/config.gz` |
 | `interrupts.txt`, `iomem.txt`, `partitions.txt`, `mounts.txt`, `cmdline.txt` | как есть |
 | `opps.txt` | CPU OPP: 793…1989 МГц (policy0/policy4) |
+| `last_kmsg-stock.txt.gz`, `msdc_debug.txt.gz`, `ddr_info.txt` | `/proc/last_kmsg`, `/proc/msdc_debug`, `/proc/ddr_info` (DRAM 4 ГБ) |
+| `console-ramoops-2026-10-28-2237-crash.txt.gz` | лог паники стока после нашей попытки `dump_reg` (см. «Чего НЕ делать») |
 | `mmc.txt` | CID eMMC `A3A561` + serial |
 
 ## Ключевые факты
@@ -59,6 +61,20 @@ scripts/t1100_root.sh 'id; ls /sys/fs/pstore'     # обёртка: ssh -tt + de
   tv110xum_lb2_incell/` (панель BOE TV110XUM, 1600×2176).
 - Разметка: `mmcblk0p29` = 32768 КБ (`boot_a`) — совпадает с `docs/hardware.md`;
   с p32 начинается второй major (259) — второй GPT (A/B).
+
+## Чего НЕ делать (проверено на живой плате)
+
+- **Не писать в `/proc/dispsys`** (`echo dump_reg:N > /proc/dispsys`) и
+  **не писать в `/proc/clkdbg`** — на этом стоковом ядре это валит ядро:
+  `Internal error: Accessing user space memory outside uaccess.h routines`
+  в процессе `sh`, затем `wdt_arch_reset` и перезагрузка
+  (лог — `refs/device/console-ramoops-2026-10-28-2237-crash.txt.gz`).
+  Плата перезагрузилась сама за ~20 с без вмешательства, данные не потеряны.
+- `devel-su -c ...`, `su -c ...`, `pkexec` — не дают root неинтерактивно.
+- `/dev/mem`, debugfs, `clk_summary` — в стоке отсутствуют.
+
+Безопасно читать: `/proc/last_kmsg`, `/proc/ddr_info`, `/proc/msdc_debug`,
+`/proc/mtkfb`, `/sys/...`, `dmesg`, `/sys/fs/pstore`.
 
 ## Как снимать ещё (по мере надобности)
 

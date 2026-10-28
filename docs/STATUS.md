@@ -81,6 +81,10 @@
 - Прошивка: только через recovery/`dd` с бэкапом `boot_a`/`vbmeta`/`seccfg`;
   recovery T1100 и NS220 на одном адресе `10.42.66.66` — сверять
   `/proc/partitions`.
+- Отладочные MTK-узлы опасны: запись в `/proc/dispsys`/`/proc/clkdbg` валит
+  стоковое ядро (проверено 28.10.2026, плата ушла в перезагрузку; лог в
+  `refs/device/console-ramoops-2026-10-28-2237-crash.txt.gz`). Регистры берём
+  только из DTB и downstream-исходников.
 
 ## Референсы
 

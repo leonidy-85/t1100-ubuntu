@@ -1,0 +1,3 @@
+ddr_info:     0x400
+DRAM density: 4096 MB
+vendor ID:    0x0
