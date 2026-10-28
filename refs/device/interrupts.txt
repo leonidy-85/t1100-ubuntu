@@ -1,0 +1,165 @@
+           CPU0       CPU1       CPU2       CPU3       CPU4       CPU5       CPU6       CPU7       
+  3:    1166686     859073     814181     403749     538454     371429     305095     168783     GICv3  30 Level     arch_timer
+  6:      83046     120979      86924      75053     126406      91178      45503      26573  MT_SYSIRQ 176 Level     mt-gpt
+  7:          0          0          0          0          0          0          0          0  MT_SYSIRQ 303 Level     CIRQ
+  8:          0          0          0          0          0          0          0          0     GICv3  23 Level     arm-pmu
+ 10:          0          0          0          0          0          0          0          0  MT_SYSIRQ 306 Edge      amms_irq
+ 13:       6053       6047       6057       5997       6231       6158       6082       6170  MT_SYSIRQ  77 Level     mtk-msdc
+ 14:          0          0          0          0          0          0          0          0  MT_SYSIRQ  78 Level     mtk-msdc
+ 19:        648        533        594        532        219        156        171        138   mt-eint   1 Edge      himax_touch
+ 20:          0          0          0          0          0          0          0          0   mt-eint   2 Level     hallsensor
+ 21:          0          0          0          0          0          0          0          0   mt-eint   3 Edge      11240000.msdc cd
+ 23:         33         12         29         11         12         17         14         26   mt-eint   5 Edge      ff_irq
+ 24:          1          0          0          0          0          0          0          0   mt-eint   6 Level     ALS-eint
+ 28:          5          3          6          3          5          1          1          2   mt-eint  10 Edge      mt6370_pmu_irq
+ 59:          2          1          2          1          0          0          0          2   mt-eint  41 Edge      type_c_port0-IRQ
+129:          0          0          0          0          0          0          0          0   mt-eint 111 Level     nxpnfc
+197:          0          0          0          0          0          1          0          0   mt-eint 179 Level     usbcd_eint
+200:         30         18         26          9          7          3          6          6   mt-eint 182 Level     mt6358-irq
+207:          0          0          0          0          0          0          0          0   mt-eint 189 Level     usbkeyboard
+230:        743        654        573        538        273        243        238        162  MT_SYSIRQ  81 Level     mt-i2c
+231:      75443      43722      58213      15403      24035      11018      19318       3695  MT_SYSIRQ  85 Level     mt-i2c
+232:          3          1          2          2          0          0          2          0  MT_SYSIRQ  83 Level     mt-i2c
+233:       2375       1826       2037        760        624        257        437        151  MT_SYSIRQ  84 Level     mt-i2c
+234:          2          0          3          1          1          2          0          5  MT_SYSIRQ  82 Level     mt-i2c
+235:      23068      15999       7743       3261      12411       9902       6792       3278  MT_SYSIRQ 133 Level     mt-i2c
+236:        982        658        284        129        493        391        268        121  MT_SYSIRQ  87 Level     mt-i2c
+237:          0          0          0          0          0          0          0          0  MT_SYSIRQ  88 Level     mt-i2c
+238:          0          0          0          0          0          0          0          0  MT_SYSIRQ  89 Level     mt-i2c
+239:          0          0          0          0          0          0          0          0  MT_SYSIRQ 131 Level     mt-i2c
+240:          0          0          0          0          0          0          0          0  MT_SYSIRQ 132 Level     mt-i2c
+241:          0          0          0          0          0          0          0          0  MT_SYSIRQ  86 Level     mt-i2c
+243:        623        483        581        309        136        115        120        102  MT_SYSIRQ 211 Level     SSPM_MBOX
+244:       7271       6102       4616       2837       4430       3239       3089       1589  MT_SYSIRQ 212 Level     SSPM_MBOX
+245:       8617       6472       5707       3320       1924       1710       1516       1024  MT_SYSIRQ 213 Level     SSPM_MBOX
+246:          0          0          0          0          0          0          0          0  MT_SYSIRQ 214 Level     SSPM_MBOX
+248:          0          0          0          0          0          0          0          0  MT_SYSIRQ 187 Level     SPM
+249:          0          0          0          0          0          0          0          0  MT_SYSIRQ 142 Edge      mt_wdt
+251:          0          0          0          0          0          0          0          0  MT_SYSIRQ 185 Level     mt-pmic-pwrap
+252:          0          0          0          0          0          0          0          0  MT_SYSIRQ 186 Edge      mtk-kpd
+254:          1          2          2          0          2          4          0          0  MT_SYSIRQ 174 Level     SCP A IPC2HOST
+256:          0          0          0          0          0          0          0          0  MT_SYSIRQ 147 Level     mpu
+259:          0          0          0          0          0          0          0          0  MT_SYSIRQ 166 Level     m4u
+260:          0          0          0          0          0          0          0          0  MT_SYSIRQ 145 Level     devapc
+262:        854        660        573        372        415        326        335        245  MT_SYSIRQ 151 Level     CCIF_AP_DATA
+267:          0          0          0          0          0          0          0          0  MT_SYSIRQ 115 Level     CQDMA
+268:          0          0          0          0          0          0          0          0  MT_SYSIRQ 116 Level     CQDMA
+269:          0          0          0          0          0          0          0          0  MT_SYSIRQ 117 Level     CQDMA
+270:      18912      16550      17554      12022       4716       4193       3658       2965  MT_SYSIRQ 290 Level     AHB_SLAVE_HIF
+272:          0          0          0          0          0          0          0          0  MT_SYSIRQ 173 Level     CLDMA_AP
+273:          0          0          0          0          0          0          0          0  MT_SYSIRQ 152 Level     CCIF0_AP
+274:          0          0          0          0          0          0          0          0  MT_SYSIRQ 283 Edge      MD_WDT
+276:       2581       2439       3183       2313        742        619        520        378  MT_SYSIRQ 162 Level     mtk_cmdq
+289:          0          0          0          0          0          0          0          0  MT_SYSIRQ  75 Level     mt-pwm
+290:         79         66         75         87         77         81         71         68  MT_SYSIRQ 120 Level     1100a000.spi0
+291:          0          0          0          0          0          0          0          0  MT_SYSIRQ 124 Level     11010000.spi1
+292:          0          0          0          0          0          0          0          0  MT_SYSIRQ 129 Level     11012000.spi2
+293:          0          0          0          0          0          0          0          0  MT_SYSIRQ 130 Level     11013000.spi3
+294:          0          0          0          0          0          0          0          0  MT_SYSIRQ 134 Level     11018000.spi4
+295:          0          0          0          0          0          0          0          0  MT_SYSIRQ 135 Level     11019000.spi5
+296:          0          0          0          0          0          0          0          0  MT_SYSIRQ  76 Level     mtk-thermal
+297:          6          1          0          0          2          2          2          0  MT_SYSIRQ 127 Level     eem
+298:          0          0          0          0          0          0          0          0  MT_SYSIRQ 114 Level     mtk btif irq
+299:     329853     244363     177248     110132     143720     117710      98765      53365  MT_SYSIRQ 139 Level     mtk btif tx dma irq
+300:     736388     530646     387335     221020     268685     215160     176318     108792  MT_SYSIRQ 140 Level     mtk btif rx dma irq
+301:      60500      28640      16423       8169      24239      20732      15207       7287  MT_SYSIRQ 289 Level     BTIF_WAKEUP_IRQ
+304:        305        219        126         67        111        105         69         48  MT_SYSIRQ  72 Level     musb-hdrc
+306:       1719       1410       1930        934        277        245        228        224  MT_SYSIRQ 161 Level     Afe_ISR_Handle
+307:          0          0          0          0          0          0          0          0  MT_SYSIRQ 288 Level     BTCVSD_ISR_Handle
+309:      21061      20168      21698      15397       6178       5277       4729       3326  MT_SYSIRQ 278 Level     13040000.mali
+310:        107         93        111         73         45         42         49         29  MT_SYSIRQ 279 Level     13040000.mali
+311:      23974      21633      20634      19678       9612       8888       7900       5902  MT_SYSIRQ 280 Level     13040000.mali
+321:       2934       3306       3099       2403       1057        921        767        626  MT_SYSIRQ 225 Level     ovl0
+322:       2830       2824       3648       2474       1044        906        804        583  MT_SYSIRQ 226 Level     ovl0_2l
+323:          0          0          0          0          0          0          0          0  MT_SYSIRQ 227 Level     ovl1_2l
+324:       6969       6094       6500       5244       2081       1798       1644       1300  MT_SYSIRQ 228 Level     rdma0
+325:          0          0          0          0          0          0          0          0  MT_SYSIRQ 229 Level     rdma1
+326:        155        162        178         68         14         14         15          9  MT_SYSIRQ 230 Level     wdma0
+328:          0          0          0          0          0          0          0          0  MT_SYSIRQ 232 Level     ccorr0
+329:       1596       1504       1592       1390        728        611        473        353  MT_SYSIRQ 233 Level     aal0
+332:          3          0          0          1          0          1          0          1  MT_SYSIRQ 236 Level     dsi0
+333:          0          0          0          0          0          0          0          0  MT_SYSIRQ 237 Level     dpi0
+334:       6670       6601       6627       5023       2138       1774       1580       1216  MT_SYSIRQ 217 Level     mutex
+339:          0          0          0          0          0          0          0          0  MT_SYSIRQ 244 Level     dbi
+341:         58         72         48         42         25         32         23         27  MT_SYSIRQ 250 Level     Vcodec
+343:          0          0          0          0          0          0          0          0  MT_SYSIRQ 247 Level     Vcodec
+344:          0          0          0          0          0          0          0          0  MT_SYSIRQ 249 Level     jpeg_enc_driver
+348:          0          0          0          0          0          0          0          0  MT_SYSIRQ 270 Level     dpe
+349:          0          0          0          0          0          0          0          0  MT_SYSIRQ 271 Level     rsc
+350:          0          0          0          0          0          0          0          0  MT_SYSIRQ 273 Level     wpe_a
+351:          0          0          0          0          0          0          0          0  MT_SYSIRQ 274 Level     wpe_b
+352:          0          0          0          0          0          0          0          0  MT_SYSIRQ 269 Level     camera-fdvt
+353:          0          0          0          0          0          0          0          0  MT_SYSIRQ 276 Level     mfb
+355:          0          0          0          0          0          0          0          0  MT_SYSIRQ 277 Level     owe
+356:          0          0          0          0          0          0          0          0  MT_SYSIRQ 292 Level     ipu1
+357:          0          0          0          0          0          0          0          0  MT_SYSIRQ 293 Level     ipu2
+359:          0          0          0          0          0          0          0          0  MT_SYSIRQ 254 Level     cam2
+360:          0          0          0          0          0          0          0          0  MT_SYSIRQ 255 Level     cam3
+361:          0          0          0          0          0          0          0          0  MT_SYSIRQ 256 Level     cam4
+362:          0          0          0          0          0          0          0          0  MT_SYSIRQ 258 Level     camsv1
+363:          0          0          0          0          0          0          0          0  MT_SYSIRQ 259 Level     camsv2
+364:          0          0          0          0          0          0          0          0  MT_SYSIRQ 260 Level     camsv3
+365:          0          0          0          0          0          0          0          0  MT_SYSIRQ 261 Level     camsv4
+366:          0          0          0          0          0          0          0          0  MT_SYSIRQ 264 Level     ccu
+368:          0          0          3          0          0          0          0          0  mt6358-irq  48 Level     pwrkey
+369:          0          0          1          2          0          0          0          0  mt6358-irq  50 Level     pwrkey_r
+370:          0          0          0          0          0          0          0          0  mt6358-irq  49 Level     homekey
+371:          0          0          0          0          0          0          0          0  mt6358-irq  51 Level     homekey_r
+372:          0          0          0          0          0          0          0          0  mt6358-irq 112 Level     bat_h
+373:          0          0          0          0          0          0          0          0  mt6358-irq 113 Level     bat_l
+374:          0          0          0          0          0          0          0          0  mt6358-irq  82 Level     fg_cur_h
+375:          0          0          0          0          0          0          0          0  mt6358-irq  83 Level     fg_cur_l
+376:          0          0          0          0          0          0          0          0  mt6358-irq 133 Level     accdet
+377:          0          0          0          0          0          0          0          0  mt6358-irq 134 Level     accdet_eint0
+378:          4          3          0          2          0          0          0          0  mt6358-irq  64 Level     rtc
+379:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  93 Edge      otp
+380:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  94 Edge      vdda_ovp
+381:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  95 Edge      vdda_uv
+382:          0          0          1          0          0          0          0          0  mt6370_pmu_irq   6 Edge      chg_mivr
+383:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  32 Edge      chg_aiclmeasi
+384:          1          0          2          0          0          0          0          0  mt6370_pmu_irq  48 Edge      attachi
+385:          0          0          1          0          0          0          0          0  mt6370_pmu_irq  68 Edge      ovpctrl_uvp_d_evt
+386:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  35 Edge      chg_wdtmri
+387:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  15 Edge      chg_vbusov
+388:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  27 Edge      chg_tmri
+389:          0          0          0          0          0          0          0          0  mt6370_pmu_irq   4 Edge      chg_treg
+390:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  55 Edge      dcdti
+391:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  75 Edge      fled_lvf
+392:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  78 Edge      fled2_short
+393:          0          0          0          0          0          0          0          0  mt6370_pmu_irq  79 Edge      fled1_short
+394:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 103 Edge      ldo_oc
+395:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 104 Edge      isink4_short
+396:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 105 Edge      isink3_short
+397:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 106 Edge      isink2_short
+398:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 107 Edge      isink1_short
+399:          0          1          0          0          0          0          0          0  mt6370_pmu_irq 108 Edge      isink4_open
+400:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 109 Edge      isink3_open
+401:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 110 Edge      isink2_open
+402:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 111 Edge      isink1_open
+403:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 118 Edge      bled_ocp
+404:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 123 Edge      dsv_vneg_ocp
+405:          7          3          7          3          0          1          0          0  mt6370_pmu_irq 124 Edge      dsv_vpos_ocp
+406:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 125 Edge      dsv_bst_ocp
+407:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 126 Edge      dsv_vneg_scp
+408:          0          0          0          0          0          0          0          0  mt6370_pmu_irq 127 Edge      dsv_vpos_scp
+409:          0          0          1          0          0          0          0          0  mt6358-irq 117 Level     bat_temp_l
+410:          0          0          0          0          0          0          0          0  mt6358-irq 116 Level     bat_temp_h
+411:          0          0          0          0          0          0          0          0  mt6358-irq  40 Level     vmch_oc
+412:          1          0          2          0          0          0          0          0  mt6358-irq  88 Level     fg_iavg_h
+413:          0          0          0          1          0          0          0          0  mt6358-irq  89 Level     fg_iavg_l
+414:          0          0          0          0          0          0          0          0  mt6358-irq  87 Level     fg_n_charge_l
+415:          8          4          0          0          0          0          0          0  mt6358-irq  85 Level     fg_bat1_h
+416:         12          7          5          2          0          1          0          1  mt6358-irq  86 Level     fg_bat1_l
+417:         10          4          3          0          0          0          0          0  mt6358-irq 119 Level     nag_c_dltv
+418:          0          0          0          0          0          0          0          0  mt6358-irq  84 Level     fg_zcv
+419:          0          0          0          0          0          0          0          0  mt6358-irq  99 Level     baton_bat_out
+420:          0          0          0          0          0          0          0          0  mt6358-irq 115 Level     bat2_l
+422:          0          0          0          0          0          0          0          0  mt6358-irq  44 Level     vibr_oc
+IPI0:   1638083    1355509    1438954     860809     453608     359296     291231     255070       Rescheduling interrupts
+IPI1:       264        231        167        150        211        179        204        164       Function call interrupts
+IPI2:         0          0          0          0          0          0          0          0       CPU stop interrupts
+IPI3:         0          0          0          0          0          0          0          0       CPU stop (for crash dump) interrupts
+IPI4:       352        697        595        603       8626       9651       7342       5621       Timer broadcast interrupts
+IPI5:      1619       1435        771        438        196        152        107         56       IRQ work interrupts
+IPI6:         0          0          0          0          0          0          0          0       CPU wake-up interrupts
+Err:          0

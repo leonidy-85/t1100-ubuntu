@@ -40,6 +40,16 @@
   - DECOUPLE: `OVL → WDMA → fb → RDMA → COLOR → … → DSI`
 - Для KMS нужен DRM-драйвер: DSI-host + CRTC (OVL/RDMA) + MMSYS/mutex/CMDQ.
 
+### Board-узлы из dtbo (нужны для DTS)
+
+| Узел | Значение |
+|---|---|
+| `odm/lcm` (`elink,lcm`) | `rst` GPIO45, `dvdd` GPIO55, `stby` GPIO44, `bl` GPIO56, `ext_pwr` GPIO175, `ts_rst` GPIO158, `ts_avdd` GPIO163 |
+| backlight | `mediatek,lcd-backlight`, `led_mode = 5`, `pwm_config = <4 0 0 0 0>` |
+| тач | `himax_touch@48` на `i2c@11007000`, `mediatek,himax_touch` |
+| прочее | `usbkeyboard` (док-клавиатура), `hallsensor`, `focaltech_fp`, `vibrator` |
+| CPU OPP | A53/A73: 793…1989 МГц (`policy0`/`policy4`) |
+
 ### Панель (уточнено 28.10.2026)
 
 | Параметр | Значение | Источник |
@@ -130,7 +140,11 @@
   (`mtk_printk_ctrl.disable_uart=0`), но вывод идёт в `ram_console`/`pstore`.
 - **ramoops**: `0x54410000`, size `0xe0000` (`console_size 0x40000`,
   `pmsg_size 0x10000`); `ram_console` — `0x54400000..0x54410000`.
-- Для mainline: `earlycon=mt6577,0x11002000 console=ttyS0,921600n8` (baud уточнить).
+- **UART-подключения к плате нет** — логи снимаются из `pstore` после перезагрузки
+  (проверено: `console-ramoops` прошлой загрузки читается).
+- Для mainline: `ramoops.mem_address=0x54410000 ramoops.mem_size=0xe0000
+  ramoops.console_size=0x40000` (или узел `ramoops` в DTS) + `console=ttyS0`,
+  `earlycon` — как только появится доступ к UART.
 
 ## Загрузка
 

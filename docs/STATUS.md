@@ -17,7 +17,8 @@
 | 2026-10-28 | **Шаблон порта — mainline MT8183**, второй референс — MT8365 | Доказано по стоковому DTB: OVL/RDMA/COLOR/CCORR/AAL/GAMMA/DITHER/DSI/MUTEX/LARB/SMI, `mmsys` 0x14000000, GPU 0x13040000+IRQ278/279/280, PMIC MT6358, topckgen/infracfg/pericfg — **совпадают с mt8183.dtsi** (см. `docs/research.md`) |
 | 2026-10-28 | Ссылка на `gitlab.com/Helio-P22/linux-mainline` (была в `docs/research.md`) **снята как недостоверная** | Проекта с таким именем в публичном GitLab нет (API 28.10.2026); в mainline нет ни MT6765, ни MT6771 |
 | 2026-10-28 | Кросс-тулчейн: `gcc-aarch64-linux-gnu` 15.2 (Ubuntu), `dtc` 1.7.2, `mkimage` 2025.10 — установлены на хосте | Минимальный набор для сборки `Image`/`dtbs` и перепаковки boot |
-| 2026-10-28 | **Канал отладки загрузки — UART** (`ttyS0`, MMIO `0x11002000`, IRQ 286, `mt6577-uart`); доступ к контактам UART у владельца есть | Подтверждено пользователем; в стоке `mtk_printk_ctrl.disable_uart=0`. Дополнительно остаётся `ramoops`/pstore как второй канал |
+| 2026-10-28 | **Канала UART нет** (подключения к плате нет). Логи загрузки mainline — **`ramoops`/pstore из RAM** + сбор данных по SSH с самой платы; root — `scripts/t1100_root.sh` (`devel-su`, код блокировки) | Проверено: `/sys/fs/pstore/console-ramoops` содержит лог **прошлой** загрузки (паника `switch_root`) — pstore переживает reboot. `devel-su -c`/`su -c` не работают, нужен интерактивный root-shell (`docs/device-probe.md`) |
+| 2026-10-28 | Практика: «сначала снять факты с платы, потом писать DTS» — board-узлы (LCM GPIO, backlight, тач) брать из живого FDT (`refs/device/fdt-live.dts.gz`), а не из boot-DTB | dtbo-оверлеи добавляют `odm/lcm`, `lcd-backlight`, `himax_touch@48` и др., которых в boot-DTB нет |
 | 2026-10-28 | **Прошивка `boot_a` — только пошагово, с показом образа/сумм/плана отката и подтверждением владельца** | Правило проекта: бэкап + откат; прошивка через recovery (p29) |
 | 2026-10-28 | **Код ядра — отдельное дерево `../linux-t1100`; наши изменения — патчами в `t1100-ubuntu/patches/`** | Патчи ревьюятся, переносимы в upstream, не завязаны на форк |
 
@@ -39,7 +40,13 @@
       дисплея/GPU/PMIC уже есть в mainline).
 - [x] Тулчейн aarch64 + `dtc` + `mkimage` установлен.
 - [x] Доступ к планшету проверен: SSH `defaultuser@172.17.141.62` живой,
-      Aurora 4.14.186, `dmesg` читается без root.
+      Aurora 4.14.186, `dmesg` читается без root; **root получен** через
+      `devel-su` (`scripts/t1100_root.sh`).
+- [x] **Данные с платы сняты** (`docs/device-probe.md`, `refs/device/`): живой
+      FDT с dtbo (board-GPIO LCM/backlight/тач), полный `dmesg`, конфиг,
+      `console-ramoops` прошлой загрузки, `/proc/iomem`, IRQ, OPP, разметка.
+- [x] Подтверждён **канал логов без UART**: `ramoops`/pstore в RAM
+      (`0x54410000`, 0xe0000), переживает перезагрузку.
 
 ## Следующий шаг
 
@@ -55,11 +62,10 @@
 
 ## Блокеры
 
-1. **Не зафиксирован baud UART.** Порт `ttyS0` = `0x11002000` (IRQ 286,
-   `mt6577-uart`, `base_baud 1625000`); MTK-дефолт — `921600n8`. Нужно
-   подтвердить скорость/распиновку UART у владельца перед первой загрузкой.
-   Резервный канал — `ramoops`/pstore (`0x54410000`, `0xe0000`), но `clearmem=on`
-   может затирать регион.
+1. **Логи только через pstore** (UART нет). Ранняя паника (до `ramoops`-инита)
+   останется невидимой. Митигация: минимальный DTB/initramfs, `ramoops` в DTS,
+   `nokaslr`, отключить лишние подсистемы; при необходимости — USB-gadget
+   (`g_serial`/RNDIS) в initramfs как второй канал.
 2. **Нет `clk-mt6771`/`pinctrl-mt6771`** — их нужно писать; объём работы
    сопоставим с половиной всего порта.
 3. **Init панели** есть только в бинарнике LCM (исходник `tv110xum_lb2_incell`
@@ -78,7 +84,8 @@
 
 ## Референсы
 
-- `refs/stock-mt6771.dts` — полный DTS стока (карта регистров).
+- `refs/stock-mt6771.dts` — DTS из boot-DTB (карта регистров).
+- `refs/device/fdt-live.dts.gz` — **живой FDT** с dtbo: board-узлы (LCM GPIO/backlight/тач), см. `docs/device-probe.md`.
 - `refs/es6311_anx6585_zigzag_wxga.c` — чужой LCM-драйвер, образец структуры
   MTK LCM/DSI (не наша панель).
 - `scripts/bootimg_extract.py` — разбор Android boot v2 (kernel/ramdisk/DTB).
