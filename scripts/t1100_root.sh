@@ -2,9 +2,9 @@
 # Run a command as root on the Fplus T1100 over SSH.
 #
 # Aurora has no sudo; `devel-su` opens an interactive root shell and reads the
-# device-lock code from a tty, so the session is driven by expect
-# (scripts/t1100_root.exp). Output between the __BEGIN__/__END__ markers is
-# returned; shell prompts and the echoed command are filtered out.
+# device-lock code from a tty, so the session is driven over a pty. The pexpect
+# driver (scripts/t1100_root.py) is preferred; the legacy expect script
+# (scripts/t1100_root.exp) is the fallback.
 #
 # Usage: scripts/t1100_root.sh 'id; ls /sys/fs/pstore'
 # Env:   T1100_HOST (default 172.17.141.62), T1100_USER (defaultuser),
@@ -23,6 +23,15 @@ PASS=${T1100_PASS:-12345}
 KEY=${T1100_KEY:-$HOME/.ssh/id_ed25519}
 
 CMD=${1:?usage: t1100_root.sh '<single-line command>'}
+
+if python3 -c 'import pexpect' 2>/dev/null; then
+  exec python3 "$HERE/t1100_root.py" "$CMD"
+fi
+
+command -v expect >/dev/null 2>&1 || {
+  echo "ERROR: neither python3-pexpect nor expect is installed" >&2
+  exit 1
+}
 
 expect "$HERE/t1100_root.exp" "$HOST" "$USER" "$KEY" "$PASS" "$CMD" 2>/dev/null |
   tr -d '\r' |

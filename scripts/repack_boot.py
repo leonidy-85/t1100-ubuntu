@@ -72,7 +72,10 @@ def read_ref(path):
         sys.exit(f"ref: header version {hv}, only v2 supported")
     cmdline = d[0x40:0x240].split(b"\0")[0]
     name = d[0x30:0x40].split(b"\0")[0]
-    dtb_size, dtb_addr = struct.unpack_from("<IQ", d, 0x670)
+    # MTK layout: unlike AOSP v2 (dtb_size at 0x670, dtb_addr at 0x674 as u64),
+    # the address here is a *32-bit* field. Reading it as "<IQ" yields 0.
+    dtb_size = struct.unpack_from("<I", d, 0x670)[0]
+    dtb_addr = struct.unpack_from("<I", d, 0x674)[0]
     return dict(
         d=d, page=ps, kernel_addr=ka, ramdisk_addr=ra, second_addr=sa,
         tags_addr=ta, cmdline=cmdline, name=name, dtb_addr=dtb_addr,
@@ -87,6 +90,13 @@ def build(ref, kernel, ramdisk, dtb, cmdline, size):
     dtb_size at 0x670, dtb_addr at 0x674 (508-byte reserved hole before them).
     Copying the reference header and patching only sizes/cmdline keeps every
     unknown field (load addresses, ids, reserved) exactly as lk expects.
+
+    Bytes past the last blob in the stock image are not zero padding: the stock
+    32 MiB partition carries 499 525 non-zero bytes there (including a second
+    copy of the same MTK-wrapped DTB). They are preserved from the reference so
+    a round-trip repack is byte-identical over the whole partition. Padding with
+    zeros instead is harmless for `lk` (it reads the DTB using dtb_size@0x670),
+    but it makes the "byte-identical" check meaningless.
     """
     ps = ref["page"]
     hdr = bytearray(ref["d"][:0x67C])
@@ -104,6 +114,9 @@ def build(ref, kernel, ramdisk, dtb, cmdline, size):
     if size:
         if len(out) > size:
             sys.exit(f"image {len(out)} > partition {size}")
+        # Preserve whatever the stock image had past its payload (see docstring).
+        ref_tail = ref["d"][len(out):size]
+        out += ref_tail
         out += b"\0" * (size - len(out))
     return bytes(out)
 

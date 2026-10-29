@@ -14,11 +14,23 @@ set -euo pipefail
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 
+# Reference boot image: only its header (load addresses, MTK layout) is used.
+# Any stock boot_a of this tablet works; keep the first existing candidate.
+if [ -z "${REF:-}" ]; then
+  for c in "$ROOT/refs/boot/stock_boot.img" \
+           "$ROOT/../t1100/backup_5.1.6.110/boot_a_5.1.6.110.img" \
+           "$ROOT/../1100/boot_a.bin"; do
+    [ -f "$c" ] && { REF=$c; break; }
+  done
+fi
 REF=${REF:-$ROOT/../t1100/backup_5.1.6.110/boot_a_5.1.6.110.img}
 IMAGE=${IMAGE:-$ROOT/build/t1100/arch/arm64/boot/Image}
 INITRAMFS=${INITRAMFS:-$ROOT/build/initramfs.cpio.gz}
 OUT=${OUT:-$ROOT/build/boot_a_test.img}
-CMDLINE=${CMDLINE:-}
+# Kernel command line written into the boot image header. The stock reference
+# carries Android/Aurora bits we do not want (security=diehard, ima_appraise=
+# enforce, module.sig_enforce=1); bootopt= is kept because lk parses it.
+CMDLINE=${CMDLINE:-"bootopt=64S3,32N2,64N2 maxcpus=1 panic=10 pstore.backend=ramoops"}
 DTB=
 
 while [ $# -gt 0 ]; do
@@ -62,6 +74,7 @@ if [ "${IMAGE##*.}" = "gz" ]; then cp "$IMAGE" "$IMG_GZ"; else gzip -9 -c "$IMAG
 
 args=(--ref "$REF" --kernel "$IMG_GZ" --ramdisk "$INITRAMFS" --dtb "$DTB" --out "$OUT")
 [ -n "$CMDLINE" ] && args+=(--cmdline "$CMDLINE")
+echo "cmdline: $CMDLINE"
 python3 "$HERE/repack_boot.py" "${args[@]}"
 
 echo

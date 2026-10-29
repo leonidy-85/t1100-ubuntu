@@ -6,8 +6,12 @@
 # initramfs prints markers through printk and then either sleeps, reboots or
 # powers off — see --action.
 #
-# Requires an aarch64 static busybox:
-#   apt-get download busybox-static:arm64 && dpkg-deb -x busybox-static*.deb /tmp/bb
+# Requires an aarch64 static busybox. If the arm64 architecture is not enabled
+# in apt (no root), take the .deb straight from the ports archive:
+#   curl -O http://ports.ubuntu.com/ubuntu-ports/pool/main/b/busybox/\
+#     busybox-static_1.37.0-7ubuntu1_arm64.deb
+#   dpkg-deb -x busybox-static_*_arm64.deb /tmp/bb
+#   (or: apt-get download busybox-static:arm64)
 #
 # Usage:
 #   scripts/make_initramfs.sh --busybox /tmp/bb/usr/bin/busybox \

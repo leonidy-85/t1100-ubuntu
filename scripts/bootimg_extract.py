@@ -42,8 +42,10 @@ def parse(path):
         parts["second"] = padded("second", ss, off)
         off += align(ss, ps)
     if hv == 2:
+        # MTK layout: dtb_addr is a 32-bit field at 0x674, not the AOSP u64 at
+        # 0x678 (reading it there returns 0).
         dtb_size = struct.unpack_from("<I", d, 0x670)[0]
-        dtb_addr = struct.unpack_from("<Q", d, 0x678)[0]
+        dtb_addr = struct.unpack_from("<I", d, 0x674)[0]
         blob = padded("dtb", dtb_size, off)
         # MTK prepends its own 64-byte header before the FDT blob; strip it.
         magic = b"\xd0\x0d\xfe\xed"

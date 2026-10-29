@@ -11,12 +11,16 @@
 #   scripts/build_kernel.sh --defconfig    # (re)generate .config only
 #
 # Environment overrides:
-#   KERNEL_SRC   path to kernel source tree  (default: /home/l/projects/linux-t1100)
+#   KERNEL_SRC   path to kernel source tree  (default: <repo>/../linux-t1100)
 #   OUT          build output dir            (default: <repo>/build/t1100)
-#   CROSS_COMPILE prefix                     (default: aarch64-linux-gnu-)
+#   CROSS_COMPILE prefix                     (default: autodetected from PATH and
+#                                             <repo>/../toolchains/*/bin, e.g.
+#                                             aarch64-none-linux-gnu-)
 #   ARCH         kernel arch                 (default: arm64)
-#   JOBS         parallelism                 (default: 4)
+#   JOBS         parallelism                 (default: nproc)
 #   KCONFIG      config target               (default: defconfig)
+#   FRAGMENT     extra config fragment       (default: <repo>/configs/t1100.fragment,
+#                                             empty disables)
 #
 # The script fails on the first error (set -euo pipefail) and always reports
 # the kernel version plus size/sha256 of Image and every built DTB.
@@ -24,12 +28,41 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-KERNEL_SRC="${KERNEL_SRC:-/home/l/projects/linux-t1100}"
+KERNEL_SRC="${KERNEL_SRC:-${REPO_ROOT}/../linux-t1100}"
 OUT="${OUT:-${REPO_ROOT}/build/t1100}"
 ARCH="${ARCH:-arm64}"
-CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
-JOBS="${JOBS:-4}"
+JOBS="${JOBS:-$(nproc)}"
 KCONFIG="${KCONFIG:-defconfig}"
+FRAGMENT="${FRAGMENT-${REPO_ROOT}/configs/t1100.fragment}"
+
+# CROSS_COMPILE: explicit env wins, otherwise find a compiler in PATH or in a
+# self-contained toolchain unpacked next to the repo:
+#   ../toolchains/arm-gnu-toolchain-*/bin
+find_cross() {
+	if [ -n "${CROSS_COMPILE:-}" ]; then echo "${CROSS_COMPILE}"; return; fi
+	local c
+	for c in aarch64-linux-gnu- aarch64-none-linux-gnu-; do
+		command -v "${c}gcc" >/dev/null 2>&1 && { echo "${c}"; return; }
+	done
+	for c in "${REPO_ROOT}"/../toolchains/*/bin/aarch64-*-gcc; do
+		[ -x "${c}" ] || continue
+		echo "$(basename "${c}" gcc)"
+		return
+	done
+	echo "aarch64-linux-gnu-"
+}
+CROSS_COMPILE="$(find_cross)"
+
+# Make the prefix usable even when the toolchain lives outside PATH (e.g. an
+# ARM GNU toolchain unpacked under ../toolchains).
+if ! command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1; then
+	for d in "${REPO_ROOT}"/../toolchains/*/bin; do
+		if [ -x "${d}/${CROSS_COMPILE}gcc" ]; then
+			export PATH="${d}:${PATH}"
+			break
+		fi
+	done
+fi
 
 LOG_DIR="${REPO_ROOT}/build/logs"
 mkdir -p "${LOG_DIR}"
@@ -56,6 +89,7 @@ echo "arch         : ${ARCH}"
 echo "cross        : ${CROSS_COMPILE}"
 echo "jobs         : ${JOBS}"
 echo "config target: ${KCONFIG}"
+echo "fragment     : ${FRAGMENT:-none}"
 echo "log          : ${LOG}"
 
 [ -d "${KERNEL_SRC}" ]        || die "kernel source tree not found: ${KERNEL_SRC}"
@@ -82,6 +116,16 @@ MAKE=(make -C "${KERNEL_SRC}" O="${OUT}" ARCH="${ARCH}" CROSS_COMPILE="${CROSS_C
 echo
 echo "== ${KCONFIG} =="
 "${MAKE[@]}" "${KCONFIG}" 2>&1 | tee -a "${LOG}"
+
+if [ -n "${FRAGMENT}" ]; then
+	[ -f "${FRAGMENT}" ] || die "config fragment not found: ${FRAGMENT}"
+	echo
+	echo "== merge fragment: ${FRAGMENT} =="
+	( cd "${KERNEL_SRC}" && ARCH="${ARCH}" CROSS_COMPILE="${CROSS_COMPILE}" \
+		scripts/kconfig/merge_config.sh -O "${OUT}" \
+		"${OUT}/.config" "${FRAGMENT}" ) 2>&1 | tee -a "${LOG}"
+	"${MAKE[@]}" olddefconfig 2>&1 | tee -a "${LOG}"
+fi
 
 if [ "${CONFIG_ONLY}" -eq 1 ]; then
 	echo "config written: ${OUT}/.config"

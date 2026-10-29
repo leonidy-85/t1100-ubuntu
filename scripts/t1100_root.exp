@@ -11,7 +11,8 @@ set command [lindex $argv 4]
 
 set timeout 60
 
-spawn -noecho ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=no \
+spawn -noecho ssh -tt -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o IdentityAgent=none -o StrictHostKeyChecking=no \
     -o ConnectTimeout=10 -i $key $user@$host devel-su
 
 expect {
