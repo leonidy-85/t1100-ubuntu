@@ -14,8 +14,10 @@ UART-подключения нет. Логи — **только через pstor
    командой (`scripts/repack_boot.py` внутри; заголовок/адреса — от стокового
    `boot_a`, DTB заворачивается в MTK-контейнер), печатает sha256 и проверяет
    образ обратным разбором.
-5. Бэкап: `../t1100/backup_5.1.6.110/boot_a_5.1.6.110.img` (sha256
-   `bd2c2758…73a9`), план отката через recovery (p29).
+5. Бэкап **текущего** стокового `boot_a`: `build/backup/boot_a_stock_2026.img`
+   (32 МиБ, sha256 `9601bcd6…b864f`, снят с платы по USB-telnet 29.10.2026).
+   План отката — recovery, `p29`. Старый `../t1100/backup_5.1.6.110/` на этом
+   хосте отсутствует.
 
 ## Размеры (проверено 29.10.2026)
 
@@ -48,9 +50,18 @@ DTB `mt6771-fplus-t1100.dtb` = **4941 B** (не «~48 КБ») — с патче�
    или TOPRGU-сброс, и lk снова грузит `boot_a` (наш образ). Если PSCI на этом
    ATF не отдаёт `SYSTEM_RESET`, плата останется в `System halted` — тогда
    ребут кнопкой питания (это проверяется именно этой загрузкой).
-4. **Возврат в Aurora**: прошить стоковый `boot_a` через recovery (p29).
-   RAM при этом не обнуляется, поэтому pstore остаётся.
-5. Прочитать лог: `scripts/t1100_root.sh 'cat /sys/fs/pstore/console-ramoops'`.
+4. **Вход в recovery** (кнопки), прошить стоковый `boot_a` из
+   `build/backup/boot_a_stock_2026.img` (p29). RAM не обнуляется, pstore
+   остаётся.
+5. Прочитать лог **сразу в recovery** (там есть `/sys/fs/pstore`):
+   `python3 /tmp/opencode/rec.py 'ls -l /sys/fs/pstore; cat /sys/fs/pstore/console-ramoops*'`
+   либо, вернувшись в Aurora, `scripts/t1100_root.sh 'cat /sys/fs/pstore/console-ramoops'`.
+
+### Доступ к recovery по USB (проверено)
+
+`telnet 10.42.66.66:23` → меню Aurora Recovery v2.0 → `3` → `y` **без Enter** →
+код `12345`. Раздел: `/dev/mmcblk0p29`. Меню требует код блокировки: если
+отправить `y\n`, пустая строка уйдёт как код («Wrong code»).
 
 ## Риск зацикливания (принять осознанно)
 

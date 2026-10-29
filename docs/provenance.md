@@ -77,17 +77,31 @@ scripts/make_test_boot.sh --dtb build/t1100/arch/arm64/boot/dts/mediatek/mt6771-
 | `Image.gz` | 13 986 402 B |
 | initramfs (`build/initramfs.cpio.gz`) | 1 031 517 B, sha256 `2b38977d62ad2b789df0014f32f596b101bc3fe8b577371b6e1f397a9d05c4e9` |
 | DTB (в MTK-контейнере) | 4941 B (wrapped 5005 B) |
-| **`build/boot_a_test.img`** | **33 554 432 B (32 МиБ)**, sha256 `14069f47a2ddd4662252c1788cff65ac1eb7f7e6c30c913601eb18af9d8e04f8` |
+| **`build/boot_a_test.img`** | **33 554 432 B (32 МиБ)**, sha256 `6d0250d67da345f1a24393eab9c3d4cf515038f82c61588ae1ca2b95cb589e47` |
 
-Заголовок/адреса — от стокового образа `../1100/boot_a.bin` (sha256
-`92875f516b5d8a8764a8801b6b50cc38bfaf6c9c4cdb0d438c7d651b0df6492c`);
-cmdline: `bootopt=64S3,32N2,64N2 maxcpus=1 panic=10 pstore.backend=ramoops`.
+Заголовок/адреса — от **снятого с платы** стокового `boot_a`
+(`build/backup/boot_a_stock_2026.img`, sha256
+`9601bcd6556a56ae1bd6367764a2bc2ea80dbb6a6f497ff0ce4e4415501b864f`,
+ядро 4.14.186 от 2025-07-24); cmdline:
+`bootopt=64S3,32N2,64N2 maxcpus=1 panic=10 pstore.backend=ramoops`.
 
-Round-trip перепаковки проверен на этом же стоковом образе: результат
-**побайтово равен** всем 33 554 432 байтам.
+Локальный `../1100/boot_a.bin` (`92875f51…492c`) — **более старая** сборка
+(ядро 2025-05-06), как шаблон заголовка больше не используется. Round-trip
+перепаковки проверен на обоих образах: результат побайтово равен всем 32 МиБ.
 
 **На устройство образ не прошивался.** Прошивка — только с подтверждением
 владельца (`docs/boot-test.md`).
+
+### Доступ к плате (проверено 29.10.2026)
+
+- Recovery по USB: интерфейс RNDIS `10.42.66.67/32`, планшет `10.42.66.66`,
+  `telnet 10.42.66.66:23` → Aurora Recovery v2.0.
+- Root-shell: пункт `3`, затем `y` **без перевода строки**, затем код
+  блокировки `12345` (см. `scripts/t1100_root.sh`/`rec.py`); иначе пустая
+  строка уходит как код и получается «Wrong code».
+- `/dev/block` отсутствует; раздел — `/dev/mmcblk0p29` (65536 секторов = 32 МиБ).
+- `/sys/fs/pstore` в recovery есть и пуст — лог нашей загрузки можно прочитать,
+  загрузившись в recovery (ramoops в RAM не обнуляется).
 
 ## Референсы
 
