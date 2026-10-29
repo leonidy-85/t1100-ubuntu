@@ -30,7 +30,10 @@ OUT=${OUT:-$ROOT/build/boot_a_test.img}
 # Kernel command line written into the boot image header. The stock reference
 # carries Android/Aurora bits we do not want (security=diehard, ima_appraise=
 # enforce, module.sig_enforce=1); bootopt= is kept because lk parses it.
-CMDLINE=${CMDLINE:-"bootopt=64S3,32N2,64N2 maxcpus=1 panic=10 pstore.backend=ramoops"}
+CMDLINE=${CMDLINE:-"bootopt=64S3,32N2,64N2 console=tty0 maxcpus=1 panic=0 pstore.backend=ramoops"}
+# Mainline arm64 Image has text_offset 0 and must be loaded 2 MiB aligned;
+# the stock MTK header says 0x40080000, which is not. Override it.
+KERNEL_ADDR=${KERNEL_ADDR:-0x40200000}
 DTB=
 
 while [ $# -gt 0 ]; do
@@ -73,6 +76,7 @@ trap 'rm -f "$IMG_GZ"' EXIT
 if [ "${IMAGE##*.}" = "gz" ]; then cp "$IMAGE" "$IMG_GZ"; else gzip -9 -c "$IMAGE" > "$IMG_GZ"; fi
 
 args=(--ref "$REF" --kernel "$IMG_GZ" --ramdisk "$INITRAMFS" --dtb "$DTB" --out "$OUT")
+[ -n "$KERNEL_ADDR" ] && args+=(--kernel-addr "$KERNEL_ADDR")
 [ -n "$CMDLINE" ] && args+=(--cmdline "$CMDLINE")
 echo "cmdline: $CMDLINE"
 python3 "$HERE/repack_boot.py" "${args[@]}"

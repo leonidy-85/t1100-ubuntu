@@ -83,7 +83,7 @@ def read_ref(path):
     )
 
 
-def build(ref, kernel, ramdisk, dtb, cmdline, size):
+def build(ref, kernel, ramdisk, dtb, cmdline, size, kernel_addr=None):
     """Build image using the reference header as a template.
 
     The stock header is not the plain AOSP v2 layout: header_size sits at 0x66c,
@@ -101,6 +101,11 @@ def build(ref, kernel, ramdisk, dtb, cmdline, size):
     ps = ref["page"]
     hdr = bytearray(ref["d"][:0x67C])
     struct.pack_into("<I", hdr, 0x08, len(kernel))
+    if kernel_addr:
+        # arm64 Image with text_offset 0 must be loaded 2 MiB aligned; the
+        # stock MTK header loads at 0x40080000 (the 4.14 text_offset 0x80000
+        # convention), which is not aligned for mainline.
+        struct.pack_into("<I", hdr, 0x0c, kernel_addr)
     struct.pack_into("<I", hdr, 0x10, len(ramdisk))
     struct.pack_into("<I", hdr, 0x18, 0)                  # no second stage
     hdr[0x40:0x240] = cmdline.ljust(512, b"\0")[:512]
@@ -130,6 +135,8 @@ def main():
     ap.add_argument("--cmdline", help="override cmdline")
     ap.add_argument("--size", type=int, default=32 * 1024 * 1024,
                     help="pad image to partition size (default 32 MiB, boot_a)")
+    ap.add_argument("--kernel-addr", type=lambda x: int(x, 0),
+                    help="override kernel load address (e.g. 0x40200000)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
@@ -139,11 +146,13 @@ def main():
     dtb = wrap_dtb(open(a.dtb, "rb").read())
     cmdline = a.cmdline.encode() if a.cmdline else ref["cmdline"]
 
-    img = build(ref, kernel, ramdisk, dtb, cmdline, a.size)
+    img = build(ref, kernel, ramdisk, dtb, cmdline, a.size, a.kernel_addr)
     open(a.out, "wb").write(img)
     print(f"wrote {a.out}: {len(img)} bytes "
           f"(kernel {len(kernel)}, ramdisk {len(ramdisk)}, dtb {len(dtb)})")
     print(f"cmdline: {cmdline.decode(errors='replace')}")
+    if a.kernel_addr:
+        print(f"kernel load addr: {a.kernel_addr:#x}")
 
 
 if __name__ == "__main__":
