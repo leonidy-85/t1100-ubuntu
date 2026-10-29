@@ -80,3 +80,27 @@ DTB `mt6771-fplus-t1100.dtb` = **4941 B** (не «~48 КБ») — с патче�
 2. Первая прошивка — когда есть осознанный минимум: ядро и DTB, которые с
    высокой вероятностью дойдут хотя бы до `start_kernel` (CPU/GIC/timer/uart —
    клоны mt8183/MT8365).
+
+## Быстрая прошивка без recovery (Aurora + SSH)
+
+```sh
+ssh defaultuser@<ip> 'cat > /tmp/test.img' < build/boot_a_loadfix.img
+T1100_HOST=<ip> T1100_SSH_PASS=... T1100_PASS=... \
+  scripts/t1100_root.sh 'sha256sum /tmp/test.img; \
+  dd if=/tmp/test.img of=/dev/mmcblk0p29 bs=1M conv=fsync; sync; \
+  sha256sum /dev/mmcblk0p29'
+```
+
+`devel-su` берёт пароль из `T1100_PASS`, SSH — из `T1100_SSH_PASS`
+(скрипт отключает `SSH_ASKPASS`: keyring отдаёт пароль по имени хоста и
+ломается при смене IP).
+
+## Важно: адрес загрузки ядра
+
+Стоковый `Image` собран с `text_offset=0x80000`, mainline — с `0x0`. По
+протоколу ARM64 образ с `text_offset=0` требует загрузки по 2 МиБ-выровненному
+адресу, а LK грузит по адресу из заголовка boot.img (`0x40080000`, не
+выровнен). `make_test_boot.sh` теперь ставит `KERNEL_ADDR=0x40200000`; если LK
+игнорирует `kernel_addr` из заголовка, это не поможет — проверять отдельно.
+Пока запуск mainline не подтверждён, `boot_a` после каждого теста
+возвращается из `build/backup/boot_a_stock_2026.img`.

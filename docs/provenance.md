@@ -152,7 +152,7 @@ WDT и цикл бы прекратился). Основной подозрев�
 
 Стоковая Aurora пишет консоль в ramoops; `/sys/fs/pstore/console-ramoops`
 показывает лог **предыдущей** загрузки. Читать под root по SSH (см.
-`docs/device-probe.md`). Vendor-ядро 4.14 держит в ramcops **две** console-зоны
+`docs/device-probe.md`). Vendor-ядро 4.14 держит в ramoops **две** console-зоны
 (`cprz` = base+0x50000, `bprz` = base+0x90000 при `size=0xe0000`,
 `console_size=0x40000`, `pmsg_size=0x10000`), поэтому RAM-консоль пишет в
 несколько кандидатных смещений.
