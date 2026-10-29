@@ -93,3 +93,24 @@ cmdline/DTS), затем **тёплый reboot** в Aurora и `cat /sys/fs/pstor
    (основа `mt6771-fplus-t1100.dts`).
 2. Подтверждён канал логов для первых загрузок mainline (pstore).
 3. Подтверждён root-доступ по SSH скриптом — можно автоматизировать сбор фактов.
+
+## Доступ к плате (проверено 29.10.2026)
+
+**Recovery (USB RNDIS):** хост `10.42.66.67/32`, планшет `10.42.66.66`,
+`telnet 10.42.66.66:23` → Aurora Recovery v2.0. Root-shell: пункт `3` →
+`y` **без перевода строки** → код блокировки. Загрузка образа:
+`nc` в `/mnt/t` (tmpfs 64 МиБ) → sha256 → `dd ... of=/dev/mmcblk0p29`.
+Готовый драйвер: `scripts/recovery_telnet.py` (режим `--bg` для чтения
+нескольких МиБ: долгая foreground-команда рвёт выдачу telnetd).
+
+**Aurora (SSH):** `defaultuser@<ip>`; пароль задаётся `T1100_SSH_PASS`,
+код `devel-su` — `T1100_PASS`. IP по DHCP (`172.17.141.62` → `.129`).
+Загрузка образа без recovery: `ssh ... 'cat > /tmp/x' < img`, затем
+`devel-su` (`scripts/t1100_root.sh`) и `dd of=/dev/mmcblk0p29`.
+
+**Разметка (A/B):** `boot_a = mmcblk0p29`, `boot_b = mmcblk0p45`,
+`vbmeta_a = p16`, `vbmeta_b = p33`, `seccfg = p11`, `vendor_boot_a = p30`.
+`/dev/block` в recovery отсутствует — использовать `/dev/mmcblk0pNN`.
+
+**pstore:** `/sys/fs/pstore/console-ramoops` = лог предыдущей загрузки;
+читается только root (файл `system:log`).
