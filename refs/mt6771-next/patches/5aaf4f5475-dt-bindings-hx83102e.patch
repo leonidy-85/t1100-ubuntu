@@ -1,0 +1,23 @@
+From 5aaf4f54755e878bfbce5c856a7aa8aa327f4dad Mon Sep 17 00:00:00 2001
+From: Arseniy Velikanov <me@adomerle.pw>
+Date: Fri, 8 Aug 2025 18:49:18 +0400
+Subject: [PATCH] dt-bindings: input: touchscreen: hx83112b: Add hx83102e
+ compatible
+
+Signed-off-by: Arseniy Velikanov <me@adomerle.pw>
+---
+ .../devicetree/bindings/input/touchscreen/himax,hx83112b.yaml    | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml b/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
+index f5cfacb5e966d2..fa0adddba35814 100644
+--- a/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
++++ b/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
+@@ -16,6 +16,7 @@ properties:
+   compatible:
+     enum:
+       - himax,hx83100a
++      - himax,hx83102e
+       - himax,hx83112b
+ 
+   reg:

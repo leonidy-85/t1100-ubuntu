@@ -10,6 +10,7 @@
 | `it6112/panel-it6112-boe-tv110xum-lb2.c` | **WIP-драйвер нашей панели** (BOE TV110XUM-LB2 через мост ITE IT6112), 515 строк: init моста, DCS, тайминги 1600×2176 | `linux-mediatek/linux` @ `935fe30b25b0e261235c838ca08f409ceff87b1a` (ветка `adomerle/mt6771-next`), автор Arseniy Velikanov — см. `it6112/README.md` |
 | `mt6771-next/mt6771.dtsi` | `#include "mt8183.dtsi"` + `compatible = "mediatek,mt6771"` и удаление cpufreq/idle — доказательство, что MT8183-драйверы используются для MT6771 | `linux-mediatek/linux` @ ветка `adomerle/mt6771-next` — см. `mt6771-next/README.md` |
 | `mt6771-next/mt8788-fplus-t1100.dts` | **полный board DTS нашего планшета** (868 строк): тач, HDMI IT66121, MT6370, MMC, USB, PWM, панель, `simple-framebuffer` | там же |
+| `mt6771-next/patches/` | 12 патчей ветки (DTS, панель, тач HX83102E, cpufreq, svs, regulator-coupler, звук, USB role-switch) | там же, `<sha>-<slug>.patch` |
 
 ## Как пересоздать stock DTS
 

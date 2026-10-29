@@ -84,10 +84,35 @@ MT8183-инфраструктурный слой (`topckgen`, `infracfg_ao`, `pe
 | PMIC | только узлы в stock DTS | `mt6358.dtsi` + `mt6370` |
 | Bootargs | `maxcpus=1 panic=10 pstore...` | не задаёт (грузит дистрибутив) |
 
+## Полный набор патчей ветки (`patches/`)
+
+База ветки — **linux-next 20250808** (`b1549501…`), не чистый 6.16. Помимо двух
+DTS и панели там есть ещё девять вещей по нашему планшету (скачаны как
+`<sha>-<slug>.patch`):
+
+| Патч | Что содержит | Зачем нам |
+|---|---|---|
+| `1ef72e97b1-add-mt6771-dtsi` | `mt6771.dtsi` = `#include "mt8183.dtsi"` + `compatible` | подтверждает переиспользование MT8183 |
+| `2aee822a91-add-fplus-t1100-dts` | полный board DTS | тач, HDMI, PMIC, MMC, USB, PWM |
+| `083d4e7fa2-panel-it6112` | драйвер панели IT6112 (WIP) | панель без RE |
+| `0f649f913f-touchscreen-hx83102e` | HX83102E в `himax_hx83112b.c` | **тач** (mainline-драйвер знает только hx83112b) |
+| `41dd7e6871-touchscreen-vdd-supply` | `vdd`-регулятор для тача | питание тача |
+| `5aaf4f5475` / `6a9a887e29` | dt-bindings: compatible `hx83102e`, `vdd-supply` | биндинги к тачу |
+| `4bc5483278-cpufreq-mt6771-compat` | `mediatek,mt6771` в `mediatek-cpufreq` | cpufreq (в dtsi отключён: «broken with android firmware») |
+| `86c0a60f75-svs-mt6771` | MT6771 в `mtk-svs` | Smart Voltage Scaling |
+| `ee51e22b85-regulator-coupler-mt6771` | MT6771/MT8788 в `mtk-regulator-coupler` | связка GPU/proc-регуляторов |
+| `f8bbc91fcf-sound-es7210` | `mt8183-mt6358-es7210` | звук (не-цель v1, но есть) |
+| `96fe48bed8-tphy-role-switch` | role switching в `phy-mtk-tphy` | USB host/device, нужен для RNDIS/сети в ядре |
+
+Плюс `2bca98ef53` «firmware: efi: earlycon: Use ARGB» — earlycon на
+EFI-framebuffer; для нас не применимо (мы грузимся не через EFI), поэтому
+патч не скачан.
+
 ## Ограничения
 
-- Ветка **6.16**, мы на **6.12.114**: часть биндингов/хелперов может
-  отсутствовать; переносить по частям, а не копированием.
+- Ветка **linux-next 20250808** (Makefile 6.16.0), мы на **6.12.114**: часть
+  биндингов/хелперов может отсутствовать; переносить по частям, а не
+  копированием.
 - Код WIP: не принимать как эталон качества, только как источник фактов и
   проверенных на устройстве решений.
 - Утверждение «работает» — со слов автора/ветки, нами не проверено.

@@ -1,0 +1,29 @@
+From ee51e22b85a0678482d6892ab8d2c466c0cf27dd Mon Sep 17 00:00:00 2001
+From: Arseniy Velikanov <me@adomerle.pw>
+Date: Sat, 9 Aug 2025 01:10:36 +0400
+Subject: [PATCH] soc: mediatek: regulator-coupler: Add MT6771 and MT8788
+
+Signed-off-by: Arseniy Velikanov <me@adomerle.pw>
+---
+ drivers/soc/mediatek/mtk-regulator-coupler.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/soc/mediatek/mtk-regulator-coupler.c b/drivers/soc/mediatek/mtk-regulator-coupler.c
+index 0b6a2884145e37..c723dafea0e161 100644
+--- a/drivers/soc/mediatek/mtk-regulator-coupler.c
++++ b/drivers/soc/mediatek/mtk-regulator-coupler.c
+@@ -145,10 +145,12 @@ static struct mediatek_regulator_coupler mediatek_coupler = {
+ 
+ static int mediatek_regulator_coupler_init(void)
+ {
+-	if (!of_machine_is_compatible("mediatek,mt8183") &&
++	if (!of_machine_is_compatible("mediatek,mt6771") &&
++	    !of_machine_is_compatible("mediatek,mt8183") &&
+ 	    !of_machine_is_compatible("mediatek,mt8186") &&
+ 	    !of_machine_is_compatible("mediatek,mt8188") &&
+-	    !of_machine_is_compatible("mediatek,mt8192"))
++	    !of_machine_is_compatible("mediatek,mt8192") &&
++	    !of_machine_is_compatible("mediatek,mt8788"))
+ 		return 0;
+ 
+ 	return regulator_coupler_register(&mediatek_coupler.coupler);

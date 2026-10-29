@@ -1,0 +1,23 @@
+From 6a9a887e2952c239f05590c2fcba06bf92c13dd8 Mon Sep 17 00:00:00 2001
+From: Arseniy Velikanov <me@adomerle.pw>
+Date: Fri, 8 Aug 2025 19:07:57 +0400
+Subject: [PATCH] dt-bindings: input: touchscreen: hx83112b: Add vdd-supply
+
+Signed-off-by: Arseniy Velikanov <me@adomerle.pw>
+---
+ .../devicetree/bindings/input/touchscreen/himax,hx83112b.yaml   | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml b/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
+index fa0adddba35814..bcf31d3ce8f1c9 100644
+--- a/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
++++ b/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
+@@ -28,6 +28,8 @@ properties:
+   reset-gpios:
+     maxItems: 1
+ 
++  vdd-supply: true
++
+   touchscreen-inverted-x: true
+   touchscreen-inverted-y: true
+   touchscreen-size-x: true

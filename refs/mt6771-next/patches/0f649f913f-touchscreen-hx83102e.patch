@@ -1,0 +1,43 @@
+From 0f649f913f560d32f50036c176449ccf8f7be154 Mon Sep 17 00:00:00 2001
+From: Arseniy Velikanov <me@adomerle.pw>
+Date: Tue, 5 Aug 2025 12:25:40 +0400
+Subject: [PATCH] input: touchscreen: hx83112b: Add support for HX83102E
+
+Signed-off-by: Arseniy Velikanov <me@adomerle.pw>
+---
+ drivers/input/touchscreen/himax_hx83112b.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/input/touchscreen/himax_hx83112b.c b/drivers/input/touchscreen/himax_hx83112b.c
+index 896a145ddb2bc2..b0629aa998f51f 100644
+--- a/drivers/input/touchscreen/himax_hx83112b.c
++++ b/drivers/input/touchscreen/himax_hx83112b.c
+@@ -399,6 +399,12 @@ static const struct himax_chip hx83100a_chip = {
+ 	.read_events = hx83100a_read_events,
+ };
+ 
++static const struct himax_chip hx83102e_chip = {
++	.id = 0x83102e,
++	.check_id = himax_check_product_id,
++	.read_events = himax_read_events,
++};
++
+ static const struct himax_chip hx83112b_chip = {
+ 	.id = 0x83112b,
+ 	.check_id = himax_check_product_id,
+@@ -407,6 +413,7 @@ static const struct himax_chip hx83112b_chip = {
+ 
+ static const struct i2c_device_id himax_ts_id[] = {
+ 	{ "hx83100a", (kernel_ulong_t)&hx83100a_chip },
++	{ "hx83102e", (kernel_ulong_t)&hx83102e_chip },
+ 	{ "hx83112b", (kernel_ulong_t)&hx83112b_chip },
+ 	{ /* sentinel */ }
+ };
+@@ -415,6 +422,7 @@ MODULE_DEVICE_TABLE(i2c, himax_ts_id);
+ #ifdef CONFIG_OF
+ static const struct of_device_id himax_of_match[] = {
+ 	{ .compatible = "himax,hx83100a", .data = &hx83100a_chip },
++	{ .compatible = "himax,hx83102e", .data = &hx83102e_chip },
+ 	{ .compatible = "himax,hx83112b", .data = &hx83112b_chip },
+ 	{ /* sentinel */ }
+ };
