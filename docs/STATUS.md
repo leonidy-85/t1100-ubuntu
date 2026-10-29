@@ -181,7 +181,17 @@ probe-payload доказал, что `lk` грузит и передаёт уп�
   PennyOS (`refs/pennyos-lk/check-lk-dtb.py`) — **все правила ok**,
   `RESULT: LK should accept this DTB`;
 - `build/boot_fixed2_tiny.img` (md5 `fb9b11d0…`) прошит — **плата СТОИТ и не
-  сбрасывается**: LK принял DTB, ядро запускается. Boot-chain пройден.
+  сбрасывается**: LK принял DTB. Boot-chain пройден (LK больше не ASSERT'ит).
+- Полное ядро с тем же DTB (`build/boot_fixed_full.img`, md5 `de34b2ec…`):
+  на экране **логотип Aurora, сбросов нет**. Лог в `/proc/last_kmsg` — **не
+  наш** (там старый вендорский); значит либо ядро не пишет в ramoops, либо LK
+  всё ещё висит в while(1) (визуально неотличимо: лого + отсутствие сбросов).
+- Найдено: в `build/tiny` **не было `CONFIG_PSTORE`** — `fs/pstore/Kconfig`
+  подключён внутри `if MISC_FILESYSTEMS`, а в tinyconfig он выключен, поэтому
+  опции молча отбрасывались. Включаем `MISC_FILESYSTEMS` + `PSTORE*`.
+- Готов дискриминатор «ядро живо vs LK висит»: initramfs с **самоперезагрузкой
+  через 30 с** (`scripts/make_initramfs.sh --action reboot --sleep 30`). Если
+  плата сама перезагружается — ядро дошло до userspace.
 
 Патчи 0001–0006 (шаги 1–2 фазы 1) пересобраны из дерева и запушены.
 
