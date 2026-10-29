@@ -107,6 +107,37 @@
 5. **Бэкапа `boot_a`/`vbmeta`/`seccfg` на этом хосте нет**; recovery-инструкции
    в отсутствующем `../t1100`. Перед прошивкой — восстановить бэкап/план отката.
 
+## Сессия 29.10.2026 (lead): разбор чужой сборки и диагностика загрузки
+
+**Найдено на плате.** В `boot_a` был образ другого разработчика: ядро 6.12.114
+(`leo@localhost`, Arm GNU Toolchain 14.2), **наш** initramfs (`--action sleep`,
+600 с), наш board-DTB. Образ сохранён целиком
+(`build/recovery/boot_a_current.img`, 32 МиБ, md5 `26508f08…`), вместе с GPT
+(`p03 expdb`, `p29 boot_a`, `p45 boot_b`, `p50 recovery`, `p51 cache`, …).
+Их тесты: ни одного printk ни в одном варианте; «сбросы» — это **watchdog LK**;
+probe-payload доказал, что `lk` грузит и передаёт управление нашему образу
+(`refs/probe-payload`). Значит ядро умирает до первой консоли.
+
+**Исправлено (наш DTS).** Регион `framebuffer@7cd80000` в `reserved-memory` был
+помечен `no-map` — такой регион нельзя `ioremap`, поэтому `simpledrm`/fbcon не
+поднимался вовсе. `no-map` снят (регион остаётся зарезервированным).
+
+**Подготовлено к решающему тесту (собрано, на плату не прошивалось):**
+
+| Артефакт | sha256 | Что |
+|---|---|---|
+| `build/t1100/.../Image` | `40a1d6fb…c047f` | 39 129 600 B, defconfig+`configs/t1100.fragment` (PSTORE, SIMPLEDRM), 0 warnings |
+| `mt6771-fplus-t1100.dtb` | `f722a150…b88be` | 4 989 B, fb mappable |
+| `build/payload_boot.img` | `9f3602dc…442e` | диагностический payload: рисует адрес загрузки и оба fb-base на экране |
+| `build/boot_v1.img` | `379a0bc0…0338` | kernel по `0x40080000`, `text_offset=0x80000`, `nokaslr` |
+| `build/boot_shim.img` | `848eb90f…5ffb` | shim: копирует `Image` на 2 МиБ-выровненный `0x44000000` и прыгает |
+
+Инструменты: `tools/payload/` (адрес на экране), `tools/shim/` (релокатор),
+`scripts/patch_image_header.py` (`text_offset`/`flags`).
+
+**Порядок теста:** payload → фото экрана (адрес выровнен?) → при невыровненном
+адресе `boot_shim.img`, иначе `boot_v1.img` / DTS на базе `mt8183.dtsi`.
+
 ## Открытые вопросы
 
 - **Панель закрыта**: активный LCM — `tv110xum_lb2_incell`, панель за мостом
