@@ -195,6 +195,29 @@ probe-payload доказал, что `lk` грузит и передаёт уп�
 
 Патчи 0001–0006 (шаги 1–2 фазы 1) пересобраны из дерева и запушены.
 
+## Приоритет 29.10 (после решения владельца): Ubuntu + KDE
+
+Цель v1 — **загруженная Ubuntu с рабочим столом KDE (Plasma/Wayland)**, а не
+отладка ради отладки. Экранные «логи» и визуальные метки — **не нужны**
+(владелец: «на экране видно только логотип Aurora»), канал диагностики —
+`pstore` + USB-сеть, когда они заработают.
+
+Поэтому меняем подход в фазе 1: вместо минимального самописного DTS берём
+**SoC-DTS на базе mainline `mt8183.dtsi`** (клоки/pinctrl/eMMC/USB/IOMMU/DRM от
+mt8183-драйверов; MT6771 совместим по адресам — `docs/research.md`) и
+адаптируем board DTS из WIP-порта ровно нашего планшета
+(`refs/mt6771-next/mt8788-fplus-t1100.dts`, 868 строк: `&mmc0/1`, `&ssusb`,
+`&pio`, `&i2c0..6`, `&dsi0/&mipi_tx0`, `&gpu/&mfg`, `&iommu`, MT6358).
+
+Порядок до KDE:
+1. ядро с реальными драйверами (mt8183-база) + LK-compat → загрузка до userspace
+   с USB-сетью (RNDIS) и eMMC;
+2. rootfs Ubuntu-base arm64 + systemd → SSH/сеть;
+3. DRM/KMS: `mediatek-drm` (OVL/RDMA/DSI) + панель BOE TV110XUM через IT6112
+   (`refs/it6112/`, `refs/mt6771-next/`);
+4. GPU panfrost (Mali-G72 MP3, `&gpu/&mfg`);
+5. Wayland + KDE Plasma на дисплее.
+
 ## Открытые вопросы
 
 - **Панель закрыта**: активный LCM — `tv110xum_lb2_incell`, панель за мостом
