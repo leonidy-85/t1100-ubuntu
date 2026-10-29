@@ -51,6 +51,26 @@ tablet-версия MT6771). Значит:
 - главная новая работа — **clock-драйвер MT6771** (`clk-mt6771-top/infra/peri/
   apmixed/mfg/mm`), **pinctrl-mt6771** и DTS/панель.
 
+### WIP-порт MT6771/FPlus T1100 в linux-mediatek (29.10.2026)
+
+В `github.com/linux-mediatek/linux` есть ветка **`adomerle/mt6771-next`**
+(Arseniy Velikanov, base 6.16.0) — существующий WIP-порт **нашего планшета**.
+Скопировано в `refs/mt6771-next/`:
+
+- `mt6771.dtsi` — 41 строка: `#include "mt8183.dtsi"` + `compatible =
+  "mediatek,mt6771"` + удаление `cpu-idle-states`/`operating-points-v2`
+  («cpuidle & cpufreq are broken with android firmware»).
+- `mt8788-fplus-t1100.dts` — 868 строк полного board DTS: тач `himax,hx83102e`
+  (i2c0 0x48), HDMI `ite,it66121` (i2c3 0x4c, от DPI0), панель `boe,tv110xum-lb2-it6112`
+  (i2c3 0x56), PMIC `mt6370` (i2c5 0x34), eMMC HS400/SD, USB peripheral,
+  `simple-framebuffer` @ `0x7cb80000`, `&iommu disabled`.
+- `drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c` — драйвер панели
+  (коммит `935fe30`, WIP) → `refs/it6112/`.
+
+**Нет** `clk-mt6771`, `pinctrl-mt6771`, `mt6771-mmsys`: вся инфраструктура
+берётся из MT8183. Это подтверждает план «MT8183 как шаблон» и снижает риск
+clock-драйвера: возможно, отдельный `clk-mt6771` на первом этапе не нужен.
+
 Второй референс — **MT8365 (Genio 350)** в mainline: полный набор
 `mt8365-disp-*`, `mt8365-mmsys`, `mt8365-mali` (Bifrost) — полезен там, где
 у MT6771 отличия от MT8183 (MMSYS-раскладка у MT8365 другая: OVL0 @ 0x1400b000).
@@ -68,14 +88,15 @@ tablet-версия MT6771). Значит:
 - **TRM (регистровая документация) MT6771** — phone-SKU, не публикуется.
   **Не блокер:** все смещения регистров есть в исходниках ядра (драйвер +
   MMSYS-заголовки). Ядро — референс.
-- **Datasheet LCD-панели** — init-последовательность берётся из LCM-драйвера
-  ядра / DTS.
+- **Datasheet LCD-панели** — не публичен, но init-последовательность больше не
+  секрет: она есть в WIP-драйвере `refs/it6112/` (linux-mediatek, `935fe30`).
 
 ## Дизассемблирование
 
 - Как правило **не нужно**: драйвер дисплея и панель есть в исходниках.
 - Нужно только если:
-  1. init панели окажется в прекомпилированном `.o` без исходника;
+  1. понадобится сверять I2C/регистровую инициализацию моста IT6112 там, где
+     WIP-драйвер не покрывает (например, LK-инициализация, `RCLK/MCLK`);
   2. понадобится Android-ный `libmali` — но **panfrost заменяет его**, так что
      и это не требуется.
 - Вывод: RE — fallback, не основной путь.

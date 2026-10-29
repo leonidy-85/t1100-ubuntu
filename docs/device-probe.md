@@ -24,7 +24,7 @@ scripts/t1100_root.sh 'id; ls /sys/fs/pstore'     # обёртка: ssh -tt + de
 
 | Файл | Что |
 |---|---|
-| `fdt-live.dtb`, `fdt-live.dts.gz` | **живой FDT со всеми dtbo-оверлеями** (5400 строк) — включает board-узлы, которых нет в boot-DTB |
+| `fdt-live.dts.gz` | **живой FDT со всеми dtbo-оверлеями** (6175 строк после `dtc -I dtb -O dts`) — включает board-узлы, которых нет в boot-DTB. Голого `.dtb` в `refs/device/` нет |
 | `dmesg-stock.txt.gz` | полный `dmesg` стока (303 КБ) |
 | `console-ramoops-prevboot.txt.gz` | `console-ramoops` **прошлой** загрузки (паника при `switch_root`) — доказательство, что pstore переживает перезагрузку |
 | `config-stock.gz` | `/proc/config.gz` |

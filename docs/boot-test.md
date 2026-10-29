@@ -19,28 +19,35 @@ UART-подключения нет. Логи — **только через pstor
 
 ## Размеры (проверено 29.10.2026)
 
-`Image.gz` (defconfig) 14 009 597 B + initramfs 1 031 532 B + DTB ~48 КБ =
-**15,1 МБ** при разделе `boot_a` 32 МиБ — влезает с запасом даже на дефолтном
-конфиге с отладочной информацией.
+DTB `mt6771-fplus-t1100.dtb` = **4941 B** (не «~48 КБ») — с патчем 0003.
+`Image.gz` (defconfig + фрагмент, `DEBUG_INFO_NONE`) ≈ 13,4 МБ, initramfs
+≈ 1,0 МБ: суммарно **≈ 14,4 МБ** при разделе `boot_a` 32 МиБ — влезает с
+запасом. Точные размеры/хеши этой сборки — в `docs/provenance.md`.
 
 ## Обязательные узлы/параметры для логов
 
-- `chosen/bootargs`: `console=ttyS0,921600n8` (на будущее), `panic=10`,
-  `ramoops.mem_address=0x54410000 ramoops.mem_size=0xe0000
-  ramoops.console_size=0x40000 ramoops.pmsg_size=0x10000
-  pstore.backend=ramoops`.
-- DTS `reserved-memory`: `ramoops@54410000` (0xe0000) — регион вырезан из
-  System RAM и в стоковом FDT, и должен остаться вырезанным у нас.
+- `chosen/bootargs`: **без** `console=`/`earlycon=`/`stdout-path` —
+  `maxcpus=1 panic=10 pstore.backend=ramoops`. UART-гейт до появления
+  `clk-mt6771` закрыт LK, и первый printk в gated-периферию опасен; console-логи
+  пишет `pstore`-консоль (`CONFIG_PSTORE_CONSOLE`). Для UART позже добавить
+  `earlycon=mtk8250,0x11002000 console=ttyS0,921600n8`.
+- DTS `reserved-memory`: `ramoops@54410000` (0xe0000) с `record-size=0x10000`,
+  `console-size=0x40000`, `pmsg-size=0x10000` — параметры берутся из DT, не из
+  cmdline. Регион вырезан из System RAM и в стоковом FDT, и у нас.
+- PSCI (`arm,psci-1.0`, smc) + `mediatek,mt8183-wdt` — чтобы `panic=10`
+  действительно перезагружал плату (патч 0003).
 - `CONFIG_PSTORE=y`, `CONFIG_PSTORE_CONSOLE=y`, `CONFIG_PSTORE_RAM=y`,
-  `CONFIG_PSTORE_PMSG=y`.
+  `CONFIG_PSTORE_PMSG=y`, `CONFIG_MEDIATEK_WATCHDOG=y`, `CONFIG_ARM_PSCI_FW=y`.
 
 ## Цикл теста
 
 1. Собрать образ, сверить sha256, положить в `build/boot_a_test.img`.
 2. **Только с подтверждением владельца**: прошить в `p29` через recovery
    (`dd bs=1M conv=fsync`) или `dd` из Aurora; сверить sha на устройстве.
-3. Перезагрузка. Что бы ни случилось — ядро само уйдёт в панику/перезагрузку
-   (`panic=10`), lk снова загрузит `boot_a` (наш образ).
+3. Перезагрузка. С патчем 0003 panic (`panic=10`) вызывает PSCI SYSTEM_RESET
+   или TOPRGU-сброс, и lk снова грузит `boot_a` (наш образ). Если PSCI на этом
+   ATF не отдаёт `SYSTEM_RESET`, плата останется в `System halted` — тогда
+   ребут кнопкой питания (это проверяется именно этой загрузкой).
 4. **Возврат в Aurora**: прошить стоковый `boot_a` через recovery (p29).
    RAM при этом не обнуляется, поэтому pstore остаётся.
 5. Прочитать лог: `scripts/t1100_root.sh 'cat /sys/fs/pstore/console-ramoops'`.

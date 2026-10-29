@@ -21,8 +21,11 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
    с адресами/IRQ из `refs/stock-mt6771.dts`.
 2. **`clk-mt6771`** (`topckgen`, `infracfg_ao`, `pericfg`, `apmixedsys`, `mfgcfg`,
    `mmsys`) — самая большая новая работа; за основу `clk-mt8183*.c`, сверить
-   gate-биты по downstream `clk-mt6771.c`.
+   gate-биты по downstream `clk-mt6771.c`. **Сначала проверить гипотезу
+   «обойтись MT8183»**: в `adomerle/mt6771-next` отдельного clk-драйвера нет
+   (`refs/mt6771-next/`).
 3. **`pinctrl-mt6771`** — на базе `pinctrl-mt8183.c`, сверить IO-конфиг/EINT.
+   В том же WIP-порте используется `pio` из `mt8183.dtsi`; проверить на железе.
 4. **pwrap + MT6358** (`mt6358-regulator`, `mt6358-keys`, `mt6358-rtc`) —
    переиспользовать mainline-драйверы, нужен корректный `pwrap` для MT6771.
 5. **watchdog (`mtk-wdt`), `mt6577-uart` (console), MMC (`mtk-sd`), USB
@@ -39,8 +42,9 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
 2. DRM-компоненты: OVL0/2L, RDMA0/1, COLOR, CCORR, AAL, GAMMA, DITHER, DSI,
    MUTEX, PWM (compatible `mediatek,mt6771-*` → `mt8183-*` fallback, где совпадает).
 3. `mtk_dsi` + `mtk_mipi_tx`: сверить DSI PHY-тайминги (downstream `ddp_dsi.c`).
-4. DRM panel-драйвер **`panel-boe-tv110xum`** (1600×2176, 4 lane, video mode):
-   init-последовательность из вкомпилированного LCM `tv110xum_lb2_incell`.
+4. DRM panel-драйвер **BOE TV110XUM-LB2 через ITE IT6112** (1600×2176, 4 lane,
+   video mode): исходник есть — `refs/it6112/panel-it6112-boe-tv110xum-lb2.c`
+   (WIP, 6.16 → бэкпорт на 6.12). RE не требуется.
 5. Backlight: `pwm-backlight` / `mtk-pwm` + GPIO питания.
 
 **Готово:** `modetest`/`kmscube` выводят картинку на панель.
@@ -80,8 +84,8 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
   по downstream `clk-mt6771.c`).
 - **Логи при загрузке**: UART-доступ к плате не подтверждён; ставка на
   `ramoops`/pstore + «тихий» boot (см. STATUS, блокеры).
-- **Панель**: init-последовательность только в бинарном LCM-драйвере →
-  возможен RE (fallback-агент `reverse-engineer`).
+- **Панель/мост IT6112**: исходник WIP-драйвера есть (`refs/it6112/`), но он
+  не проверен на нашем ядре; RE больше не основной путь, а fallback.
 - **Периферия**: вендорные блобы/прошивки (Wi-Fi/BT).
 - **Кирпич при прошивке** — только через recovery/с бэкапом.
 

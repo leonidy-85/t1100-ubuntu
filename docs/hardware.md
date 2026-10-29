@@ -32,7 +32,10 @@
 ## Дисплей
 
 - Драйвер `mtkfb` (MTK legacy), панель по **MIPI DSI** (`lcm_get_params`,
-  DSI PLL 790).
+  DSI PLL 790) — **не напрямую, а через мост ITE IT6112** (DSI → panel),
+  см. `docs/hardware.md#мост-ite-it6112` и `refs/it6112/`.
+- Второй выход дисплея: **HDMI через ITE IT66121** от DPI0 (`&dpi0`, 12 бит),
+  i2c3 @0x4c, reset GPIO79 — есть в `refs/mt6771-next/mt8788-fplus-t1100.dts`.
 - Тач: **Himax** (`touchpanel.config.himax_tp=1`, project `X107_10`),
   `i2c@11007000`, адрес `0x48`, IRQ 19.
 - Конвейер (из `dispsys`):
@@ -50,7 +53,26 @@
 | прочее | `usbkeyboard` (док-клавиатура), `hallsensor`, `focaltech_fp`, `vibrator` |
 | CPU OPP | A53/A73: 793…1989 МГц (`policy0`/`policy4`) |
 
-### Панель (уточнено 28.10.2026)
+### Мост ITE IT6112 (уточнено 29.10.2026)
+
+Панель подключена не к DSI-хосту напрямую, а к мосту **ITE IT6112**
+(DSI-DUAL_DSI). Факты из публичного WIP-драйвера
+`refs/it6112/panel-it6112-boe-tv110xum-lb2.c` (`linux-mediatek/linux` @ `935fe30`):
+
+| Параметр | Значение |
+|---|---|
+| I2C-адрес моста (MIPI TX) | **0x56** на `i2c3` (в board DTS adomerle; в нашем DTS i2c3 пока нет) |
+| I2C-адрес MIPI RX | **0x5e** (dummy-клиент на том же адаптере) |
+| Product ID | `(revid << 8) | chipid` = **0x6112** |
+| `compatible` | `boe,tv110xum-lb2-it6112` |
+| DSI | **4 lane**, video mode + sync pulse, RGB888 |
+| Режим | 1600×2176, clock **255798 кГц**, 166×226 мм |
+| Питание | `dvdd` (GPIO55 fixed), `vpos`/`vneg` (**MT6370** dsvpos/dsvneg) |
+| Reset | GPIO45 (active high) |
+| Backlight | `pwm-backlight`: PWM0, enable GPIO56 |
+| Init | I2C-регистры моста, DCS-команды через регистр **0x73** |
+
+### Панель (уточнено 29.10.2026)
 
 | Параметр | Значение | Источник |
 |---|---|---|
@@ -60,10 +82,12 @@
 | LCM-драйвер в стоке | `drivers/misc/mediatek/lcm/elink_lcm/tv110xum_lb2_incell/` (вкомпилирован в ядро) | `strings Image` |
 | `atag,videolfb-lcmname` | `es6311_anx6585_zigzag_wxga` — **устаревшая строка** от другого продукта, не соответствует реальной панели | ATAG на устройстве |
 | Тач | in-cell + внешний Himax | `touchpanel.config.*` |
+| Мост | **ITE IT6112** (i2c3 0x56 / MIPI RX 0x5e) | `refs/it6112/` |
 
-> Панель 1600×2176 (портрет). Для KMS нужен DRM-panel с таймингами из
-> `tv110xum_lb2_incell` (init-последовательность придётся извлечь из
-> вкомпилированного LCM-драйвера — исходника в публичных репо нет; см. риск RE).
+> Панель 1600×2176 (портрет), за мостом IT6112. Init-последовательность и
+> тайминги **есть в исходнике** — WIP-драйвер `refs/it6112/panel-it6112-boe-tv110xum-lb2.c`
+> (автор Arseniy Velikanov). Риск «RE бинарника LCM» снят; остаётся бэкпорт
+> драйвера с 6.16 на 6.12 и проверка на железе.
 
 ### Карта регистров дисплея (из стокового DTB, `refs/stock-mt6771.dts`)
 

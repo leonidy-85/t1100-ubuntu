@@ -602,11 +602,13 @@ platform-драйвера, не ранней консоли. В bootargs сто�
 может подвесить загрузку. План B на первую загрузку — bootargs без
 `console=ttyS0` (логи всё равно уйдут в `ramoops`).
 
-**4.9.5. `reserved-memory`: два региона пересекаются.** В живом FDT
-`framebuffer` (`0x7cd80000`+0x2e80000) и `items-reserved`
-(`0x7fc00000`+0x200000) делят диапазон `0x7fc00000–0x7fdfffff`. Перенёс оба
-как есть (это то, что отдаёт LK); при разборе дисплея надо уточнить, что из
-этого реально занято, и, возможно, выкинуть `items-reserved`.
+**4.9.5. `reserved-memory`: `framebuffer` и `items-reserved` НЕ пересекаются**
+(поправка 29.10.2026 — раньше здесь была ошибка в арифметике).
+`framebuffer` = `0x7cd80000` + `0x2e80000` = `0x7fb80000` (конец), а
+`items-reserved` начинается с `0x7fc00000`, то есть между ними зазор `0x80000`;
+оба региона вырезаны из System RAM в стоковом `/proc/iomem`. Вывод не
+меняется: при разборе дисплея уточнить, что из этого реально занято, и,
+возможно, выкинуть `items-reserved` (а также `framebuffer` и `vpu-binary`).
 Плюс: `md-mem-usage` 256 МиБ перенесён «на всякий случай», хотя в стоковом
 `/proc/iomem` эта область показана как System RAM (модем в нашем ядре не
 стартует). Если RAM понадобится — первым можно убрать его и `vpu-binary`.
@@ -648,3 +650,40 @@ platform-драйвера, не ранней консоли. В bootargs сто�
   `build/t1100` остался от baseline (`2a2cab58…`).
 - Планшет не трогался; `docs/STATUS.md`, `docs/hardware.md`,
   `docs/research.md`, `docs/boot-test.md`, `scripts/*` не изменялись.
+
+## 5. 29.10.2026 — среда восстановлена, DTS+1, найден WIP-порт
+
+Работа велась на другом хосте (`/home/l`), и на текущей машине не было ни
+дерева, ни тулчейна. Восстановлено:
+
+| Компонент | Значение |
+|---|---|
+| Ядро | `/home/leo/Aurora_All/device/linux-t1100`, 6.12.114, tarball sha256 `7a858991…4af3`, git-репозиторий с базовым коммитом |
+| Патчи | 0001, 0002 применились чисто (`git am`) |
+| Тулчейн | Arm GNU Toolchain 14.2.Rel1 (`aarch64-none-linux-gnu-`), распакован в `../toolchains/` |
+| Регресс DTB | `mt6771-fplus-t1100.dtb` 4806 B, sha256 `bbf097af…d8b5e` — **совпал** со старым |
+| Хост-пакеты | `make`, `gcc`, `bc`, `flex`, `bison`, `openssl` (dev), `dtc` 1.7.2; `sudo` без пароля нет — тулчейн взят тарболлом |
+
+Исправлено в репозитории:
+
+- `scripts/build_kernel.sh`: дефолт `KERNEL_SRC=../linux-t1100`, автопоиск
+  `CROSS_COMPILE` в `PATH` и `../toolchains/*/bin`, применение
+  `configs/t1100.fragment` через `merge_config.sh`, `JOBS=nproc`.
+- `scripts/repack_boot.py` / `bootimg_extract.py`: `dtb_addr` читался как
+  `<IQ` с 0x670 (получался 0) — в MTK-раскладке это `<I` по 0x674 =
+  `0x54000000`.
+- `scripts/repack_boot.py`: хвост стокового образа больше не затирается
+  нулями — round-trip всего 32-МиБ `boot_a` теперь **побайтово идентичен**
+  (раньше совпадали только полезные 14,9 МБ).
+- `scripts/make_test_boot.sh`: кандидаты REF (в т.ч. `../1100/boot_a.bin`).
+
+Новые факты:
+
+- Панель идёт **через мост ITE IT6112**, init-последовательность есть в
+  публичном WIP-драйвере (`refs/it6112/`) — RE не требуется.
+- В `linux-mediatek/linux` есть ветка `adomerle/mt6771-next` (base 6.16.0) с
+  полным DTS нашего планшета; `mt6771.dtsi` там = `#include "mt8183.dtsi"`,
+  отдельных clk/pinctrl/mmsys для MT6771 нет → гипотеза «MT8183-драйверы
+  подходят» усилена (`refs/mt6771-next/`).
+- Патч 0003: PSCI + `mediatek,mt8183-wdt`, из bootargs убраны
+  `console`/`earlycon`/`stdout-path` (UART-гейт до `clk-mt6771` закрыт).

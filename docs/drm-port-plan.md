@@ -19,7 +19,7 @@ MT6771 и MT8183 — родственные SoC с **одинаковой рас
 | OVL (4L) | `0x14008000` | `mtk_disp_ovl.c` (`mt8183-disp-ovl`) | `mediatek,mt6771-disp-ovl` → fallback `mt8183-disp-ovl` |
 | OVL 2L ×2 | `0x14009000`, `0x1400a000` | `mtk_disp_ovl.c` (`mt8183-disp-ovl-2l`) | то же для 2L |
 | RDMA ×2 | `0x1400b000`, `0x1400c000` | `mtk_disp_rdma.c` | `…-disp-rdma` |
-| WDMA | `0x1400d000` | `mtk_disp_wdma.c`? (проверить наличие) | `…-disp-wdma` |
+| WDMA | `0x1400d000` | **в 6.12 отсутствует** (`drivers/gpu/drm/mediatek/Makefile`) | не нужен для DIRECT_LINK (`OVL→…→DSI`); DECOUPLE-путь отложить |
 | COLOR / CCORR | `0x1400e000` / `0x1400f000` | `mtk_disp_color.c`, `mtk_disp_ccorr.c` | `…-disp-color/-ccorr` |
 | AAL / GAMMA / DITHER | `0x14010000` / `0x14011000` / `0x14012000` | `mtk_disp_aal/gamma/dither.c` | `…-disp-aal/-gamma/-dither` |
 | **DSI0** | `0x14014000` | `mtk_dsi.c` (`mt8183-dsi`) | `…-dsi`; IRQ SPI 236 (0xec) |
@@ -32,38 +32,46 @@ MT6771 и MT8183 — родственные SoC с **одинаковой рас
 | **GCE (CMDQ)** | `0x10238000` | `mailbox/…/mtk-cmdq-mailbox.c` (`mt8183-gce`) | `mediatek,mt6771-gce` (сверить число потоков) |
 | **M4U (IOMMU)** | `0x10205000` | `iommu/mediatek` (`mt8183-m4u`) | `…-m4u`; **номера портов M4U_PORT_* перепроверить** по downstream |
 | MFG (GPU) | `0x13000000`, GPU `0x13040000` | panfrost + `mtk-pm-domains` | `mediatek,mt6771-mali` → `arm,mali-bifrost`; IRQ 278/279/280 (как MT8183) |
+| **IT6112 мост+панель** | i2c3 0x56 / RX 0x5e | `drm_panel` + i2c, WIP в linux-mediatek | перенести `refs/it6112/panel-it6112-boe-tv110xum-lb2.c` (6.16 → 6.12: `devm_drm_panel_alloc` → `drm_panel_init`), тайминги 1600×2176@60, 4 lane RGB888 |
+| **IT66121 HDMI** | i2c3 0x4c, вход с DPI0 | `drm/bridge/ite-it66121.c` (mainline) | нужен `mtk_dpi` + DPI0-пины; не блокер KMS-панели (см. `refs/mt6771-next/`) |
 
 ## Чего в mainline нет и что придётся писать
 
 1. **`clk-mt6771`** — topckgen, infracfg_ao, pericfg, apmixedsys, mfgcfg, mmsys
    (mm). Основа — `drivers/clk/mediatek/clk-mt8183*.c`; gate-биты сверять с
-   downstream `clk-mt6771.c` (Hadenix 4.4 / Realme 4.14). **Главный объём работы
-   фазы 1–2.**
-2. **`pinctrl-mt6771`** — свои IO-конфиг/EINT (основа `pinctrl-mt8183.c`).
-3. **Панель BOE TV110XUM-LB0-1SP0** (1600×2176, 4 lane, video mode) —
-   `panel-boe-tv110xum.c`: тайминги + init-последовательность. Исходника LCM
-   (`tv110xum_lb2_incell`) в публичных репо нет → кандидат на RE
-   (`reverse-engineer`), fallback — минимальный init + проверка на железе.
-4. **Backlight**: `pwm-backlight`/`mtk-pwm` + GPIO 56 (из dtbo).
+   downstream `clk-mt6771.c` (Hadenix 4.4 / Realme 4.14). **Проверить гипотезу
+   переиспользования MT8183-драйверов**: в `adomerle/mt6771-next` отдельного
+   clk-драйвера нет — взят `mt8183.dtsi` целиком (`refs/mt6771-next/`).
+2. **`pinctrl-mt6771`** — в том же WIP-порте не нужен: `pio` наследуется из
+   `mt8183.dtsi`. Проверить на железе (GPIO/EINT-номера на MT6771 могут
+   отличаться от MT8183). Если отличаются — свой драйвер на базе
+   `pinctrl-mt8183.c`.
+3. **Панель BOE TV110XUM-LB2 через IT6112** (1600×2176, 4 lane, video mode) —
+   исходник **есть**: `refs/it6112/panel-it6112-boe-tv110xum-lb2.c` (WIP,
+   linux-mediatek `935fe30`). RE не требуется. Работа: бэкпорт 6.16 → 6.12,
+   подключение `i2c3`/MT6370-регуляторов/backlight.
+4. **Backlight**: `pwm-backlight`/`mtk-pwm` + GPIO 56 (PWM0 в adomerle DTS).
 
 ## Первые шаги фазы 2 (после DTS фазы 1)
 
 1. mmsys: `mediatek,mt6771-mmsys` = route-таблица MT8183, но **сначала сверить
    смещения `0xf00…0xf54`, `0x140`** с downstream (`mt6771/mt6771_drm` или
    `disp_lcm`-заголовки). Если совпадают — переиспользуем заголовок как есть.
-2. Проверить в mainline наличие `mtk_disp_wdma.c` (если нет — WDMA не нужен для
-   DIRECT_LINK пути: `OVL → … → DSI` без промежуточного буфера).
+2. WDMA: **вопрос закрыт** — `mtk_disp_wdma.c` в mainline 6.12 нет, для
+   DIRECT_LINK (`OVL → … → DSI`) он не нужен.
 3. Собрать минимальный KMS-путь: `OVL0 → RDMA0 → COLOR → CCORR → AAL → GAMMA →
    DITHER → DSI0` (как в стоке, DIRECT_LINK) либо простейший `OVL0 → DSI0`.
-4. Панель: сначала «зажечь» DSI видео-режим с фиксированными таймингами и
-   тестовым паттерном (`modetest -s`), потом init панели.
+4. Панель: перенести драйвер IT6112 из `refs/it6112/` на 6.12, подключить
+   `i2c3`, `mt6358`-регуляторы и MT6370 dsvpos/dsvneg; «зажечь» видео-режим
+   1600×2176@60, затем DCS init через регистр 0x73.
 5. Проверка: `modetest -M mediatek`, `kmscube`.
 
 ## Риски
 
 - **Регистровые отличия** MT6771↔MT8183 в OVL/MUTEX/DSI (адреса совпадают, но
   версии IP могут отличаться) — проверять по downstream-заголовкам и на железе.
-- **Панель**: без init-последовательности экран останется тёмным даже при
-  рабочем DSI — это отдельный риск, возможен RE.
+- **Панель/мост**: исходник WIP-драйвера есть, но он не проверен на нашем
+  ядре; к тому же для питания vpos/vneg нужен MT6370, а для DSI — `clk-mt6771`
+  или переиспользование MT8183-клоков (гипотеза из `adomerle/mt6771-next`).
 - **Clock-драйвер**: без него не поднимутся ни DSI-клоки, ни шина MMSYS.
 - **Отладка**: нет UART, логи только `pstore` (`docs/boot-test.md`).
