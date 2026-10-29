@@ -4,7 +4,11 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус: фаза 0 закрыта, идёт bring-up.** База — mainline LTS 6.12.114,
+> **Статус: boot-chain пройден** — mainline 6.12 запускается на планшете
+> (LK принимает наш DTB; см. `docs/lk-dtb-rules.md`, `docs/STATUS.md`).
+> Дальше: логи через pstore, полноценное ядро, затем KMS.
+>
+> ~~**Статус: фаза 0 закрыта, идёт bring-up.**~~ База — mainline LTS 6.12.114,
 > MT6771 добавляется как новый SoC; шаблон — mainline MT8183 (совпадение
 > DISPSYS/GPU/PMIC доказано по стоковому DTB и WIP-порту `adomerle/mt6771-next`,
 > см. `docs/research.md`). DTS собирается (PSCI + watchdog), `Image` собран,
