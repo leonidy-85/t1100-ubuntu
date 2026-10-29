@@ -1,0 +1,339 @@
+From 654b5aacad6bc1fe9cae18b2823c6c97218b678a Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 29 Oct 2026 03:22:21 +0300
+Subject: [PATCH t1100 1/2] arm64: dts: mediatek: add minimal MT6771 SoC
+ description
+
+First take on MT6771 (Helio P60/P70, MT8788) for the Fplus T1100
+bring-up. Only what is needed to reach a console:
+
+ - 8 CPUs (4x Cortex-A53 + 4x Cortex-A73), no enable-method yet,
+   so secondaries stay offline and the SoC boots UP
+ - GICv3 at 0x0c000000 (GICD 0x40000, GICR 0x200000) and the
+   mt6771-sysirq polarity controller at 0x0c530a80
+ - armv8 architected timer, 13 MHz
+ - uart0 at 0x11002000 (mt6577-uart, GIC SPI 91) with stdout-path
+ - 4 GiB memory at 0x40000000 and the reserved-memory list that
+   LK/ATF hand over (ram_console, ramoops, ATF/SCP/SSPM, modem,
+   VPU, bootloader framebuffer)
+
+Addresses, IRQ numbers and reservation windows are taken from the
+stock Android DT extracted from boot_a (refs/stock-mt6771.dts) and
+from the live FDT with DTBO overlays (refs/device/fdt-live.dts.gz).
+GIC and sysirq layout is identical to mt8183 in mainline.
+
+Clocks (clk-mt6771), pinctrl/pinmux, power domains, SMI/IOMMU,
+display and GPU nodes are deliberately absent; PSCI is not
+described yet because it is not verified that ATF exposes it to a
+non-Android payload.
+---
+ arch/arm64/boot/dts/mediatek/mt6771.dtsi | 300 +++++++++++++++++++++++
+ 1 file changed, 300 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/mediatek/mt6771.dtsi
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771.dtsi b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+new file mode 100644
+index 0000000..787ba7f
+--- /dev/null
++++ b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+@@ -0,0 +1,300 @@
++// SPDX-License-Identifier: (GPL-2.0 OR MIT)
++/*
++ * Minimal MediaTek MT6771 (Helio P60/P70, also sold as MT8788) SoC description.
++ *
++ * Bring-up skeleton for the Fplus T1100 tablet. Everything below is factual
++ * data taken from:
++ *   - the stock Android device tree of the tablet (refs/stock-mt6771.dts,
++ *     extracted from boot_a), for register windows, IRQ numbers and the
++ *     power-controller/interrupt-controller layout;
++ *   - the live FDT with DTBO overlays (refs/device/fdt-live.dts.gz), for the
++ *     memory reservation list that LK/ATF hand over to the kernel;
++ *   - mainline mt8183.dtsi (closest supported SoC) for the binding style.
++ *
++ * What is deliberately missing in this first step:
++ *   - PSCI: the stock DT does carry a /psci node ("arm,psci-1.0", method
++ *     "smc"), but whether ATF exposes PSCI to a non-Android payload has not
++ *     been verified on hardware. Secondary CPUs therefore stay offline
++ *     (no enable-method, bootargs contain maxcpus=1).
++ *   - clocks (clk-mt6771), pinmux, power domains, SMI/IOMMU.
++ *   - display (mmsys/disp/dsi) and GPU (mali) nodes.
++ */
++
++#include <dt-bindings/interrupt-controller/arm-gic.h>
++#include <dt-bindings/interrupt-controller/irq.h>
++
++/ {
++	compatible = "mediatek,mt6771";
++	interrupt-parent = <&sysirq>;
++	#address-cells = <2>;
++	#size-cells = <2>;
++
++	aliases {
++		serial0 = &uart0;
++	};
++
++	chosen: chosen {
++		bootargs = "console=ttyS0,921600n8 earlycon=mtk8250,0x11002000 maxcpus=1 panic=10 pstore.backend=ramoops";
++		stdout-path = "serial0:921600n8";
++	};
++
++	cpus {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		cpu0: cpu@0 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a53";
++			reg = <0x0>;
++		};
++
++		cpu1: cpu@1 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a53";
++			reg = <0x1>;
++		};
++
++		cpu2: cpu@2 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a53";
++			reg = <0x2>;
++		};
++
++		cpu3: cpu@3 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a53";
++			reg = <0x3>;
++		};
++
++		cpu4: cpu@100 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a73";
++			reg = <0x100>;
++		};
++
++		cpu5: cpu@101 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a73";
++			reg = <0x101>;
++		};
++
++		cpu6: cpu@102 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a73";
++			reg = <0x102>;
++		};
++
++		cpu7: cpu@103 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a73";
++			reg = <0x103>;
++		};
++	};
++
++	timer {
++		compatible = "arm,armv8-timer";
++		interrupt-parent = <&gic>;
++		interrupts = <GIC_PPI 13 IRQ_TYPE_LEVEL_LOW>,
++			     <GIC_PPI 14 IRQ_TYPE_LEVEL_LOW>,
++			     <GIC_PPI 11 IRQ_TYPE_LEVEL_LOW>,
++			     <GIC_PPI 10 IRQ_TYPE_LEVEL_LOW>;
++		clock-frequency = <13000000>;
++	};
++
++	soc {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		compatible = "simple-bus";
++		ranges;
++
++		/*
++		 * GICv3 at 0x0c000000. The stock DT also lists a third window
++		 * (0x0c530a80, 0x50) in the GIC node; that is the interrupt
++		 * polarity register, described below by the sysirq node.
++		 */
++		gic: interrupt-controller@c000000 {
++			compatible = "arm,gic-v3";
++			#interrupt-cells = <3>;
++			#address-cells = <2>;
++			#size-cells = <2>;
++			#redistributor-regions = <1>;
++			interrupt-parent = <&gic>;
++			interrupt-controller;
++			reg = <0 0x0c000000 0 0x40000>,	/* GICD */
++			      <0 0x0c100000 0 0x200000>;	/* GICR, 8 frames */
++			interrupts = <GIC_PPI 9 IRQ_TYPE_LEVEL_HIGH>;
++		};
++
++		sysirq: interrupt-controller@c530a80 {
++			compatible = "mediatek,mt6771-sysirq",
++				     "mediatek,mt6577-sysirq";
++			interrupt-controller;
++			#interrupt-cells = <3>;
++			interrupt-parent = <&gic>;
++			reg = <0 0x0c530a80 0 0x50>;
++		};
++
++		/*
++		 * Placeholder for the pin controller: mainline has no
++		 * pinctrl-mt6771 driver yet, so nothing binds here. The node
++		 * exists so that board GPIO references (&pio) resolve; the
++		 * full register list (GPIO base, EINT base and the eight
++		 * iocfg bases) arrives with the pinctrl driver.
++		 * GPIO/EINT bases: live FDT.
++		 */
++		pio: pinctrl@10005000 {
++			compatible = "mediatek,mt6771-pinctrl";
++			reg = <0 0x10005000 0 0x1000>,
++			      <0 0x1000b000 0 0x1000>;
++			gpio-controller;
++			#gpio-cells = <2>;
++			gpio-ranges = <&pio 0 0 191>;
++			interrupt-controller;
++			#interrupt-cells = <4>;
++			interrupts = <GIC_SPI 177 IRQ_TYPE_LEVEL_HIGH>;
++		};
++
++		uart0: serial@11002000 {
++			compatible = "mediatek,mt6577-uart";
++			reg = <0 0x11002000 0 0x1000>;
++			interrupts = <GIC_SPI 91 IRQ_TYPE_LEVEL_LOW>;
++			/*
++			 * Only the 26 MHz baud clock (clk26m) for now: the
++			 * driver falls back to the single-clock scheme and
++			 * reports base_baud = 1625000, as the stock kernel
++			 * does. The "bus" gate comes with clk-mt6771.
++			 */
++			clocks = <&clk26m>;
++			status = "okay";
++		};
++
++		/* I2C0: touchscreen bus on this board. Needs the infracfg
++		 * "main"/"dma" gates from clk-mt6771, so keep it disabled. */
++		i2c0: i2c@11007000 {
++			compatible = "mediatek,mt6577-i2c";
++			reg = <0 0x11007000 0 0x1000>,
++			      <0 0x11000080 0 0x80>;
++			interrupts = <GIC_SPI 81 IRQ_TYPE_LEVEL_LOW>;
++			clock-div = <5>;
++			#address-cells = <1>;
++			#size-cells = <0>;
++			status = "disabled";
++		};
++	};
++
++	clocks {
++		clk26m: oscillator {
++			compatible = "fixed-clock";
++			#clock-cells = <0>;
++			clock-frequency = <26000000>;
++			clock-output-names = "clk26m";
++		};
++	};
++
++	memory@40000000 {
++		device_type = "memory";
++		reg = <0 0x40000000 1 0>;	/* 4 GiB DDR3/LPDDR4 */
++	};
++
++	/*
++	 * Reservation list as passed by LK/ATF in the live FDT, addresses are
++	 * fixed physical addresses (see refs/device/fdt-live.dts.gz and
++	 * refs/device/iomem.txt). Regions are kept reserved so that the
++	 * kernel never writes into ATF/SCP/SSPM, modem, VPU or the
++	 * bootloader framebuffer areas.
++	 */
++	reserved-memory {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
++
++		ram_console@54400000 {
++			reg = <0 0x54400000 0 0x10000>;
++			no-map;
++		};
++
++		ramoops@54410000 {
++			compatible = "ramoops";
++			reg = <0 0x54410000 0 0xe0000>;
++			no-map;
++			record-size = <0x10000>;
++			console-size = <0x40000>;
++			pmsg-size = <0x10000>;
++		};
++
++		minirdump@544f0000 {
++			reg = <0 0x544f0000 0 0x10000>;
++			no-map;
++		};
++
++		atf-reserved@54600000 {
++			reg = <0 0x54600000 0 0x50000>;
++			no-map;
++		};
++
++		spm-reserved@77ff0000 {
++			reg = <0 0x77ff0000 0 0x10000>;
++			no-map;
++		};
++
++		framebuffer@7cd80000 {
++			reg = <0 0x7cd80000 0 0x2e80000>;
++			no-map;
++		};
++
++		items-reserved@7fc00000 {
++			reg = <0 0x7fc00000 0 0x200000>;
++			no-map;
++		};
++
++		sspm-reserved@7ff00000 {
++			reg = <0 0x7ff00000 0 0xc0000>;
++			no-map;
++		};
++
++		log-store@7ffc0000 {
++			reg = <0 0x7ffc0000 0 0x40000>;
++		};
++
++		ap-md-c-smem@86000000 {
++			reg = <0 0x86000000 0 0x1600000>;
++		};
++
++		ap-md-nc-smem@88000000 {
++			reg = <0 0x88000000 0 0x100000>;
++		};
++
++		md-mem-usage@8c000000 {
++			reg = <0 0x8c000000 0 0x10000000>;
++		};
++
++		scp-reserved@9cf00000 {
++			reg = <0 0x9cf00000 0 0x600000>;
++			no-map;
++		};
++
++		ccci-tag-mem@9d5e0000 {
++			reg = <0 0x9d5e0000 0 0x10000>;
++		};
++
++		vpu-binary@9d5f0000 {
++			reg = <0 0x9d5f0000 0 0x2a10000>;
++			no-map;
++		};
++
++		atf-log-reserved@bfe00000 {
++			reg = <0 0xbfe00000 0 0x40000>;
++			no-map;
++		};
++
++		dramc-rk0@bffff000 {
++			reg = <0 0xbffff000 0 0x1000>;
++			no-map;
++		};
++
++		dramc-rk1@13ffff000 {
++			reg = <1 0x3ffff000 0 0x1000>;
++			no-map;
++		};
++	};
++};
