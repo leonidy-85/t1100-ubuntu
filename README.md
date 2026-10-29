@@ -4,10 +4,13 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус: фаза 0 закрыта, идёт bring-up.** База — mainline LTS 6.12.y, MT6771
-> добавляется как новый SoC; шаблон — mainline MT8183 (совпадение DISPSYS/GPU/PMIC
-> доказано по стоковому DTB, см. `docs/research.md`). Ядро ещё не прошивалось.
-> Текущее состояние — `docs/STATUS.md`.
+> **Статус: фаза 0 закрыта, идёт bring-up.** База — mainline LTS 6.12.114,
+> MT6771 добавляется как новый SoC; шаблон — mainline MT8183 (совпадение
+> DISPSYS/GPU/PMIC доказано по стоковому DTB и WIP-порту `adomerle/mt6771-next`,
+> см. `docs/research.md`). DTS собирается (PSCI + watchdog), `Image` собран,
+> **на плату ещё не прошивался**. Панель — BOE TV110XUM-LB2 за мостом IT6112,
+> исходник драйвера есть (`refs/it6112/`). Текущее состояние — `docs/STATUS.md`,
+> воспроизводимость сборки — `docs/provenance.md`.
 
 ## Зачем
 
@@ -49,13 +52,24 @@
 t1100-ubuntu/
 ├── README.md                  # этот файл
 ├── AGENTS.md                  # правила для агентов проекта
-├── opencode.json              # MCP (web-search, aurora-docs)
+├── opencode.json              # MCP (aurora-docs)
 ├── docs/
+│   ├── STATUS.md              # состояние, решения, следующий шаг
 │   ├── hardware.md            # железо планшета (из разведки)
 │   ├── research.md            # публичные источники и оценка
-│   └── porting-plan.md        # пошаговый план порта
+│   ├── porting-plan.md        # пошаговый план порта
+│   ├── drm-port-plan.md       # инвентарь дисплейных блоков
+│   ├── boot-test.md           # протокол первой загрузки (pstore)
+│   ├── device-probe.md        # что снято с платы
+│   ├── bringup-log.md         # журнал bring-up
+│   └── provenance.md          # версии/хеши сборки
+├── patches/                   # изменения ядра (series + *.patch)
+├── configs/t1100.fragment     # Kconfig-фрагмент (pstore, watchdog…)
+├── scripts/                   # сборка, перепаковка boot, initramfs, root
+├── refs/                      # референсы: stock DTS, дампы, IT6112, mt6771-next
 └── .opencode/
     ├── agent/
+    │   ├── lead.md            # оркестратор
     │   ├── kernel-drm.md      # senior Linux DRM/KMS
     │   ├── bringup.md         # platform bring-up (DTS/clock/power)
     │   ├── gpu-mesa.md        # panfrost / Mesa
@@ -66,6 +80,9 @@ t1100-ubuntu/
             └── SKILL.md       # рабочий флоу порта
 ```
 
+Ядро живёт отдельно: `../linux-t1100` (6.12.114 + `git am patches/series`),
+сборка — out-of-tree в `build/t1100` (в `.gitignore`).
+
 ## Инструменты и соседние проекты
 
 - `../t1100` — текущий проект планшета: SSH/root, recovery, `boot_patch.py`,
@@ -73,6 +90,23 @@ t1100-ubuntu/
 - `../t1100/.opencode/skills/t1100-ssh/SKILL.md` — доступ к планшету.
 - `../t1100/.opencode/skills/aurora-mediatek-security-off/` — перепаковка boot
   (`scripts/boot_patch.py`), recovery/прошивка.
+- `../linux-t1100` — дерево ядра (создаётся из tarball 6.12.114 + патчи).
+- `../toolchains/arm-gnu-toolchain-14.2…` — кросс-компилятор aarch64
+  (альтернатива — системный `gcc-aarch64-linux-gnu`).
+
+## Сборка с нуля
+
+```sh
+# 1) дерево ядра
+curl -LO https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.114.tar.xz
+tar -xf linux-6.12.114.tar.xz && mv linux-6.12.114 ../linux-t1100
+cd ../linux-t1100 && git init && git add -A && git commit -m base
+git am ../t1100-ubuntu/patches/$(sed -n '/\.patch$/p' ../t1100-ubuntu/patches/series)
+# 2) сборка (тулчейн и фрагмент подхватываются автоматически)
+cd ../t1100-ubuntu && scripts/build_kernel.sh
+# 3) регресс DTB
+sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
+```
 
 ## С чего начать
 

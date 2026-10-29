@@ -6,7 +6,9 @@
 
 Проект порта Linux (mainline или near-mainline) на планшет **Fplus T1100**
 (SoC **MT6771 / MT8788 = Helio P60/P70**, GPU **Mali-G72 MP3 Bifrost**) с целью
-**Ubuntu + Wayland/GNOME + DRM/KMS + panfrost**. Сейчас — только scaffold.
+**Ubuntu + Wayland/GNOME + DRM/KMS + panfrost**. Сейчас — фаза 1 (bring-up):
+DTS MT6771 собирается, `Image` собран, на плату не прошивался
+(`docs/STATUS.md`, `docs/provenance.md`).
 
 ## Обязательный контекст
 

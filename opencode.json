@@ -2,13 +2,6 @@
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "servers": {
-      "web-search": {
-        "type": "local",
-        "command": [
-          "/usr/bin/node",
-          "/home/l/projects/web-search/build/index.js"
-        ]
-      },
       "aurora-docs": {
         "type": "remote",
         "url": "https://developer.auroraos.ru/api/mcp",
