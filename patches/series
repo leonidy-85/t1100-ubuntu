@@ -12,3 +12,5 @@
 0001-arm64-dts-mediatek-add-minimal-MT6771-SoC-descriptio.patch
 0002-arm64-dts-add-Fplus-T1100-MT6771-board.patch
 0003-arm64-dts-mt6771-add-PSCI-and-toprgu-watchdog.patch
+0004-arm64-dts-mt6771-add-simple-framebuffer-console.patch
+0005-soc-mediatek-add-early-RAM-console-and-wdt-stop.patch

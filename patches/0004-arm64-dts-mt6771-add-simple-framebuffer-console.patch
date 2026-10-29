@@ -1,0 +1,67 @@
+From 20bf21136a9fc882e138eea9bf591127ffbf7b85 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Thu, 29 Oct 2026 09:24:58 +0300
+Subject: [PATCH] arm64: dts: mt6771: add simple-framebuffer console for
+ bring-up
+
+There is no UART on this tablet and pstore did not survive the first test
+boot, so the only channel left is the display that LK already turned on.
+
+Describe LK's live framebuffer as /chosen/framebuffer (1600x2176, 32bpp,
+stride 6400) so simpledrm + fbcon can use it as a console. The address and
+geometry come from the live FDT reservation (mblock-11-framebuffer,
+0x7cd80000+0x2e80000) and the stock dmesg (1600x2176, bpp 32, rotation 0).
+
+bootargs become "console=tty0 maxcpus=1 panic=0 ...": console output goes to
+the framebuffer, and panic=0 halts instead of rebooting so the trace stays
+visible on the screen.
+
+Signed-off-by: bringup <bringup@t1100.local>
+---
+ arch/arm64/boot/dts/mediatek/mt6771.dtsi | 27 +++++++++++++++++++-----
+ 1 file changed, 22 insertions(+), 5 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771.dtsi b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+index 2441978ae..5f1aed245 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771.dtsi
++++ b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+@@ -36,14 +36,31 @@ aliases {
+ 
+ 	chosen: chosen {
+ 		/*
+-		 * No console= / earlycon= / stdout-path on purpose: without
+-		 * clk-mt6771 the UART bus gate is still closed by LK and the
+-		 * first printk would touch a gated peripheral. The only log
+-		 * channel is the pstore console (CONFIG_PSTORE_CONSOLE).
++		 * No UART: without clk-mt6771 its bus gate is still closed by
++		 * LK and the first printk would touch a gated peripheral.
++		 * The bring-up log channel is the DRM simpledrm console on the
++		 * framebuffer that LK leaves on screen (simple-framebuffer
++		 * below, CONFIG_DRM_SIMPLEDRM + fbcon), plus pstore.
++		 * panic=0 halts on panic so the trace stays visible on screen.
+ 		 * For a serial console once clk-mt6771 lands, add:
+ 		 *   earlycon=mtk8250,0x11002000 console=ttyS0,921600n8
+ 		 */
+-		bootargs = "maxcpus=1 panic=10 pstore.backend=ramoops";
++		bootargs = "console=tty0 maxcpus=1 panic=0 pstore.backend=ramoops";
++
++		/*
++		 * LK's live framebuffer: 1600x2176, 32bpp, stride 6400.
++		 * Taken from the live FDT reservation
++		 * (mblock-11-framebuffer, 0x7cd80000+0x2e80000) and the stock
++		 * dmesg (xres 1600, yres 2176, bpp 32, rotation 0).
++		 */
++		framebuffer0: framebuffer@7cd80000 {
++			compatible = "simple-framebuffer";
++			reg = <0 0x7cd80000 0 0xd48000>;
++			width = <1600>;
++			height = <2176>;
++			stride = <6400>;
++			format = "a8r8g8b8";
++		};
+ 	};
+ 
+ 	cpus {
+-- 
+2.54.0
+
