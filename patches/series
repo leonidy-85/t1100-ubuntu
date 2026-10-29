@@ -1,16 +1,6 @@
-# patches/series — порядок применения (применять из дерева ядра)
-#
-#   cd ../linux-t1100
-#   git am ../t1100-ubuntu/patches/$(sed -n '/\.patch$/p' ../t1100-ubuntu/patches/series)
-#
-# 0001, 0002 — минимальный Device Tree MT6771 / Fplus T1100 (фаза 1, шаг 2):
-#   mt6771.dtsi, mt6771-fplus-t1100.dts + Makefile. Без клоков и без
-#   pinctrl-драйвера: загрузка UP до консоли, логи через ramoops.
-# 0003 — PSCI + toprgu watchdog (паника реально перезагружает плату) и
-#   удаление console=/earlycon=/stdout-path из bootargs: без clk-mt6771
-#   UART-гейт закрыт, первый printk не должен трогать выключенную периферию.
 0001-arm64-dts-mediatek-add-minimal-MT6771-SoC-descriptio.patch
 0002-arm64-dts-add-Fplus-T1100-MT6771-board.patch
-0003-arm64-dts-mt6771-add-PSCI-and-toprgu-watchdog.patch
-0004-arm64-dts-mt6771-add-simple-framebuffer-console.patch
-0005-soc-mediatek-add-early-RAM-console-and-wdt-stop.patch
+0003-arm64-dts-t1100-bootloader-framebuffer-console-MTK-w.patch
+0004-arm64-dts-mt6771-keep-LK-framebuffer-mappable-for-si.patch
+0005-arm64-head-stop-the-MTK-TOPRGU-watchdog-before-anyth.patch
+0006-arm64-dts-mt6771-satisfy-MTK-LK-s-device-tree-requir.patch

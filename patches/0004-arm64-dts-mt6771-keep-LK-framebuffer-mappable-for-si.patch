@@ -1,0 +1,33 @@
+From 7f1935a75f1e0c15505c8ad74b35532869090508 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 29 Oct 2026 15:24:08 +0300
+Subject: [PATCH t1100 4/6] arm64: dts: mt6771: keep LK framebuffer mappable
+ for simpledrm
+
+Reserved-memory with no-map cannot be ioremapped, so simpledrm/fbcon never
+probed and the machine had no visible console at all.
+---
+ arch/arm64/boot/dts/mediatek/mt6771.dtsi | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771.dtsi b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+index 787ba7fd4..d77c6fa77 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771.dtsi
++++ b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+@@ -237,9 +237,12 @@ spm-reserved@77ff0000 {
+ 			no-map;
+ 		};
+ 
++		/*
++		 * Keep the bootloader framebuffer out of the buddy allocator, but
++		 * do NOT mark it no-map: simpledrm has to ioremap it for fbcon.
++		 */
+ 		framebuffer@7cd80000 {
+ 			reg = <0 0x7cd80000 0 0x2e80000>;
+-			no-map;
+ 		};
+ 
+ 		items-reserved@7fc00000 {
+-- 
+2.53.0
+

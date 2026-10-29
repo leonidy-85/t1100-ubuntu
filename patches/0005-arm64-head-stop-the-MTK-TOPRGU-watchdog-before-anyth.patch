@@ -1,0 +1,37 @@
+From 87754a0fead834c85560ceb3faea0abdf8ef1e69 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 29 Oct 2026 19:19:10 +0300
+Subject: [PATCH t1100 5/6] arm64: head: stop the MTK TOPRGU watchdog before
+ anything else (T1100)
+
+---
+ arch/arm64/kernel/head.S | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/arch/arm64/kernel/head.S b/arch/arm64/kernel/head.S
+index 25c08a0d2..ee7af507a 100644
+--- a/arch/arm64/kernel/head.S
++++ b/arch/arm64/kernel/head.S
+@@ -82,6 +82,19 @@
+ 	 *  x21        primary_entry() .. start_kernel()        FDT pointer passed at boot in x0
+ 	 */
+ SYM_CODE_START(primary_entry)
++	/*
++	 * Fplus T1100 (MT6771): LK hands over with the TOPRGU watchdog still
++	 * armed. Nothing in early boot kicks it, so any silent failure turns
++	 * into a reset loop with no chance to inspect the state. Stop it first
++	 * (WDT_MODE &= ~EN with the 0x2200 key in the upper half).
++	 */
++	movz	x9, #0x7000
++	movk	x9, #0x1000, lsl #16		// 0x10007000
++	ldr	w10, [x9]
++	and	w10, w10, #0xfffffffe
++	mov	w11, #0x2200
++	orr	w10, w10, w11, lsl #16
++	str	w10, [x9]
+ 	bl	record_mmu_state
+ 	bl	preserve_boot_args
+ 
+-- 
+2.53.0
+

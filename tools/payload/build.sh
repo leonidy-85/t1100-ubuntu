@@ -17,6 +17,7 @@ CROSS=${CROSS:-aarch64-linux-gnu-}
 DTB=${DTB:-$ROOT/build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb}
 REF=${REF:-$ROOT/../t1100/backup_5.1.6.110/boot_a_5.1.6.110.img}
 INITRAMFS=${INITRAMFS:-$ROOT/build/initramfs.cpio.gz}
+SRC=${SRC:-$HERE/addr_bars.S}
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -30,7 +31,7 @@ done
 WORK=$(mktemp -d /tmp/payload.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
-"${CROSS}gcc" -c -nostdlib -ffreestanding -o "$WORK/addr_bars.o" "$HERE/addr_bars.S"
+"${CROSS}gcc" -c -nostdlib -ffreestanding -o "$WORK/addr_bars.o" "$SRC"
 "${CROSS}ld" -Ttext=0 -nostdlib -o "$WORK/addr_bars.elf" "$WORK/addr_bars.o"
 "${CROSS}objcopy" -O binary "$WORK/addr_bars.elf" "$WORK/payload.bin"
 

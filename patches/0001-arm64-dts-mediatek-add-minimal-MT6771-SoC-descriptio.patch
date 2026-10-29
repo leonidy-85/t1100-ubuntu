@@ -1,7 +1,7 @@
 From 654b5aacad6bc1fe9cae18b2823c6c97218b678a Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Thu, 29 Oct 2026 03:22:21 +0300
-Subject: [PATCH t1100 1/2] arm64: dts: mediatek: add minimal MT6771 SoC
+Subject: [PATCH t1100 1/6] arm64: dts: mediatek: add minimal MT6771 SoC
  description
 
 First take on MT6771 (Helio P60/P70, MT8788) for the Fplus T1100
@@ -33,7 +33,7 @@ non-Android payload.
 
 diff --git a/arch/arm64/boot/dts/mediatek/mt6771.dtsi b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
 new file mode 100644
-index 0000000..787ba7f
+index 000000000..787ba7fd4
 --- /dev/null
 +++ b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
 @@ -0,0 +1,300 @@
@@ -337,3 +337,6 @@ index 0000000..787ba7f
 +		};
 +	};
 +};
+-- 
+2.53.0
+
