@@ -1,0 +1,380 @@
+From f077836721c1728a6f52acffa221dcc7420d7356 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 29 Oct 2026 22:53:51 +0300
+Subject: [PATCH 2/3] arm64: dts: mt6771: derive the SoC description from
+ mt8183.dtsi
+
+There is no clk-mt6771 / pinctrl-mt6771 / mmsys-mt6771 in mainline 6.12,
+and writing them from scratch is impossible without the (non public)
+TRM. MT6771 is a 12 nm member of the MT8183 platform family though, and
+the stock device tree of the tablet confirms that every block this port
+needs sits at the same address and raises the same GIC SPI as on MT8183:
+topckgen 0x10000000, infracfg_ao 0x10001000, pericfg 0x10003000,
+pio 0x10005000 (SPI 177), scpsys 0x10006000, toprgu 0x10007000,
+apmixed 0x1000c000, pwrap 0x1000d000 (SPI 185), mcucfg 0x0c530000,
+sysirq 0x0c530a80, m4u 0x10205000 (SPI 166), gce 0x10238000, uart0
+0x11002000 (SPI 91), i2c0..11, msdc0/1 0x11230000/0x11240000, usb
+0x11201000 (SPI 72) + ippc 0x11203e00, xhci 0x11200000 (SPI 73),
+tphy 0x11f40000, mipi_tx0 0x11e50000, mfgcfg 0x13000000, GPU 0x13040000
+(SPI 278/279/280), mmsys 0x14000000 and larb0..6.
+
+So include mt8183.dtsi and encode only the real deltas:
+
+ - compatible = "mediatek,mt6771";
+ - no cpufreq/cpuidle: neither MT6771 OPP tables nor idle states are
+   described and mediatek-cpufreq does not know the SoC, so drop the
+   MT8183 wiring instead of feeding drivers wrong data;
+ - pio has 191 GPIOs, not 192 (stock: gpio-ranges = <&pio 0 0 0xbf>);
+ - no SCP node: its memory-region cannot be declared (LK forbids static
+   /reserved-memory children) and the Android SCP firmware is not
+   compatible with the upstream driver; vcodec_dec references &scp and
+   goes with it;
+ - svs (writes DVFS/PMIC registers using efuse calibration of unknown
+   MT6771 layout) and the mt6765-compatible GPT at 0x10017000 (MT6771
+   raises SPI 202 there, mt8183.dtsi says 200) stay disabled;
+ - CCI devfreq stays disabled: no cpufreq, and MT8183 clock IDs driving
+   the MT6771 CCI is unverified.
+
+Everything MT8183-specific that is still enabled is listed as "needs a
+hardware check" in docs/bringup-log.md of the project repo.
+---
+ arch/arm64/boot/dts/mediatek/mt6771.dtsi | 291 +++++++++--------------
+ 1 file changed, 110 insertions(+), 181 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771.dtsi b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+index f72965e6e..bd05fae03 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771.dtsi
++++ b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+@@ -1,219 +1,148 @@
+ // SPDX-License-Identifier: (GPL-2.0 OR MIT)
+ /*
+- * Minimal MediaTek MT6771 (Helio P60/P70, also sold as MT8788) SoC description.
++ * MediaTek MT6771 / MT8788 (Helio P60/P70, 12 nm) SoC description.
+  *
+- * Bring-up skeleton for the Fplus T1100 tablet. Everything below is factual
+- * data taken from:
+- *   - the stock Android device tree of the tablet (refs/stock-mt6771.dts,
+- *     extracted from boot_a), for register windows, IRQ numbers and the
+- *     power-controller/interrupt-controller layout;
+- *   - the live FDT with DTBO overlays (refs/device/fdt-live.dts.gz), for the
+- *     memory reservation list that LK/ATF hand over to the kernel;
+- *   - mainline mt8183.dtsi (closest supported SoC) for the binding style.
++ * MT6771 belongs to the same 12 nm platform family as MT8183. For everything
++ * this port needs, the register windows, the GIC SPI numbers and the PMIC
++ * (MT6358 behind pwrap) are identical, so the SoC description is *derived*
++ * from mt8183.dtsi instead of being written from scratch. Each address below
++ * was cross-checked against the stock Android device tree of the Fplus T1100
++ * (refs/stock-mt6771.dts, extracted from boot_a):
+  *
+- * What is deliberately missing in this first step:
+- *   - PSCI: the stock DT does carry a /psci node ("arm,psci-1.0", method
+- *     "smc"), but whether ATF exposes PSCI to a non-Android payload has not
+- *     been verified on hardware. Secondary CPUs therefore stay offline
+- *     (no enable-method, bootargs contain maxcpus=1).
+- *   - clocks (clk-mt6771), pinmux, power domains, SMI/IOMMU.
+- *   - display (mmsys/disp/dsi) and GPU (mali) nodes.
++ *   topckgen 0x10000000, infracfg_ao 0x10001000, pericfg 0x10003000,
++ *   pio 0x10005000 + iocfg 0x11c5..11f2, scpsys 0x10006000, toprgu 0x10007000,
++ *   apmixed 0x1000c000, pwrap 0x1000d000 (SPI 185), mcucfg 0x0c530000,
++ *   sysirq 0x0c530a80, m4u 0x10205000, gce 0x10238000, uart0 0x11002000
++ *   (SPI 91), i2c0..11 0x11005000..0x1101b000, msdc0 0x11230000 + msdc0_top
++ *   0x11f50000, msdc1 0x11240000 + 0x11e10000, usb 0x11201000 + ippc
++ *   0x11203e00 (SPI 72), xhci 0x11200000 (SPI 73), tphy 0x11f40000,
++ *   mipi_tx0 0x11e50000, efusec 0x11f10000, mfgcfg 0x13000000, GPU
++ *   0x13040000 (SPI 278/279/280), mmsys 0x14000000, ovl 0x14008000,
++ *   rdma 0x1400b000, dsi 0x14014000, dpi 0x14015000, mutex 0x14016000,
++ *   larb0 0x14017000, smi_common 0x14019000, larb1 0x16010000,
++ *   larb2 0x1502f000, larb3 0x1a002000, larb4 0x17010000, larb5 0x15021000,
++ *   larb6 0x1a001000.
++ *
++ * What MT6771 does *not* share with MT8183 (and what this file therefore
++ * changes) is listed per node below. There is no separate clk-mt6771 /
++ * pinctrl-mt6771 / mmsys-mt6771 driver in mainline 6.12, so the MT8183
++ * drivers bind through the inherited "mediatek,mt8183-*" compatibles; see
++ * docs/bringup-log.md for the list of items that still need a hardware check.
+  */
+ 
+-#include <dt-bindings/interrupt-controller/arm-gic.h>
+-#include <dt-bindings/interrupt-controller/irq.h>
++#include "mt8183.dtsi"
+ 
+ / {
+ 	compatible = "mediatek,mt6771";
+-	interrupt-parent = <&sysirq>;
+-	#address-cells = <2>;
+-	#size-cells = <2>;
+-
+-	aliases {
+-		serial0 = &uart0;
+-	};
+ 
+-	chosen: chosen {
+-		bootargs = "console=ttyS0,921600n8 earlycon=mtk8250,0x11002000 maxcpus=1 panic=10 pstore.backend=ramoops";
+-		stdout-path = "serial0:921600n8";
++	/*
++	 * MTK LK refuses to boot without /reserved-memory, but it reserves the
++	 * vendor regions (ATF, TEE, SCP, SSPM, SPM, modem, VPU, framebuffer)
++	 * itself and appends them as mblock-N-* children. A static child whose
++	 * reg overlaps any of those makes LK spin forever in
++	 * reserved_memory_conflict_check (see docs/lk-dtb-rules.md), so the node
++	 * stays empty.
++	 */
++	reserved-memory {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
+ 	};
+ 
+ 	cpus {
+-		#address-cells = <1>;
+-		#size-cells = <0>;
++		/*
++		 * Neither the MT6771 OPP tables nor its idle states are
++		 * described, and mediatek-cpufreq in 6.12 does not know MT6771,
++		 * so drop the MT8183 cpufreq/cpuidle wiring instead of feeding
++		 * the drivers MT8183 data. Same rationale as the mt6771-next
++		 * reference port ("cpuidle & cpufreq are broken with android
++		 * firmware").
++		 */
++		/delete-node/ idle-states;
+ 
+ 		cpu0: cpu@0 {
+-			device_type = "cpu";
+-			compatible = "arm,cortex-a53";
+-			reg = <0x0>;
++			/delete-property/ cpu-idle-states;
++			/delete-property/ operating-points-v2;
+ 		};
+-
+ 		cpu1: cpu@1 {
+-			device_type = "cpu";
+-			compatible = "arm,cortex-a53";
+-			reg = <0x1>;
++			/delete-property/ cpu-idle-states;
++			/delete-property/ operating-points-v2;
+ 		};
+-
+ 		cpu2: cpu@2 {
+-			device_type = "cpu";
+-			compatible = "arm,cortex-a53";
+-			reg = <0x2>;
++			/delete-property/ cpu-idle-states;
++			/delete-property/ operating-points-v2;
+ 		};
+-
+ 		cpu3: cpu@3 {
+-			device_type = "cpu";
+-			compatible = "arm,cortex-a53";
+-			reg = <0x3>;
++			/delete-property/ cpu-idle-states;
++			/delete-property/ operating-points-v2;
+ 		};
+-
+ 		cpu4: cpu@100 {
+-			device_type = "cpu";
+-			compatible = "arm,cortex-a73";
+-			reg = <0x100>;
++			/delete-property/ cpu-idle-states;
++			/delete-property/ operating-points-v2;
+ 		};
+-
+ 		cpu5: cpu@101 {
+-			device_type = "cpu";
+-			compatible = "arm,cortex-a73";
+-			reg = <0x101>;
++			/delete-property/ cpu-idle-states;
++			/delete-property/ operating-points-v2;
+ 		};
+-
+ 		cpu6: cpu@102 {
+-			device_type = "cpu";
+-			compatible = "arm,cortex-a73";
+-			reg = <0x102>;
++			/delete-property/ cpu-idle-states;
++			/delete-property/ operating-points-v2;
+ 		};
+-
+ 		cpu7: cpu@103 {
+-			device_type = "cpu";
+-			compatible = "arm,cortex-a73";
+-			reg = <0x103>;
++			/delete-property/ cpu-idle-states;
++			/delete-property/ operating-points-v2;
+ 		};
+ 	};
++};
+ 
+-	timer {
+-		compatible = "arm,armv8-timer";
+-		interrupt-parent = <&gic>;
+-		interrupts = <GIC_PPI 13 IRQ_TYPE_LEVEL_LOW>,
+-			     <GIC_PPI 14 IRQ_TYPE_LEVEL_LOW>,
+-			     <GIC_PPI 11 IRQ_TYPE_LEVEL_LOW>,
+-			     <GIC_PPI 10 IRQ_TYPE_LEVEL_LOW>;
+-		clock-frequency = <13000000>;
+-	};
+-
+-	soc {
+-		#address-cells = <2>;
+-		#size-cells = <2>;
+-		compatible = "simple-bus";
+-		ranges;
+-
+-		/*
+-		 * GICv3 at 0x0c000000. The stock DT also lists a third window
+-		 * (0x0c530a80, 0x50) in the GIC node; that is the interrupt
+-		 * polarity register, described below by the sysirq node.
+-		 */
+-		gic: interrupt-controller@c000000 {
+-			compatible = "arm,gic-v3";
+-			#interrupt-cells = <3>;
+-			#address-cells = <2>;
+-			#size-cells = <2>;
+-			#redistributor-regions = <1>;
+-			interrupt-parent = <&gic>;
+-			interrupt-controller;
+-			reg = <0 0x0c000000 0 0x40000>,	/* GICD */
+-			      <0 0x0c100000 0 0x200000>;	/* GICR, 8 frames */
+-			interrupts = <GIC_PPI 9 IRQ_TYPE_LEVEL_HIGH>;
+-		};
+-
+-		sysirq: interrupt-controller@c530a80 {
+-			compatible = "mediatek,mt6771-sysirq",
+-				     "mediatek,mt6577-sysirq";
+-			interrupt-controller;
+-			#interrupt-cells = <3>;
+-			interrupt-parent = <&gic>;
+-			reg = <0 0x0c530a80 0 0x50>;
+-		};
+-
+-		/*
+-		 * Placeholder for the pin controller: mainline has no
+-		 * pinctrl-mt6771 driver yet, so nothing binds here. The node
+-		 * exists so that board GPIO references (&pio) resolve; the
+-		 * full register list (GPIO base, EINT base and the eight
+-		 * iocfg bases) arrives with the pinctrl driver.
+-		 * GPIO/EINT bases: live FDT.
+-		 */
+-		pio: pinctrl@10005000 {
+-			compatible = "mediatek,mt6771-pinctrl";
+-			reg = <0 0x10005000 0 0x1000>,
+-			      <0 0x1000b000 0 0x1000>;
+-			gpio-controller;
+-			#gpio-cells = <2>;
+-			gpio-ranges = <&pio 0 0 191>;
+-			interrupt-controller;
+-			#interrupt-cells = <4>;
+-			interrupts = <GIC_SPI 177 IRQ_TYPE_LEVEL_HIGH>;
+-		};
+-
+-		uart0: serial@11002000 {
+-			compatible = "mediatek,mt6577-uart";
+-			reg = <0 0x11002000 0 0x1000>;
+-			interrupts = <GIC_SPI 91 IRQ_TYPE_LEVEL_LOW>;
+-			/*
+-			 * Only the 26 MHz baud clock (clk26m) for now: the
+-			 * driver falls back to the single-clock scheme and
+-			 * reports base_baud = 1625000, as the stock kernel
+-			 * does. The "bus" gate comes with clk-mt6771.
+-			 */
+-			clocks = <&clk26m>;
+-			status = "okay";
+-		};
++/*
++ * MT6771 has 191 GPIOs, not 192 (stock DT: gpio-ranges = <&pio 0 0 0xbf>).
++ */
++&pio {
++	gpio-ranges = <&pio 0 0 191>;
++};
+ 
+-		/* I2C0: touchscreen bus on this board. Needs the infracfg
+-		 * "main"/"dma" gates from clk-mt6771, so keep it disabled. */
+-		i2c0: i2c@11007000 {
+-			compatible = "mediatek,mt6577-i2c";
+-			reg = <0 0x11007000 0 0x1000>,
+-			      <0 0x11000080 0 0x80>;
+-			interrupts = <GIC_SPI 81 IRQ_TYPE_LEVEL_LOW>;
+-			clock-div = <5>;
+-			#address-cells = <1>;
+-			#size-cells = <0>;
+-			status = "disabled";
+-		};
+-	};
++/*
++ * The SCP node of mt8183.dtsi carries memory-region = <&scp_mem_reserved>.
++ * That region cannot be declared (see /reserved-memory above), and the Android
++ * SCP firmware is not compatible with the upstream SCP driver anyway, so the
++ * node is removed. LK's own "mediatek,scp" node requirement is satisfied by
++ * the inert node in mt6771-fplus-t1100-lk-compat.dtsi.
++ */
++/delete-node/ &scp;
+ 
+-	clocks {
+-		clk26m: oscillator {
+-			compatible = "fixed-clock";
+-			#clock-cells = <0>;
+-			clock-frequency = <26000000>;
+-			clock-output-names = "clk26m";
+-		};
+-	};
++/*
++ * vcodec_dec points at &scp (mediatek,scp = <&scp>) and needs SCP firmware to
++ * do anything useful; removing it keeps the tree consistent after the delete
++ * above. There is no vcodec_enc node on MT8183 in 6.12.
++ */
++/delete-node/ &vcodec_dec;
+ 
+-	memory@40000000 {
+-		device_type = "memory";
+-		reg = <0 0x40000000 1 0>;	/* 4 GiB DDR3/LPDDR4 */
+-	};
++/*
++ * Smart Voltage Scaling writes DVFS/thermal registers using efuse calibration
++ * whose layout is not documented for MT6771 (no TRM). Until it is proven on
++ * hardware it must not poke the PMIC, so it stays off.
++ */
++&svs {
++	status = "disabled";
++};
+ 
+-	/*
+-	 * The node must exist (LK appends its own mblock-* children into it and
+-	 * asserts if it is missing), but it must NOT contain static children:
+-	 * their `reg` would overlap LK's reservations and LK spins forever in
+-	 * reserved_memory_conflict_check.
+-	 */
+-	reserved-memory {
+-		#address-cells = <2>;
+-		#size-cells = <2>;
+-		ranges;
+-	};
++/*
++ * MT8183's GPT is "mediatek,mt6765-timer" at 0x10017000 with SPI 200; on
++ * MT6771 the same block sits at 0x10017000 but raises SPI 202 (stock DT:
++ * sys_timer@10017000, interrupts = <0 0xca 4>). The arch timer is the
++ * clocksource/clockevent, so keep this one out of the way until the IRQ
++ * difference is understood.
++ */
++&systimer {
++	status = "disabled";
++};
+ 
+-	/*
+-	 * No static reserved-memory on purpose: MTK LK reserves the vendor regions
+-	 * itself (ATF, TEE, SCP, SPM, SSPM, modem, VPU, framebuffer, ram_console,
+-	 * ramoops) and appends them as mblock-N-* nodes. A static child whose `reg`
+-	 * overlaps any of them makes LK spin in reserved_memory_conflict_check and
+-	 * the board resets before the kernel is ever entered (see docs/lk-dtb-rules.md).
+-	 * ramoops comes from the cmdline: ramoops.mem_address=0x54410000 ...
+-	 */
++/*
++ * CCI-400 devfreq (mediatek,mt8183-cci) is not needed: there is no cpufreq
++ * driver for MT6771, and driving the CCI with MT8183 clock IDs would program
++ * clocks whose mapping on MT6771 is unverified.
++ */
++&cci {
++	status = "disabled";
+ };
+-- 
+2.53.0
+

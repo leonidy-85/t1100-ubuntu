@@ -1,36 +1,121 @@
-# Kconfig fragment for the first T1100 (MT6771) boot test.
+# Kconfig fragment: Fplus T1100 (MT6771) bring-up kernel with real drivers.
 #
-# Applied on top of arm64 defconfig with:
-#   ARCH=arm64 scripts/kconfig/merge_config.sh -O build/t1100 build/t1100/.config \
-#       configs/t1100.fragment && make ARCH=arm64 ... olddefconfig
+# This is the "second stage" fragment: unlike the first boot-chain test it
+# enables the actual hardware the tablet needs to reach userspace (clocks,
+# pinctrl, PMIC, eMMC, USB, IOMMU, DRM, GPU). It is applied on top of the
+# arm64 defconfig with:
 #
-# Rationale:
-# - PSTORE* : the only log channel, there is no UART (docs/boot-test.md).
-# - DEBUG_INFO_NONE : defconfig builds vmlinux 148 MB; we need only Image and
-#   the host is slow (4 cores, high external load).
-# - VA_BITS_39 : matches the vendor/Android memory layout; no ARMv8.2-LVA
-#   dependency on Cortex-A73/A53.
-# - GIC_V3 / ARCH_TIMER / MT6577 UART: what the minimal DTS uses.
-# - MEDIATEK_WATCHDOG : toprgu watchdog, also a restart handler; together with PSCI it
-#   guarantees that a panic actually reboots the board.
-# - ARM_PSCI_FW : needed for /psci + enable-method = "psci".
+#   ARCH=arm64 scripts/kconfig/merge_config.sh -O build/full \
+#       build/full/.config configs/t1100.fragment
+#   make ARCH=arm64 ... olddefconfig
+#
+# and the resulting .config is what configs/t1100_defconfig (savedefconfig
+# format) reproduces one-to-one.
+#
+# Everything is built in (=y, not =m): there are no modules in the initramfs
+# and no rootfs yet, so a deferred/module driver is an invisible driver.
 
+# --- platform ---------------------------------------------------------------
+CONFIG_ARCH_MEDIATEK=y
+CONFIG_ARM64_VA_BITS_39=y
+CONFIG_ARM_PSCI_FW=y
+CONFIG_ARM_GIC_V3=y
+CONFIG_ARM_ARCH_TIMER=y
+CONFIG_DEBUG_INFO_NONE=y
+CONFIG_PRINTK_TIME=y
+CONFIG_KALLSYMS=y
+CONFIG_PANIC_TIMEOUT=10
+
+# --- clocks, power, pinctrl (MT8183 drivers, see docs/bringup-log.md) -------
+CONFIG_COMMON_CLK_MT8183=y
+CONFIG_COMMON_CLK_MEDIATEK=y
+CONFIG_MTK_SCPSYS=y
+CONFIG_MTK_INFRACFG=y
+CONFIG_PINCTRL_MT8183=y
+CONFIG_PINCTRL_MTK=y
+
+# --- PMIC (MT6358 behind pwrap) --------------------------------------------
+CONFIG_MTK_PMIC_WRAP=y
+CONFIG_MFD_MT6397=y
+CONFIG_REGULATOR_MT6358=y
+CONFIG_REGULATOR=y
+CONFIG_RTC_DRV_MT6397=y
+CONFIG_KEYBOARD_MTK_PMIC=y
+CONFIG_KEYBOARD_GPIO=y
+
+# --- storage (eMMC boot device + microSD) ----------------------------------
+CONFIG_MMC=y
+CONFIG_MMC_MTK=y
+CONFIG_MMC_BLOCK=y
+CONFIG_EXT4_FS=y
+
+# --- I2C / GPIO -------------------------------------------------------------
+CONFIG_I2C=y
+CONFIG_I2C_MT65XX=y
+CONFIG_I2C_CHARDEV=y
+CONFIG_GPIOLIB=y
+
+# --- console / ramoops ------------------------------------------------------
+# No UART is routed on this tablet: the log channel is ramoops in RAM
+# (read back from Aurora/recovery via /sys/fs/pstore).
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+CONFIG_SERIAL_8250_MT6577=y
 CONFIG_PSTORE=y
 CONFIG_PSTORE_RAM=y
 CONFIG_PSTORE_CONSOLE=y
 CONFIG_PSTORE_PMSG=y
-CONFIG_DEBUG_INFO_NONE=y
-CONFIG_ARM64_VA_BITS_39=y
-CONFIG_PRINTK_TIME=y
-CONFIG_KALLSYMS=y
-CONFIG_PANIC_TIMEOUT=10
-CONFIG_SERIAL_8250_MT6577=y
-CONFIG_ARM_GIC_V3=y
-CONFIG_ARM_ARCH_TIMER=y
-CONFIG_ARM_PSCI_FW=y
 CONFIG_MEDIATEK_WATCHDOG=y
 
-# Framebuffer console without UART: simpledrm on LK framebuffer + fbcon.
+# --- USB: peripheral only, so that userspace can bring up RNDIS ------------
+CONFIG_USB_SUPPORT=y
+CONFIG_USB=y
+CONFIG_USB_GADGET=y
+CONFIG_USB_MTU3=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_XHCI_MTK=y
+CONFIG_PHY_MTK_TPHY=y
+CONFIG_USB_CONFIGFS=y
+CONFIG_USB_CONFIGFS_RNDIS=y
+CONFIG_USB_CONFIGFS_ECM=y
+CONFIG_USB_F_RNDIS=y
+CONFIG_USB_F_ECM=y
+CONFIG_USB_U_ETHER=y
+CONFIG_USB_USBNET=y
+
+# --- IOMMU / SMI (m4u + larb0..6) ------------------------------------------
+CONFIG_MTK_IOMMU=y
+CONFIG_MTK_SMI=y
+
+# --- display + GPU ----------------------------------------------------------
+# DRM_MEDIATEK is needed for the DSI path; DRM_PANFROST for the Mali-G72.
+# Note: the IT6112 panel driver is not in mainline (dsi0/panel stay disabled
+# in the DTS until it is ported), but the drivers are built in now.
 CONFIG_DRM=y
-CONFIG_DRM_SIMPLEDRM=y
-CONFIG_MTK_RAMCONSOLE=y
+CONFIG_DRM_MEDIATEK=y
+CONFIG_MTK_MMSYS=y
+CONFIG_MTK_CMDQ=y
+CONFIG_MTK_CMDQ_MBOX=y
+CONFIG_PHY_MTK_MIPI_DSI=y
+CONFIG_DRM_PANFROST=y
+CONFIG_PWM=y
+CONFIG_PWM_MTK_DISP=y
+CONFIG_BACKLIGHT_CLASS_DEVICE=y
+CONFIG_BACKLIGHT_PWM=y
+
+# --- initramfs / devtmpfs ---------------------------------------------------
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_TMPFS=y
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+
+# --- deliberately off -------------------------------------------------------
+# SVS writes DVFS/PMIC registers from efuse calibration of unknown MT6771
+# layout; CCI devfreq and mediatek-cpufreq have no MT6771 support in 6.12;
+# simpledrm is replaced by real DRM/KMS.
+# CONFIG_MTK_SVS is not set
+# CONFIG_ARM_MEDIATEK_CCI_DEVFREQ is not set
+# CONFIG_DRM_SIMPLEDRM is not set

@@ -1,0 +1,559 @@
+From 97f79731b0d74e382ce1850169768678ddaa1e7d Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 29 Oct 2026 22:53:53 +0300
+Subject: [PATCH 3/3] arm64: dts: t1100: describe the board on top of
+ mt8183.dtsi
+
+Rewrite the Fplus T1100 board description for the mt8183-derived SoC
+description: eMMC (MSDC0, HS400, MT6358 VEMC/VIO18), microSD (MSDC1,
+card detect GPIO3), USB2 peripheral behind the MT8183 T-PHY, MT6358
+regulators and keys, Mali-G72 (panfrost), MT6370 DSV rails for the panel
+and the Himax touch controller on i2c0.
+
+Board facts are unchanged and come from the tablet itself
+(refs/stock-mt6771.dts, refs/device/fdt-live.dts.gz): LCM rails on GPIO
+45/55/44/56/175, touch reset GPIO158 and EINT 1 (stock pinctrl rstoutput0
+muxes pin 0x9e = 158, the reference port's GPIO0 is wrong), PMIC EINT 182,
+backlight on DISP_PWM channel 0 with enable on GPIO56.
+
+Things it deliberately does not do yet, because the driver side is
+missing in 6.12: the IT6112 panel driver (so dsi0/panel@56 stay
+disabled), Himax HX83102E, MT6370 charger/TCPC, IT66121 HDMI and the
+ES7210 audio machine. The backlight and both I2C children are described
+but switched off.
+
+Pad muxing for the MMC controllers is left as LK configured it: the
+MT8183 pin table (PINMUX_GPIO122..133 for MSDC0) has not been verified
+against MT6771, and re-muxing a working eMMC to an unproven function
+would cost us the root filesystem. Reference states are in
+refs/mt6771-next/mt8788-fplus-t1100.dts.
+
+bootargs keep console=tty0 and add the ramoops geometry the stock kernel
+used (refs/device/cmdline.txt): our kernel had no way to record a log,
+since the region is reserved by LK and cannot be declared in
+/reserved-memory. maxcpus=1 stays until PSCI SMP bring-up is verified on
+hardware.
+
+The DTC_FLAGS_mt6771-fplus-t1100 quirk silences a false positive from
+dtc's gpios_property check on the "__symbols__/gpio" entry that the LK
+compatibility layer must provide for the vendor dtbo overlay.
+---
+ arch/arm64/boot/dts/mediatek/Makefile         |   4 +
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 451 ++++++++++++++++--
+ 2 files changed, 409 insertions(+), 46 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/Makefile b/arch/arm64/boot/dts/mediatek/Makefile
+index b40e56724..110e19825 100644
+--- a/arch/arm64/boot/dts/mediatek/Makefile
++++ b/arch/arm64/boot/dts/mediatek/Makefile
+@@ -2,6 +2,10 @@
+ dtb-$(CONFIG_ARCH_MEDIATEK) += mt2712-evb.dtb
+ dtb-$(CONFIG_ARCH_MEDIATEK) += mt6755-evb.dtb
+ dtb-$(CONFIG_ARCH_MEDIATEK) += mt6771-fplus-t1100.dtb
++# The MTK LK compatibility layer (-lk-compat.dtsi) needs a __symbols__ entry
++# literally called "gpio" for the vendor dtbo overlay; dtc's gpios_property
++# check mistakes that string for a GPIO specifier.
++DTC_FLAGS_mt6771-fplus-t1100 += -Wno-gpios_property
+ dtb-$(CONFIG_ARCH_MEDIATEK) += mt6779-evb.dtb
+ dtb-$(CONFIG_ARCH_MEDIATEK) += mt6795-evb.dtb
+ dtb-$(CONFIG_ARCH_MEDIATEK) += mt6795-sony-xperia-m5.dtb
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index cda7fc445..cebc5fd36 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -1,38 +1,141 @@
+ // SPDX-License-Identifier: (GPL-2.0 OR MIT)
+ /*
+- * Fplus T1100 — 10.1" tablet, MediaTek MT6771 (sold as MT8788),
+- * 4 GiB DDR, BOE 1600x2176 panel, in-cell Himax touch.
++ * Fplus T1100 - 10.1" tablet, MediaTek MT6771 (sold as MT8788),
++ * 4 GiB LPDDR4X, BOE 1600x2176 panel behind an ITE IT6112 bridge,
++ * in-cell Himax touch, MT6358 PMIC (+ MT6370 sub-PMIC for the panel rails).
+  *
+- * Board data (LCM power/reset GPIOs, backlight mode, touch controller) is
+- * taken from the live FDT of the stock kernel together with its DTBO
+- * overlays: refs/device/fdt-live.dts.gz. Vendor-specific node and property
+- * names are kept byte-identical to that overlay so the mapping stays
+- * traceable; they are placeholders for mainline drivers and stay disabled.
++ * The SoC side is mt6771.dtsi, i.e. mt8183.dtsi + MT6771 deltas, so most
++ * infrastructure nodes (clocks, pinctrl, mmc, usb, iommu, mmsys/disp, gpu)
++ * come from the MT8183 description. This file only carries board facts and
++ * the status of each peripheral, all of them taken from the tablet itself:
++ *
++ *   refs/stock-mt6771.dts        - boot DTB of the stock kernel
++ *   refs/device/fdt-live.dts.gz   - live FDT with the DTBO overlays applied
++ *   refs/mt6771-next/*            - WIP mainline port of the same product
++ *
++ * What is known to be missing in mainline 6.12 and is therefore left
++ * disabled here is listed in docs/bringup-log.md ("не заведётся без
++ * доработки"): the IT6112 panel driver, Himax HX83102E, MT6370 charger/TCPC,
++ * IT66121 HDMI path and the audio machine driver.
+  */
+ 
+ /dts-v1/;
+ 
+ #include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/input.h>
++#include <dt-bindings/interrupt-controller/irq.h>
++
+ #include "mt6771.dtsi"
++#include "mt6358.dtsi"
+ 
+ / {
+ 	model = "Fplus T1100";
+ 	compatible = "fplus,t1100", "mediatek,mt6771";
++	chassis-type = "tablet";
+ 
+-	/*
+-	 * Board nodes of the stock ODM overlay. Plain container: they have no
+-	 * "simple-bus" compatible because nothing below is bound yet and the
+-	 * nodes carry no reg property.
+-	 */
+-	odm {
++	aliases {
++		serial0 = &uart0;
++		mmc0 = &mmc0;
++		mmc1 = &mmc1;
++	};
++
++	chosen {
+ 
+ 		/*
+-		 * LCD power/reset sequencing as done by the stock ODM overlay:
+-		 *   dvdd 55, rst 45, stby 44, bl 56, ext_pwr 175,
+-		 *   touch reset 158, touch avdd 163.
+-		 * No mainline driver yet (panel is driven by the LCM driver in
+-		 * the stock boot image) — kept disabled.
++		 * No UART is routed to anything accessible on this tablet, so the
++		 * kernel log goes to the screen (once DRM works) and to ramoops in
++		 * RAM. The ramoops window and its geometry are the ones the stock
++		 * kernel used (refs/device/cmdline.txt); the region itself is reserved
++		 * by LK, which is why it must not be declared in /reserved-memory.
++		 *
++		 * maxcpus=1: PSCI is present (stock dmesg: "PSCIv1.0 detected in
++		 * firmware"), but secondary-core bring-up is unrelated to this step and
++		 * a hang there would be invisible. Drop it to get 8 CPUs.
+ 		 */
++		bootargs = "console=tty0 maxcpus=1 panic=10 loglevel=7 pstore.backend=ramoops ramoops.mem_address=0x54410000 ramoops.mem_size=0xe0000 ramoops.record_size=0x10000 ramoops.console_size=0x40000 ramoops.pmsg_size=0x10000";
++	};
++
++	/* LK rewrites reg; the tablet has 4 GiB. */
++	memory@40000000 {
++		device_type = "memory";
++		reg = <0 0x40000000 1 0>;
++	};
++
++	/*
++	 * Backlight: DISP_PWM channel 0, active-high enable on GPIO56
++	 * (stock ODM overlay: odm/lcd-backlight, led_mode = 5 (PWM)).
++	 * Enabled together with the panel - without a panel driver there is
++	 * nothing to light up and the GPIO would power the LED string with an
++	 * undefined PWM duty cycle.
++	 */
++	backlight: backlight {
++		compatible = "pwm-backlight";
++		pwms = <&pwm0 0 500000>;
++		enable-gpios = <&pio 56 GPIO_ACTIVE_HIGH>;
++		brightness-levels = <0 1023>;
++		num-interpolated-steps = <1023>;
++		default-brightness-level = <576>;
++		status = "disabled";
++	};
++
++	/* Dual-cell LiHV pack (stock: 8 Ah, 4.35 V/cell). */
++	battery: battery {
++		compatible = "simple-battery";
++		device-chemistry = "lithium-ion";
++		voltage-min-design-microvolt = <3300000>;
++		voltage-max-design-microvolt = <4350000>;
++		energy-full-design-microwatt-hours = <30400000>;
++		charge-full-design-microamp-hours = <8000000>;
++	};
++
++	gpio-keys {
++		compatible = "gpio-keys";
++
++		key-volume-down {
++			/* stock: gpio-keys with the EINT pad on GPIO93 */
++			gpios = <&pio 93 GPIO_ACTIVE_LOW>;
++			label = "Volume Down";
++			linux,code = <KEY_VOLUMEDOWN>;
++			debounce-interval = <100>;
++		};
++	};
++
++	/*
++	 * I2C level shifter rail. The vendor tree powers it unconditionally;
++	 * nothing on i2c0..6 enumerates without it.
++	 */
++	i2c_vbus: regulator-i2c-vbus {
++		compatible = "regulator-fixed";
++		regulator-name = "i2c-vbus";
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++		regulator-boot-on;
++	};
++
++	/* LCM DVDD switch, GPIO55 (stock odm/lcm: dvdd-gpios = <&pio 55>). */
++	panel_dvdd: regulator-dvdd-panel {
++		compatible = "regulator-fixed";
++		regulator-name = "vreg_panel_dvdd";
++		regulator-enable-ramp-delay = <10>;
++		gpio = <&pio 55 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++	};
++
++	/* Main rail feeding the MT6358 bucks on this board. */
++	reg_vsys: regulator-vsys {
++		compatible = "regulator-fixed";
++		regulator-name = "vsys";
++		regulator-always-on;
++		regulator-boot-on;
++	};
++
++	/*
++	 * Stock ODM overlay nodes, kept verbatim for traceability. Nothing binds
++	 * to them in mainline: the LCM is sequenced by the IT6112 panel driver.
++	 *   dvdd 55, rst 45, stby 44, bl 56, ext_pwr 175,
++	 *   touch reset 158, touch avdd 163.
++	 */
++	odm {
+ 		lcm {
+ 			compatible = "elink,lcm";
+ 			dvdd-gpios = <&pio 55 GPIO_ACTIVE_HIGH>;
+@@ -45,7 +148,6 @@ lcm {
+ 			status = "disabled";
+ 		};
+ 
+-		/* Stock overlay: led_mode = 5 (pwm_config = <4 0 0 0 0>). */
+ 		lcd-backlight {
+ 			compatible = "mediatek,lcd-backlight";
+ 			led_mode = <5>;
+@@ -56,40 +158,297 @@ lcd-backlight {
+ 	};
+ };
+ 
+-&chosen {
+-	/*
+-	 * No UART on this board: the log channel is the bootloader framebuffer
+-	 * (LK leaves a 1600x2176 XRGB8888 buffer at 0x7cd80000) plus
+-	 * ramoops/pstore. panic=10 makes a crash reboot instead of hanging.
+-	 */
+-	bootargs = "console=tty0 maxcpus=1 panic=10 pstore.backend=ramoops loglevel=7";
+-	#address-cells = <2>;
+-	#size-cells = <2>;
+-
+-	/* Keep the display alive from the bootloader until real KMS exists. */
+-	framebuffer@7cd80000 {
+-		compatible = "simple-framebuffer";
+-		reg = <0 0x7cd80000 0 0xd48000>;	/* 1600 * 2176 * 4 */
+-		width = <1600>;
+-		height = <2176>;
+-		stride = <6400>;
+-		format = "a8r8g8b8";
+-	};
++
++/*
++ * UART0 is wired to test pads only; enabled so that the clock gate and the
++ * driver are exercised, but not on the command line. With a probe attached,
++ * add "console=ttyS0,921600n8 earlycon=mtk8250,0x11002000".
++ */
++&uart0 {
++	status = "okay";
+ };
+ 
++/*
++ * I2C0: touch controller. Stock wiring (refs/device/fdt-live.dts.gz):
++ * himax_touch@48, EINT 1, reset on GPIO158 (odm/lcm ts_rst), 1.8 V from
++ * MT6358 VLDO28. Mainline 6.12 only knows himax,hx83112b/hx83100a, so the
++ * node does not bind yet; see refs/mt6771-next/patches/0f649f913f.
++ */
+ &i2c0 {
+-	/* Needs the clk-mt6771 gates and a Himax touchscreen driver. */
+-	status = "disabled";
++	vbus-supply = <&i2c_vbus>;
++	status = "okay";
+ 
+-	himax_touch@48 {
+-		compatible = "mediatek,himax_touch";
++	touchscreen@48 {
++		compatible = "himax,hx83102e";
+ 		reg = <0x48>;
+-		/* Stock EINT spec: <eint irq_type debounce 0>, EINT 1. */
+-		interrupt-parent = <&pio>;
+-		interrupts = <1 1 1 0>;
++
++		interrupts-extended = <&pio 1 IRQ_TYPE_LEVEL_LOW>;
++		reset-gpios = <&pio 158 GPIO_ACTIVE_LOW>;
++
++		touchscreen-size-x = <1600>;
++		touchscreen-size-y = <2176>;
++
++		vdd-supply = <&mt6358_vldo28_reg>;
++	};
++};
++
++/*
++ * I2C3: IT6112 MIPI-DSI to LVDS bridge for the panel (@0x56) and the
++ * IT66121 HDMI bridge (@0x4c). Both need drivers that 6.12 does not have
++ * (the IT6112 one is a WIP patch in refs/it6112 and
++ * refs/mt6771-next/patches/083d4e7fa2), so the bus is enabled but the
++ * devices are not.
++ */
++&i2c3 {
++	vbus-supply = <&i2c_vbus>;
++	status = "okay";
++
++	panel: panel@56 {
++		compatible = "boe,tv110xum-lb2-it6112";
++		reg = <0x56>;
++
++		status = "disabled";
++
++		width-mm = <166>;
++		height-mm = <226>;
++
++		reset-gpios = <&pio 45 GPIO_ACTIVE_HIGH>;
++		backlight = <&backlight>;
++
++		dvdd-supply = <&panel_dvdd>;
++		vpos-supply = <&mt6370_dsvpos>;
++		vneg-supply = <&mt6370_dsvneg>;
++
++		port {
++			panel_in: endpoint {
++				remote-endpoint = <&dsi_out>;
++			};
++		};
++	};
++};
++
++/*
++ * I2C5: MT6370 sub-PMIC. Only the DSV rails matter for the display path
++ * (vpos/vneg of the panel). The charger/TCPC/LED children of the vendor
++ * description are left out on purpose - MT6370 charging is not needed to
++ * reach userspace and the TCPC would fight the USB port we use for RNDIS.
++ */
++&i2c5 {
++	vbus-supply = <&i2c_vbus>;
++	status = "okay";
++
++	pmic@34 {
++		compatible = "mediatek,mt6370";
++		reg = <0x34>;
++		status = "disabled";
++
++		interrupts-extended = <&pio 10 IRQ_TYPE_LEVEL_LOW>;
++		interrupt-controller;
++		#interrupt-cells = <1>;
++
++		mt6370_adc: adc {
++			compatible = "mediatek,mt6370-adc";
++			#io-channel-cells = <1>;
++		};
++
++		regulators {
++			dsvbst {
++				regulator-name = "mt6370-dsv-vbst";
++				regulator-min-microvolt = <4000000>;
++				regulator-max-microvolt = <6200000>;
++			};
++
++			mt6370_dsvpos: dsvpos {
++				regulator-name = "mt6370-dsv-vpos";
++				regulator-min-microvolt = <4000000>;
++				regulator-max-microvolt = <6000000>;
++			};
++
++			mt6370_dsvneg: dsvneg {
++				regulator-name = "mt6370-dsv-vneg";
++				regulator-min-microvolt = <4000000>;
++				regulator-max-microvolt = <6000000>;
++			};
++
++			vibldo {
++				regulator-name = "mt6370-vib-ldo";
++				regulator-min-microvolt = <1600000>;
++				regulator-max-microvolt = <4000000>;
++			};
++		};
++	};
++};
++
++/*
++ * I2C6: SGM41513 battery charger (ti,bq25601 compatible). Not needed for
++ * bring-up, and a wrong charge profile on an unknown pack is a risk.
++ */
++&i2c6 {
++	vbus-supply = <&i2c_vbus>;
++	status = "okay";
++
++	charger@1a {
++		compatible = "sgmicro,sgm41513", "ti,bq25601";
++		reg = <0x1a>;
+ 		status = "disabled";
++
++		monitored-battery = <&battery>;
++		ti,watchdog-timeout-ms = <0>;
++		ti,no-thermistor;
++		input-current-limit-microamp = <3000000>;
++	};
++};
++
++/*
++ * eMMC: MSDC0, HS400, 8 bit, on MT6358 VEMC/VIO18. The pad mux and drive
++ * strength are deliberately *not* touched here: LK has already configured
++ * MSDC0 to load the kernel, and the MT8183 pin table (PINMUX_GPIO122..133)
++ * has not been verified against MT6771 yet. The reference pin states are in
++ * refs/mt6771-next/mt8788-fplus-t1100.dts under mmc0_pins_default/uhs.
++ */
++&mmc0 {
++	status = "okay";
++	bus-width = <8>;
++	max-frequency = <200000000>;
++	cap-mmc-highspeed;
++	mmc-ddr-1_8v;
++	mmc-hs200-1_8v;
++	mmc-hs400-1_8v;
++	cap-mmc-hw-reset;
++	no-sdio;
++	no-sd;
++	hs400-ds-delay = <0x12814>;
++	vmmc-supply = <&mt6358_vemc_reg>;
++	vqmmc-supply = <&mt6358_vio18_reg>;
++	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC50_0>;
++	assigned-clock-parents = <&topckgen CLK_TOP_MSDCPLL_CK>;
++	non-removable;
++};
++
++/* microSD slot: MSDC1, card detect on GPIO3. */
++&mmc1 {
++	status = "okay";
++	bus-width = <4>;
++	max-frequency = <200000000>;
++	cap-sd-highspeed;
++	sd-uhs-sdr12;
++	sd-uhs-sdr25;
++	sd-uhs-sdr50;
++	sd-uhs-sdr104;
++	sd-uhs-ddr50;
++	vmmc-supply = <&mt6358_vmch_reg>;
++	vqmmc-supply = <&mt6358_vmc_reg>;
++	assigned-clocks = <&topckgen CLK_TOP_MUX_MSDC30_1>;
++	assigned-clock-parents = <&topckgen CLK_TOP_MSDCPLL_D2>;
++	cd-debounce-delay-ms = <0>;
++	cd-gpios = <&pio 3 GPIO_ACTIVE_HIGH>;
++};
++
++/*
++ * USB: the port is USB 2.0 only on this board (no SuperSpeed pairs), and the
++ * data role is fixed to peripheral so that the kernel exposes a UDC and the
++ * userspace can bring up an RNDIS/CDC-Ether gadget - the only interactive
++ * channel we have until a rootfs boots on its own. Host mode needs the
++ * MT6370 TCPC and role switching in phy-mtk-tphy
++ * (refs/mt6771-next/patches/96fe48bed8), neither of which is in 6.12.
++ */
++&ssusb {
++	status = "okay";
++	dr_mode = "peripheral";
++	vusb33-supply = <&mt6358_vusb_reg>;
++	maximum-speed = "high-speed";
++	mediatek,u3p-dis-msk = <1>;
++	wakeup-source;
++};
++
++&usb_host {
++	vusb33-supply = <&mt6358_vusb_reg>;
++	status = "okay";
++};
++
++&u2port0 {
++	mediatek,pre-emphasis = <3>;
++};
++
++/*
++ * GPU: Mali-G72 MP3, identical core to MT8183, so panfrost binds through
++ * "mediatek,mt8183b-mali". VGPU comes from the MT6358 buck, coupled to
++ * VSRAM_GPU as on the reference port.
++ */
++&gpu {
++	mali-supply = <&mt6358_vgpu_reg>;
++};
++
++&mfg {
++	domain-supply = <&mt6358_vgpu_reg>;
++};
++
++&mt6358_vgpu_reg {
++	regulator-min-microvolt = <625000>;
++	regulator-max-microvolt = <900000>;
++	regulator-coupled-with = <&mt6358_vsram_gpu_reg>;
++	regulator-coupled-max-spread = <100000>;
++};
++
++&mt6358_vsram_gpu_reg {
++	regulator-min-microvolt = <850000>;
++	regulator-max-microvolt = <1000000>;
++	regulator-coupled-with = <&mt6358_vgpu_reg>;
++	regulator-coupled-max-spread = <100000>;
++	regulator-always-on;
++};
++
++/* LPDDR4X 1.1 V rail. */
++&mt6358_vdram2_reg {
++	regulator-always-on;
++};
++
++&mt6358regulator {
++	vsys-ldo1-supply = <&reg_vsys>;
++	vsys-ldo2-supply = <&reg_vsys>;
++	vsys-ldo3-supply = <&reg_vsys>;
++	vsys-vcore-supply = <&reg_vsys>;
++	vsys-vdram1-supply = <&reg_vsys>;
++	vsys-vgpu-supply = <&reg_vsys>;
++	vsys-vmodem-supply = <&reg_vsys>;
++	vsys-vpa-supply = <&reg_vsys>;
++	vsys-vproc11-supply = <&reg_vsys>;
++	vsys-vproc12-supply = <&reg_vsys>;
++	vsys-vs1-supply = <&reg_vsys>;
++	vsys-vs2-supply = <&reg_vsys>;
++	vs1-ldo1-supply = <&mt6358_vs1_reg>;
++	vs2-ldo1-supply = <&mt6358_vs2_reg>;
++	vs2-ldo2-supply = <&mt6358_vs2_reg>;
++	vs2-ldo3-supply = <&mt6358_vs2_reg>;
++	vs2-ldo4-supply = <&mt6358_vs2_reg>;
++};
++
++/* PMIC interrupt is EINT 182 (stock: mt6358-pmic, interrupts = <0xb6 4 ...>). */
++&pmic {
++	interrupts-extended = <&pio 182 IRQ_TYPE_LEVEL_HIGH>;
++};
++
++/* PMIC keys: power on PWRKEY, volume up on HOMEKEY. */
++&mt6358keys {
++	power-off-time-sec = <10>;
++	mediatek,long-press-mode = <1>;
++
++	home {
++		linux,keycodes = <KEY_VOLUMEUP>;
++		label = "Volume Up";
+ 	};
+ };
+ 
+-/* LK compatibility layer: must be included last (docs/lk-dtb-rules.md) */
++/*
++ * Display is described but switched off: mmsys/ovl/rdma/dsi/mipi_tx0 nodes
++ * come from mt8183.dtsi, and the only missing piece for 1600x2176 DSI output
++ * is the IT6112 panel driver. Enable dsi0 together with panel@56.
++ */
++&dsi_out {
++	remote-endpoint = <&panel_in>;
++};
++
++/*
++ * LK compatibility layer: must be included last (docs/lk-dtb-rules.md).
++ */
+ #include "mt6771-fplus-t1100-lk-compat.dtsi"
+-- 
+2.53.0
+

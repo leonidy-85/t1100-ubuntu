@@ -4,3 +4,6 @@
 0004-arm64-dts-mt6771-keep-LK-framebuffer-mappable-for-si.patch
 0005-arm64-head-stop-the-MTK-TOPRGU-watchdog-before-anyth.patch
 0006-arm64-dts-mt6771-satisfy-MTK-LK-s-device-tree-requir.patch
+0007-arm64-head-drop-the-on-screen-debug-markers-T1100.patch
+0008-arm64-dts-mt6771-derive-the-SoC-description-from-mt8.patch
+0009-arm64-dts-t1100-describe-the-board-on-top-of-mt8183..patch
