@@ -107,3 +107,19 @@ clock-драйвера: возможно, отдельный `clk-mt6771` на �
 - Узкое место — **инженерная работа** (порт MT6771-дисплея в `mediatek-drm` +
   mainline DTS), а не отсутствие документации.
 - GPU (Mali-G72) — самая простая часть (panfrost). Дисплей (KMS) — самая сложная.
+
+## Соседние проекты (что брать) — обновлено 29.10.2026
+
+| Проект | Что это | Что берём |
+|---|---|---|
+| **`planet-community/pennyos`** | Mainline Linux 6.4 + Debian на **том же MT6771** (Planet Cosmo, LK `k71v1_64_bsp`) | **Главный референс.** 4 правила LK к DTB (`refs/pennyos-lk/lk-dtb-requirements.md`), генератор `__symbols__`-прослойки из вендорского dtbo, офлайн-валидатор, «чёрный ящик» на ramoops + initramfs с само-перезагрузкой, формат boot.img (v1 + `Image.gz-dtb`) |
+| `affenull2345/linux` (ветка `mt6771`) | Ядро, на котором построен PennyOS | DTS/драйверы MT6771, проверенные на железе |
+| `linux-mediatek/linux`, ветка `adomerle/mt6771-next` (6.16) | WIP-порт **нашего** FPlus T1100 | `refs/mt6771-next/`: board DTS 868 строк, `mt6771.dtsi` (`#include mt8183.dtsi`), драйвер панели IT6112 (`refs/it6112/`) |
+| `postmarketOS` → `linux-postmarketos-mediatek-mt6768` | mainline-fork для MT6768 (близкое поколение) | приёмы bring-up, конфиги, DTS-структура |
+| `dandelion64-Archives/pmaports-mt6762` | WIP mainline для MT6762 (Helio P22) | как обходят отсутствие клок-драйвера |
+| `svoboda18/lk`, `ariafan/lk_mtk` | Исходники MTK LK | понять `mboot_android_load_bootimg`, `g_is_64bit_kernel`, `target_get_scratch_address` |
+| `arzam16/linux-mt6577` | старый (5.8–5.19) mainline-порт MTK | методика порта дисплея/клоков |
+
+**Главный вывод из PennyOS:** наши boot-loop'ы — не про ядро. LK падает в
+ASSERT/while(1) на подготовке device tree (в overlay `dtbo`, обязательных узлах,
+reserved-memory) и плату сбрасывает watchdog. Правила и план — `docs/lk-dtb-rules.md`.

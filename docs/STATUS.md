@@ -155,6 +155,28 @@ probe-payload доказал, что `lk` грузит и передаёт уп�
   (md5 `73417c46…`, сверен на устройстве), Aurora 4.14.186 поднялась,
   SSH `defaultuser@172.17.141.62` отвечает.
 
+## Прорыв 29.10: причина boot-loop найдена (DTB для LK)
+
+Найдено по проекту **PennyOS** (mainline на том же MT6771): LK **не прыгает в
+ядро**, а падает в ASSERT/while(1) при подготовке device tree. Наши образы
+нарушали минимум три правила из четырёх (`docs/lk-dtb-rules.md`):
+нет `compatible = "mediatek,scp"`, статические `reserved-memory` пересекаются с
+резервациями LK, `/__symbols__` не резолвит метки вендорского `dtbo_a`.
+
+Сделано:
+- снят `dtbo_a` (p31, 8 МиБ) с платы; внутри DTBO-таблица с 1 оверлеем
+  (47 357 Б, `__fixups__` — **51 метка**: `odm, pio, chosen, scp, i2c0..11,
+  mt6370_pmu, touch, keypad, …`);
+- сгенерирован `mt6771-fplus-t1100-lk-compat.dtsi`
+  (`tools/lk/gen-lk-compat-dtsi.py`): `/__symbols__` на инертные
+  `/mtk-lk-sink/*`, `gpio@10005000`, `odm`, `scp` (`status="disabled"`);
+- из `mt6771.dtsi` **удалён статический `reserved-memory`** (LK сам добавит
+  `mblock-N-*`; ramoops — из cmdline);
+- проверка офлайн: `fdtoverlay` применяет вендорский оверлей к нашему DTB
+  **без ошибок** (rc=0), в merged-дереве есть `mediatek,scp`;
+- собран `build/boot_fixed_tiny.img` (minimal 6.12 + исправленный DTB + initramfs,
+  md5 `f90c5ea5…`), прошит в `p29`, планшет перезагружен — **ждём результат**.
+
 ## Открытые вопросы
 
 - **Панель закрыта**: активный LCM — `tv110xum_lb2_incell`, панель за мостом
