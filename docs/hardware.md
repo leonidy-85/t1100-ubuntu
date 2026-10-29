@@ -135,8 +135,8 @@
 
 ## Отладка / консоль
 
-- **UART0**: `11002000.serial`, MMIO `0x11002000`, IRQ **286**, `mt6577-uart`
-  (`base_baud 1625000`), `/dev/ttyS0`; консоль в стоке включена
+- **UART0**: `11002000.serial`, MMIO `0x11002000`, Linux virq **286** = DT
+  `GIC_SPI 91`, `mt6577-uart` (`base_baud 1625000`), `/dev/ttyS0`; консоль в стоке включена
   (`mtk_printk_ctrl.disable_uart=0`), но вывод идёт в `ram_console`/`pstore`.
 - **ramoops**: `0x54410000`, size `0xe0000` (`console_size 0x40000`,
   `pmsg_size 0x10000`); `ram_console` — `0x54400000..0x54410000`.
@@ -148,6 +148,8 @@
 
 ## Загрузка
 
+- **PSCI есть**: `arm,psci-1.0`, `method = "smc"`, 8 CPU online (сток).
+- **GICv3**: `GICD 0x0c000000`, `GICR 0x0c100000` (dmesg стока).
 - A/B-слоты; текущий `_a`.
 - Android boot image **header v2** (gzip-ядро + ramdisk + DTB 111095 байт):
   `kernel_addr=0x40080000`, `ramdisk_addr=0x55000000`, `tags_addr=0x54000000`,

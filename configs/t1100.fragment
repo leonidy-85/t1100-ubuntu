@@ -1,0 +1,26 @@
+# Kconfig fragment for the first T1100 (MT6771) boot test.
+#
+# Applied on top of arm64 defconfig with:
+#   ARCH=arm64 scripts/kconfig/merge_config.sh -O build/t1100 build/t1100/.config \
+#       configs/t1100.fragment && make ARCH=arm64 ... olddefconfig
+#
+# Rationale:
+# - PSTORE* : the only log channel, there is no UART (docs/boot-test.md).
+# - DEBUG_INFO_NONE : defconfig builds vmlinux 148 MB; we need only Image and
+#   the host is slow (4 cores, high external load).
+# - VA_BITS_39 : matches the vendor/Android memory layout; no ARMv8.2-LVA
+#   dependency on Cortex-A73/A53.
+# - GIC_V3 / ARCH_TIMER / MT6577 UART: what the minimal DTS uses.
+
+CONFIG_PSTORE=y
+CONFIG_PSTORE_RAM=y
+CONFIG_PSTORE_CONSOLE=y
+CONFIG_PSTORE_PMSG=y
+CONFIG_DEBUG_INFO_NONE=y
+CONFIG_ARM64_VA_BITS_39=y
+CONFIG_PRINTK_TIME=y
+CONFIG_KALLSYMS=y
+CONFIG_PANIC_TIMEOUT=10
+CONFIG_SERIAL_8250_MT6577=y
+CONFIG_ARM_GIC_V3=y
+CONFIG_ARM_ARCH_TIMER=y

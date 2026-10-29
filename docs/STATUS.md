@@ -23,6 +23,8 @@ Baseline mainline **6.12.114** собран и проверен (`Image` + 1191 
 | 2026-10-28 | **Код ядра — отдельное дерево `../linux-t1100`; наши изменения — патчами в `t1100-ubuntu/patches/`** | Патчи ревьюятся, переносимы в upstream, не завязаны на форк |
 | 2026-10-29 | **База закреплена: linux-6.12.114** (tarball kernel.org, sha256 `7a8589912bd7a8adb07fed074283652cf482a35facef8954554654f0154b4af3`) | Актуальный LTS-релиз ветки 6.12 на 29.10.2026; сверено с `sha256sums.asc` |
 | 2026-10-29 | Сборка — out-of-tree `O=<repo>/build/t1100`, лог в `build/logs/`; для DTS-итераций собирать только нужный `.dtb`, полный `Image` — при изменениях C-кода | На хосте 4 ядра и высокая чужая нагрузка: полный `defconfig` = 202 мин (второй прогон), точечная сборка DTB — секунды |
+| 2026-10-29 | **PSCI в стоке есть** (`arm,psci-1.0`, `method = "smc"`, 8 CPU online) — поправка к плану «без PSCI»; первая загрузка всё равно UP (`maxcpus=1`), второй патч DTS — с `/psci` + `enable-method` | Стоковый DTS (`refs/stock-mt6771.dts`, стр. 209–213) + dmesg `PSCIv1.0 detected in firmware` |
+| 2026-10-29 | **GIC — v3** (`GICD 0x0c000000`, `GICR 0x0c100000`), **uart0 IRQ = GIC_SPI 91**, `earlycon=mtk8250,0x11002000` | dmesg `GICv3: CPU0: found redistributor 0 region 0:0xc100000`; в DT стока `0x5b`=91; символ earlycon в mainline — `mtk8250`, не `mt6577` |
 
 ## Сделано
 
@@ -59,18 +61,28 @@ Baseline mainline **6.12.114** собран и проверен (`Image` + 1191 
       round-trip стокового образа **побайтово идентичен**.
 - [x] `scripts/make_initramfs.sh` — минимальный initramfs (busybox-static arm64),
       `docs/boot-test.md` — протокол первой загрузки через pstore.
+- [x] `scripts/make_test_boot.sh` — тестовый `boot_a` одной командой; smoke-тест
+      пройден (32 МиБ образ, kernel.gz 14,0 МБ + initramfs 1,0 МБ + DTB).
+- [x] **DTS MT6771 готов (шаг 2 фазы 1)**: `mt6771.dtsi` (300 строк) +
+      `mt6771-fplus-t1100.dts` (75) + `Makefile`; DTB 4806 B,
+      sha256 `bbf097af…d8b5e`, 84 mediatek-DTB, 0 warning.
+- [x] Патчи в `patches/`: `0001-arm64-dts-mediatek-add-minimal-MT6771-SoC-descriptio.patch`,
+      `0002-arm64-dts-add-Fplus-T1100-MT6771-board.patch`, `series`.
+- [x] `configs/t1100.fragment` — PSTORE/PSTORE_RAM/CONSOLE/PMSG, `DEBUG_INFO_NONE`,
+      `VA_BITS_39`, `PANIC_TIMEOUT=10`; применяется `merge_config.sh`.
+- [x] `docs/drm-port-plan.md` — инвентаризация mainline-компонентов дисплея.
 
 ## Следующий шаг
 
-1. **`bringup` (в работе)**: `mt6771.dtsi` + `mt6771-fplus-t1100.dts` по шаблону
-   `mt8183.dtsi` — CPU/GIC/timer/uart0/`memory`/`reserved-memory` (ramoops),
-   board-узлы из живого FDT; собрать только DTB и проверить `dtc`.
-2. **`bringup`**: `clk-mt6771` (top/infra/peri/apmixed/mfg/mm) — сверить
+1. **`lead`**: собрать `Image` с `configs/t1100.fragment` (PSTORE) — в работе.
+2. **Первая тестовая загрузка** (UP, `maxcpus=1`, без `console=ttyS0` — UART
+   может подвиснуть без `clk-mt6771`): прошить `boot_a_test.img` в p29 с
+   подтверждением владельца, вернуть сток через recovery, прочитать
+   `/sys/fs/pstore/console-ramoops`.
+3. **`bringup`**: `clk-mt6771` (top/infra/peri/apmixed/mfg/mm) — сверить
    gate-биты с downstream `clk-mt6771.c` (Hadenix 4.4 / Realme 4.14).
-3. **`lead`**: `t1100_defconfig` (минимальный: pstore/ramoops, uart, mmc,
-   no modules) вместо голого `defconfig`.
-4. Первая прошивка `boot_a` — только после осознанного минимума DTS, с бэкапом,
-   показом sha и подтверждением владельца (протокол — `docs/boot-test.md`).
+4. Второй патч DTS: `/psci` + `enable-method` (PSCI в стоке есть), включение
+   `i2c0`, uart-клоки, eMMC, MT6358-регуляторы.
 
 ## Блокеры
 
@@ -82,6 +94,16 @@ Baseline mainline **6.12.114** собран и проверен (`Image` + 1191 
    сопоставим с половиной всего порта.
 3. **Init панели** есть только в бинарнике LCM (исходник `tv110xum_lb2_incell`
    публично не найден) — потенциально RE.
+
+## Открытые вопросы
+
+- **Панель**: ATAG и `odm/panel@0` в живом FDT называют `es6311_anx6585_zigzag_wxga`
+  (`disabled`), а в ядре вкомпилирован `tv110xum_lb2_incell` и fb = 1600×2176.
+  Истинный LCM-драйвер — почти наверняка `tv110xum` (имя в ATAG — от другого
+  продукта), но подтвердить это должен `kernel-drm` (RE списка LCM/инита).
+- **reserved-memory**: перенесено из живого FDT, ~380 МиБ; пересечение
+  `framebuffer`/`items` в `0x7fc00000–0x7fdfffff`; `md-mem-usage` (256 МиБ) —
+  первый кандидат на снятие (в стоке это System RAM).
 
 ## Риски
 
@@ -102,6 +124,7 @@ Baseline mainline **6.12.114** собран и проверен (`Image` + 1191 
 
 - `refs/stock-mt6771.dts` — DTS из boot-DTB (карта регистров).
 - `refs/device/fdt-live.dts.gz` — **живой FDT** с dtbo: board-узлы (LCM GPIO/backlight/тач), см. `docs/device-probe.md`.
+- `configs/t1100.fragment` — Kconfig-фрагмент для тестовой сборки (pstore, VA 39).
 - `refs/es6311_anx6585_zigzag_wxga.c` — чужой LCM-драйвер, образец структуры
   MTK LCM/DSI (не наша панель).
 - `scripts/bootimg_extract.py` — разбор Android boot v2 (kernel/ramdisk/DTB).
