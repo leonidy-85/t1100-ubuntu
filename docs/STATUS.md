@@ -4,10 +4,10 @@
 
 ## Фаза
 
-**Фаза 0 — закрыта (решение о базе). Фаза 1 (bring-up) — в работе.**
+**Фаза 0 — закрыта. Фаза 1 (bring-up) — baseline собран, порт MT6771 начат.**
 
-Ядро ещё не собиралось под MT6771 и не прошивалось. Репозиторий порта пока не
-содержит кода ядра — только инфраструктуру, референсы и решения.
+Baseline mainline **6.12.114** собран и проверен (`Image` + 1191 DTB, 0 warning).
+Поддержки MT6771 в дереве пока нет; ядро на плату **не прошивалось**.
 
 ## Решения (decision log)
 
@@ -21,6 +21,8 @@
 | 2026-10-28 | Практика: «сначала снять факты с платы, потом писать DTS» — board-узлы (LCM GPIO, backlight, тач) брать из живого FDT (`refs/device/fdt-live.dts.gz`), а не из boot-DTB | dtbo-оверлеи добавляют `odm/lcm`, `lcd-backlight`, `himax_touch@48` и др., которых в boot-DTB нет |
 | 2026-10-28 | **Прошивка `boot_a` — только пошагово, с показом образа/сумм/плана отката и подтверждением владельца** | Правило проекта: бэкап + откат; прошивка через recovery (p29) |
 | 2026-10-28 | **Код ядра — отдельное дерево `../linux-t1100`; наши изменения — патчами в `t1100-ubuntu/patches/`** | Патчи ревьюятся, переносимы в upstream, не завязаны на форк |
+| 2026-10-29 | **База закреплена: linux-6.12.114** (tarball kernel.org, sha256 `7a8589912bd7a8adb07fed074283652cf482a35facef8954554654f0154b4af3`) | Актуальный LTS-релиз ветки 6.12 на 29.10.2026; сверено с `sha256sums.asc` |
+| 2026-10-29 | Сборка — out-of-tree `O=<repo>/build/t1100`, лог в `build/logs/`; для DTS-итераций собирать только нужный `.dtb`, полный `Image` — при изменениях C-кода | На хосте 4 ядра и высокая чужая нагрузка: полный `defconfig` = 202 мин (второй прогон), точечная сборка DTB — секунды |
 
 ## Сделано
 
@@ -47,18 +49,28 @@
       `console-ramoops` прошлой загрузки, `/proc/iomem`, IRQ, OPP, разметка.
 - [x] Подтверждён **канал логов без UART**: `ramoops`/pstore в RAM
       (`0x54410000`, 0xe0000), переживает перезагрузку.
+- [x] **Baseline ядра собран**: дерево `/home/l/projects/linux-t1100` =
+      **6.12.114** (tarball 148 721 296 B, sha256 сверен), `Image` 38 531 584 B,
+      sha256 `2a2cab580aa9ee3036802b7aee6edfc269d901bf70bb53f573a9719700b545a6`,
+      **0 warning / 0 error**, 1191 DTB (83 mediatek), `modules_prepare` rc=0.
+- [x] `scripts/build_kernel.sh` — воспроизводимая сборка (out-of-tree, лог, sha,
+      `--clean`/`--defconfig`).
+- [x] `scripts/repack_boot.py` — перепаковка boot v2 + MTK-контейнер DTB;
+      round-trip стокового образа **побайтово идентичен**.
+- [x] `scripts/make_initramfs.sh` — минимальный initramfs (busybox-static arm64),
+      `docs/boot-test.md` — протокол первой загрузки через pstore.
 
 ## Следующий шаг
 
-1. **`bringup`**: получить дерево `linux` 6.12.y в `../linux-t1100`, собрать
-   `defconfig` baseline (`Image dtbs`) — проверка тулчейна.
-2. **`bringup`**: `mt6771.dtsi` + `mt6771-fplus-t1100.dts` по шаблону
-   `mt8183.dtsi`; первый шаг — CPU/GIC/timer/uart0/`memory` (boot to console).
-3. **`bringup`**: `clk-mt6771` (top/infra/peri/apmixed/mfg/mm) — сверить
+1. **`bringup` (в работе)**: `mt6771.dtsi` + `mt6771-fplus-t1100.dts` по шаблону
+   `mt8183.dtsi` — CPU/GIC/timer/uart0/`memory`/`reserved-memory` (ramoops),
+   board-узлы из живого FDT; собрать только DTB и проверить `dtc`.
+2. **`bringup`**: `clk-mt6771` (top/infra/peri/apmixed/mfg/mm) — сверить
    gate-биты с downstream `clk-mt6771.c` (Hadenix 4.4 / Realme 4.14).
-4. **`lead`**: решить канал отладки загрузки (UART? ramoops? сеть?) — см. блокеры.
-5. Только после «зелёного» baseline — перепаковка `boot_a` и первая прошивка
-   (с бэкапом и планом отката).
+3. **`lead`**: `t1100_defconfig` (минимальный: pstore/ramoops, uart, mmc,
+   no modules) вместо голого `defconfig`.
+4. Первая прошивка `boot_a` — только после осознанного минимума DTS, с бэкапом,
+   показом sha и подтверждением владельца (протокол — `docs/boot-test.md`).
 
 ## Блокеры
 
