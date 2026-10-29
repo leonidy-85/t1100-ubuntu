@@ -11,6 +11,9 @@
 # - VA_BITS_39 : matches the vendor/Android memory layout; no ARMv8.2-LVA
 #   dependency on Cortex-A73/A53.
 # - GIC_V3 / ARCH_TIMER / MT6577 UART: what the minimal DTS uses.
+# - MEDIATEK_WATCHDOG : toprgu watchdog, also a restart handler; together with PSCI it
+#   guarantees that a panic actually reboots the board.
+# - ARM_PSCI_FW : needed for /psci + enable-method = "psci".
 
 CONFIG_PSTORE=y
 CONFIG_PSTORE_RAM=y
@@ -24,3 +27,5 @@ CONFIG_PANIC_TIMEOUT=10
 CONFIG_SERIAL_8250_MT6577=y
 CONFIG_ARM_GIC_V3=y
 CONFIG_ARM_ARCH_TIMER=y
+CONFIG_ARM_PSCI_FW=y
+CONFIG_MEDIATEK_WATCHDOG=y

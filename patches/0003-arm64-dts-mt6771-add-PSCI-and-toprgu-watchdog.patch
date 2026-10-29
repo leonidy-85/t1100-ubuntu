@@ -1,0 +1,134 @@
+From 423281705e179b2095f877036b2a3b1957ef5b75 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 29 Oct 2026 08:43:34 +0300
+Subject: [PATCH] arm64: dts: mt6771: add PSCI and toprgu watchdog, drop UART
+ console
+
+The stock DT describes PSCI v1.0 over SMC and the stock dmesg confirms
+"PSCIv1.0 detected in firmware" with 8 CPUs online, so describe it and
+set enable-method = "psci" for the CPUs.
+
+This also fixes panic=10: without a restart handler the kernel halts with
+"Reboot failed -- System halted" and the board must be power cycled by
+hand. PSCI provides SYSTEM_RESET; the toprgu watchdog node
+(mediatek,mt8183-wdt, the same 0x10007000 block as mt8183) is added as a
+second path.
+
+Drop console=ttyS0 and earlycon=mtk8250 from bootargs and remove
+chosen/stdout-path: until clk-mt6771 exists the UART bus gate stays
+closed by LK and the first printk would access a gated peripheral. Logs
+come from the pstore console (CONFIG_PSTORE_CONSOLE) instead. maxcpus=1
+is kept for the first boot. The board file stops overriding bootargs, so
+the SoC dtsi is the single place to edit.
+
+Signed-off-by: bringup <bringup@t1100.local>
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  |  7 +--
+ arch/arm64/boot/dts/mediatek/mt6771.dtsi      | 46 ++++++++++++++++---
+ 2 files changed, 44 insertions(+), 9 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index e78746342..6f7fe35fb 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -56,9 +56,10 @@ lcd-backlight {
+ 	};
+ };
+ 
+-&chosen {
+-	bootargs = "console=ttyS0,921600n8 earlycon=mtk8250,0x11002000 maxcpus=1 panic=10 pstore.backend=ramoops";
+-};
++/*
++ * bootargs are set in mt6771.dtsi: no console=/earlycon= until clk-mt6771
++ * exists, logs go through the pstore console. Do not override them here.
++ */
+ 
+ &i2c0 {
+ 	/* Needs the clk-mt6771 gates and a Himax touchscreen driver. */
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771.dtsi b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+index 787ba7fd4..2441978ae 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771.dtsi
++++ b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+@@ -11,11 +11,12 @@
+  *     memory reservation list that LK/ATF hand over to the kernel;
+  *   - mainline mt8183.dtsi (closest supported SoC) for the binding style.
+  *
++ * PSCI is described, matching the stock DT ("arm,psci-1.0", method "smc") and
++ * the stock dmesg ("PSCIv1.0 detected in firmware"). bootargs still carry
++ * maxcpus=1 so the first boot stays UP and does not depend on secondary CPU
++ * bring-up; the restart handler it provides makes panic=10 actually reboot.
++ *
+  * What is deliberately missing in this first step:
+- *   - PSCI: the stock DT does carry a /psci node ("arm,psci-1.0", method
+- *     "smc"), but whether ATF exposes PSCI to a non-Android payload has not
+- *     been verified on hardware. Secondary CPUs therefore stay offline
+- *     (no enable-method, bootargs contain maxcpus=1).
+  *   - clocks (clk-mt6771), pinmux, power domains, SMI/IOMMU.
+  *   - display (mmsys/disp/dsi) and GPU (mali) nodes.
+  */
+@@ -34,13 +35,21 @@ aliases {
+ 	};
+ 
+ 	chosen: chosen {
+-		bootargs = "console=ttyS0,921600n8 earlycon=mtk8250,0x11002000 maxcpus=1 panic=10 pstore.backend=ramoops";
+-		stdout-path = "serial0:921600n8";
++		/*
++		 * No console= / earlycon= / stdout-path on purpose: without
++		 * clk-mt6771 the UART bus gate is still closed by LK and the
++		 * first printk would touch a gated peripheral. The only log
++		 * channel is the pstore console (CONFIG_PSTORE_CONSOLE).
++		 * For a serial console once clk-mt6771 lands, add:
++		 *   earlycon=mtk8250,0x11002000 console=ttyS0,921600n8
++		 */
++		bootargs = "maxcpus=1 panic=10 pstore.backend=ramoops";
+ 	};
+ 
+ 	cpus {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
++		enable-method = "psci";
+ 
+ 		cpu0: cpu@0 {
+ 			device_type = "cpu";
+@@ -91,6 +100,17 @@ cpu7: cpu@103 {
+ 		};
+ 	};
+ 
++	/*
++	 * PSCI v1.0 over SMC, as in the stock DT (refs/stock-mt6771.dts) and
++	 * confirmed by the stock dmesg ("PSCIv1.0 detected in firmware", 8 CPUs
++	 * online). Gives secondary CPU bring-up and a restart handler, so
++	 * panic=10 reboots instead of halting.
++	 */
++	psci {
++		compatible = "arm,psci-1.0";
++		method = "smc";
++	};
++
+ 	timer {
+ 		compatible = "arm,armv8-timer";
+ 		interrupt-parent = <&gic>;
+@@ -154,6 +174,20 @@ pio: pinctrl@10005000 {
+ 			interrupts = <GIC_SPI 177 IRQ_TYPE_LEVEL_HIGH>;
+ 		};
+ 
++		/*
++		 * TOPRGU watchdog. "mediatek,mt8183-wdt" is the closest mainline
++		 * binding: same toprgu block, 0x10007000, differs only in the
++		 * number of SW reset lines. The interrupt is not wired: the
++		 * driver polls/uses the restart handler only. Unverified on this
++		 * SoC until the first boot.
++		 */
++		watchdog: watchdog@10007000 {
++			compatible = "mediatek,mt8183-wdt";
++			reg = <0 0x10007000 0 0x100>;
++			#reset-cells = <1>;
++			status = "okay";
++		};
++
+ 		uart0: serial@11002000 {
+ 			compatible = "mediatek,mt6577-uart";
+ 			reg = <0 0x11002000 0 0x1000>;
+-- 
+2.54.0
+
