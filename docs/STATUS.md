@@ -328,6 +328,35 @@ initramfs `net3` просто жил в бесконечном цикле, и о
   (2) при рабочем mmc — rootfs по `docs/ubuntu-rootfs-plan.md`; (3) DRM/DSI, затем
   panfrost и KDE.
 
+## 31.10: итог сессии (для следующей)
+
+**Что точно работает:** mainline 6.12 загружается до userspace на T1100 (PSCI,
+GIC, память, PMIC/PD). Дискриминатор «initramfs-reboot-30s» виден с хоста.
+
+**Что не работает (проверено на железе):**
+1. **eMMC** — после добавления `pinctrl-0/1` для `&mmc0/&mmc1` из
+   `refs/mt6771-next` лог всё ещё не получен, а запись лога в `expdb` (p3) из
+   initramfs **не появилась** ⇒ eMMC не поднялся. Нужен либо правильный
+   `pinctrl-mt6771` (пины/функции MT6771), либо сверка `mtk-sd`-свойств
+   (hs400/`mediatek,*`) с affenull-DTS.
+2. **USB-UDC** — `mtu3` пробуется, `/sys/class/udc` не появляется; маркер
+   `UDC 'mtu3' registered` (патч 0018) в лог не попал, т.к. лог не пишется.
+3. **pstore/ранняя консоль** — лог в `/proc/last_kmsg` перестал обновляться
+   (последний живой лог — `refs/device/last_kmsg-pmic-cycle.txt.gz`). Вероятно,
+   `mtk-ramconsole` и ramoops конфликтуют за зону; нужно проверить
+   `ramoops_register_dummy` (legacy `ramoops.mem_*` в 6.12) и порядок записи.
+4. **DRM** — ожидаемо: DSI0/DPI0 выключены; это следующий этап (KMS-панель
+   BOE TV110XUM через IT6112, `refs/it6112/`).
+
+**Следующая сессия (в этом порядке):**
+1. Починить канал логов (pstore или expdb после eMMC) — без него мы слепы.
+2. eMMC: сверить pinmux с affenull/cosmo и проверить `mtk-sd` на MT6771.
+3. USB-UDC (mtu3 + tphy), затем RNDIS/SSH.
+4. Rootfs Ubuntu (`build/rootfs/rootfs-t1100-base.tar.gz`,
+   `docs/ubuntu-rootfs-plan.md`), затем DSI-панель, panfrost, KDE.
+
+Планшет возвращён на рабочую Aurora (`boot_a_imaoff_nodiehard_nosig.img`).
+
 ## Открытые вопросы
 
 - **Панель закрыта**: активный LCM — `tv110xum_lb2_incell`, панель за мостом
