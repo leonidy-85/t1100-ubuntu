@@ -820,3 +820,166 @@ GPIO56, PMIC EINT 182, клавиши, батарея), `chosen` с bootargs и 
 sha256 `a0ef84b4df3fe2c905e8ea9bfab9d663114f7885782f6be9ded8da67f5d577a7`.
 Значит серия самодостаточна и наш DTB воспроизводим.
 
+
+## 7. 30.10.2026 — почему падал `mt6358-regulator`, почему «нет лога» и как это проверено
+
+Состояние на входе: DTB с `regulator-coupled-with` грузится до userspace, но все
+рельсы PMIC не регистрируются, и `mmc`/`usb`/`gpu`/`disp`/`iommu` навсегда в
+`deferred probe`. DTB без coupling не даёт вообще никакого лога. Разобрано по
+коду mainline 6.12.114 и по логу стокового 4.14 (`build/lk/last_kmsg_now.txt`).
+
+### 7.1. Четыре независимых дефекта (все — в коде, не догадки)
+
+**1. `regulator-coupled-with` убивает весь PMIC.**
+Generic coupler принимает только `always-on`-регуляторы:
+`drivers/regulator/core.c:5643` — `generic_coupler_attach()` возвращает
+`-ENOTSUPP` при `!rdev->constraints->always_on`. `mt6358_regulator_probe()`
+(`drivers/regulator/mt6358-regulator.c:713`) регистрирует рельсы в цикле и
+**выходит на первой ошибке**. VGPU — шестая по счёту, поэтому итог: ни одного
+регулятора MT6358 в системе. Дальше `devm_regulator_get()` у потребителей
+получает `-EPROBE_DEFER` навсегда, отсюда весь список `deferred probe pending`.
+
+**2. `power-domain@2` без `domain-supply` убивает весь `scpsys`.**
+У MT8183 MFG_ASYNC и MFG помечены `MTK_SCPD_DOMAIN_SUPPLY`
+(`drivers/pmdomain/mediatek/mt8183-pm-domains.h`), а с 6.12
+`mtk-pm-domains.c` ищет регулятор **в самом узле домена**
+(`scpsys_add_one_domain()`: `scpsys->dev->of_node = node;
+devm_regulator_get(scpsys->dev, "domain")`). В нашем DTS `domain-supply` был
+только у `&mfg` (домен 3), у `power-domain@2` (MFG_ASYNC) — нет, и
+`scpsys_probe()` падает раньше `of_genpd_add_provider_onecell()`. Лог это
+подтверждает дословно:
+
+```
+platform 10006000.syscon:power-controller: deferred probe pending:
+  mtk-power-controller: /soc/syscon@10006000/power-controller/power-domain@2:
+  failed to get power supply.
+```
+
+Следствие: провайдер power-доменов не появляется вообще, поэтому `mutex`,
+`ovl`, `rdma`, `dsi`, `larb*`, `smi`, `pwm`, `mfgcfg` — все в deferred. Это и
+есть причина, по которой дисплей/GPU «не готовы» даже теоретически.
+`mt8183-kukui.dtsi` на том же MT6358 делает ровно то, чего не хватало:
+`mfg_async → vsram_gpu`, `mfg → vgpu`.
+
+**3. `mtk-ramconsole` не писал ни байта.**
+Драйвер искал зону через `of_find_compatible_node(NULL, NULL, "ramoops")`, но
+узла `ramoops` в нашем DTS нет — ramoops сконфигурирован параметрами
+(в логе: `ramoops: using module parameters`, `ramoops: using 0xe0000@0x54410000`).
+`mrcm_locate_zone()` выходил сразу, `nzones == 0`, `mrcm_init()` возвращал
+`-ENODEV`. Работал только `mrcm_stop_wdt()` — поэтому зависание не превращалось
+в reset-цикл, но и лога не давало.
+
+**4. mainline выключает рельсы, которые вендорный драйвер запрещает выключать.**
+`regulator_late_cleanup()` (`drivers/regulator/core.c:6381`, из
+`late_initcall_sync`) гасит **любой** включённый регулятор без потребителя, если
+он не `always-on`. Стоковый 4.14 сам себя страхует и пишет в лог:
+
+```
+mt6358_regulator_disable:VDRAM2 should not be disable.(use_count=0)
+```
+
+…и так для 16 рельсов: VDRAM1, VCORE, VPROC12, VS2, VMODEM, VS1, VDRAM2, VIO18,
+VSRAM_OTHERS, VXO22, VAUX18, VBIF28, VSRAM_PROC12, VIO28, VA12, VAUD28. В
+mainline-описании MT6358 `always-on` стоит только у 14 из них; **VDRAM2,
+VBIF28, VAUX18, VIO28, VAUD28** никто не защищает. VDRAM2 — это рельс LPDDR4X
+1.1 В, VBIF28 — bias интерфейса DRAM: выключение любого из них убивает SoC
+раньше, чем успевает что-то напечатать, а вместе с ним и содержимое DRAM.
+
+### 7.2. Почему «нет лога» ≠ «ядро не стартовало» — и что это значит
+
+В рабочем прогоне (с coupling) в зоне pstore лежит лог начиная с
+`[0.000000] Linux version 6.12.114-...`: ramoops регистрирует консоль с
+`CON_PRINTBUFFER` на `postcore_initcall`, и printk **переигрывает весь
+ring buffer**, поэтому в зоне оказывается весь лог с нулевой секунды (то же
+самое делает переписанный `mrcm`). Значит:
+
+* если в зоне нет ни строки нового прогона — ядро не выполнило ни одного
+  `printk`, т.е. проблема до `start_kernel` (LK/образ), а не «драйвер повис»;
+* если лог обрывается на какой-то строке — это и есть точка отказа.
+
+Во втором варианте (без coupling) лог обрывался «нигде»: наиболее
+правдоподобное объяснение — дефект 4: рельс выключается уже после
+`late_initcall`, ядро умирает, а данные в DRAM (включая лог) теряются до того,
+как плату перезагрузят. Проверяется одним прогоном: `regulator_ignore_unused`
+в bootargs + `always-on` на перечисленных рельсах.
+
+### 7.3. Что изменено
+
+DTS (`mt6771-fplus-t1100.dts`):
+
+* убрано `regulator-coupled-with` (патч 0010), вместо него у `&gpu`
+  `mali-supply = <&mt6358_vgpu_reg>` + `sram-supply = <&mt6358_vsram_gpu_reg>`
+  (panfrost сам включает sram перед VGPU — как в `refs/affenull-mt6771`);
+* `&mfg_async { domain-supply = <&mt6358_vsram_gpu_reg>; }`, `&mfg` — VGPU
+  (патч 0013), т.е. провайдер power-доменов теперь регистрируется;
+* `always-on` для VDRAM2, VBIF28, VAUX18, VIO28, VAUD28 (патч 0013);
+* включены обратно `&mmc0` (eMMC), `&mmc1`, `&ssusb` (`dr_mode = "peripheral"`,
+  RNDIS-гаджет), `&usb_host`; `&gpu` осознанно остаётся `disabled`;
+* bootargs (патч 0014, временно): `initcall_debug` — последняя строка лога
+  называет initcall, который не вернулся; `regulator_ignore_unused` —
+  не запускать `regulator_late_cleanup()`.
+
+Драйвер (`drivers/soc/mediatek/mtk-ramconsole.c`, патчи 0011+0012):
+
+* зона ищется (а) по узлу `ramoops`, если он появится, (б) по резервациям,
+  которые создаёт сам LK (`mblock-N-pstore` в `/reserved-memory` живого DT),
+  (в) по параметрам `ramoops.mem_address/mem_size/console_size/pmsg_size`;
+* вместо постоянной консоли — снимки ring buffer'а в ту же зону:
+  `register_console(CON_PRINTBUFFER)` → `pr_info` → `unregister_console()`,
+  на `early_initcall` и `postcore_initcall_sync`. Второго писателя в зону нет,
+  после второго снимка зоной владеет ramoops;
+* TOPRGU стопорится по-прежнему первым делом.
+
+Конфиг: `CONFIG_MTK_RAMCONSOLE=y` добавлен в `configs/t1100_defconfig`
+(раньше он был только в `build/full/.config`, т.е. сборка из дефконфига его
+теряла). Round-trip `defconfig → olddefconfig → savedefconfig` побайтово
+совпадает.
+
+### 7.4. Артефакты
+
+```
+build/full/arch/arm64/boot/Image            39670272  md5 db153cbb8baf43367aa90184c22e3b67
+                                                      sha256 350a36e135f05bc0428293ee9f27e068981e10895dc4b3b177e78bb18228ea68
+build/Image.pmic.gz                         14485775  md5 31e1a0082b626fbda7e76e6cb33473fc
+build/full/.../mt6771-fplus-t1100.dtb          51871  md5 4fbe401d3b20540d92e891798dafaaad
+                                                      sha256 61978c90a4e7d733950e4771de64bce29f0e3282c52923b178198a36f6c8fea4
+build/boot_pmic1.img                        33554432  sha256 5893614c24e10f2e88ba12fadee4ee79d9fe99ba14df4263a6fdf94de1a3cc5d
+```
+
+Версия ядра: `6.12.114-g1379709143b7`. `build/boot_pmic1.img` собран
+`scripts/make_test_boot.sh` из этого `Image`, DTB и `build/initramfs_net3.cpio.gz`
+(kernel addr 0x40200000, cmdline скрипта по умолчанию).
+
+Валидатор LK (`refs/pennyos-lk/check-lk-dtb.py` на `build/lk/dtbo_a.img` и
+`build/lk/live.dts`): все 8 проверок `ok`, `RESULT: LK should accept this DTB`,
+merged size 87147 байт.
+
+Патч-серия: `0001..0014` применяются `git am` на базовый `728cd6e` без
+конфликтов, и DTB, собранный из чистого дерева с этой серией, побайтово равен
+рабочему (sha256 `61978c90…`).
+
+### 7.5. Чего ждать на следующем прогоне
+
+По порядку в логе (он теперь читается всегда):
+
+1. `mrcm: zone 262144 bytes, wdt stopped: 1` и `mrcm: snapshot at
+   early_initcall` — значит ранняя консоль работает; до этого сообщения
+   покрыт весь диапазон от `[0.000000]`.
+2. `mt6358-regulator mt6358-regulator: Chip ID = 0x5820` **без** строк
+   `failed to register VGPU`.
+3. `mt6358-regulator: ...` + `vdram2: disabling` **не должно быть** (при
+   `regulator_ignore_unused` их и не будет).
+4. `10006000.syscon:power-controller` больше не в списке deferred;
+   `14016000.mutex`, `larb*`, `smi` — тоже.
+5. `mmc0: ... SDHCI ...` / `mmcblk0: mmc0:...` — eMMC; `11201000.usb` →
+   `mtu3` → UDC, затем RNDIS из initramfs (`usb0`).
+6. Если вместо этого лог обрывается — строка обрыва и есть точка отказа
+   (при `initcall_debug` видно, какой initcall не вернулся).
+7. Если в зоне снова **нет ни строки** — виноват не драйвер: смотреть LK и
+   загрузку образа (сравнить `build/lk/live.dts` и DTB, который реально ушёл
+   в boot_a).
+
+Что остаётся риском и проверяется только на железе: гейты `clk-mt8183` на
+MT6771 (eMMC/USB могут не подняться из-за неверных gate-ID), `tphy`
+(`mediatek,mt8183-tphy` против `mediatek,mt6771-phy`), и то, что
+`mt8183-power-controller` действительно совместим с SPM MT6771.
