@@ -371,6 +371,23 @@ GIC, память, PMIC/PD). Дискриминатор «initramfs-reboot-30s»
 - Дальше: проверить по pstore-логу, дошёл ли systemd до multi-user;
   затем USB-UDC (сеть/SSH), KDE-пакеты, KMS-панель, panfrost.
 
+## 31.10: Ubuntu 24.04 стартовала с eMMC
+
+- Причина прежней петли: в ubuntu-base tarball **не было systemd** →
+  `switch_root` не находил init → `Attempted to kill init`. `EXT4-fs
+  (mmcblk0p54): mounted` при этом был — eMMC и монтирование работали.
+- systemd/udev/dbus/openssh-server доустановлены в rootfs на хосте
+  (`qemu-aarch64` + chroot, `Acquire::ForceIPv4`), rootfs пересобран
+  (`build/rootfs/rootfs-t1100.tar.gz`, 192 МБ, 575 МБ на диске).
+- `p54` переформатирован, rootfs распакован, прошит `build/boot_ubuntu3.img`
+  (initramfs: ждёт `mmcblk0p54`, `switch_root /sbin/init`).
+- **Наблюдение с хоста: циклических сбросов больше нет** — в отличие от
+  предыдущих попыток, preloader `0e8d:2000` не появляется ⇒ система живёт
+  (systemd поднялся). Подтверждение — по pstore-логу из рекавери.
+
+Осталось: USB-UDC (сеть/SSH), затем KDE-пакеты (можно доставить в rootfs тем же
+chroot-способом), KMS-панель, panfrost.
+
 ## Открытые вопросы
 
 - **Панель закрыта**: активный LCM — `tv110xum_lb2_incell`, панель за мостом
