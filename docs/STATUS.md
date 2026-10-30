@@ -231,6 +231,29 @@ mt8183-драйверов; MT6771 совместим по адресам — `do
 нет. Поэтому приоритет — **ядро с USB (mtu3/RNDIS) и eMMC** (см. «Приоритет:
 Ubuntu + KDE»), а не дальнейшие попытки «увидеть» лог.
 
+## 30.10: ядро 6.12 загрузилось до userspace (первый лог!)
+
+Получен **первый лог нашего ядра** (SRAM-«чёрный ящик» из initramfs, читается
+`/proc/last_kmsg` в рекавери; сохранён: `refs/device/last_kmsg-6.12-first-boot.txt.gz`):
+
+- `Linux version 6.12.114`, `Machine model: MT6771V/C`, `PSCIv1.0 detected`,
+  `GICv3`, разметка памяти и все `mblock-*` от LK — **корректны**;
+- ядро дошло до **userspace** (initramfs, PID 1) и жило 3603 с, затем паника
+  `Attempted to kill init` — это наш init завершился по `sleep 3600`
+  (исправлено: init теперь не выходит);
+- `[Firmware Bug]: Kernel image misaligned at boot` — как у PennyOS, следствие
+  `text_offset=0` и загрузки на `0x40080000`; безвредно;
+- **ПМIC-цепочка — корень всех deferred probe**: `mt6358-regulator` падал
+  (`vgpu: failed to get coupler: -ENOTSUPP`), из-за этого не регистрировались
+  все регуляторы, а `mtk-pm-domains` не мог получить питание
+  (`failed to get power supply`) → `mmc`, `usb`, `gpu`, `disp`, `iommu` — все
+  «deferred probe pending» навсегда.
+- Исправлено: из board DTS убраны `regulator-coupled-with/max-spread` у
+  `vgpu`/`vsram_gpu` (mainline mt6358 их не поддерживает).
+
+Новый образ `build/boot_full_net3.img` (md5 `462ae4bd…`) прошит; USB-гаджет
+пока не появился — нужен следующий лог (SRAM) чтобы увидеть, что осталось.
+
 ## Открытые вопросы
 
 - **Панель закрыта**: активный LCM — `tv110xum_lb2_incell`, панель за мостом

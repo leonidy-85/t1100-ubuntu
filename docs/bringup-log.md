@@ -687,3 +687,136 @@ platform-драйвера, не ранней консоли. В bootargs сто�
   подходят» усилена (`refs/mt6771-next/`).
 - Патч 0003: PSCI + `mediatek,mt8183-wdt`, из bootargs убраны
   `console`/`earlycon`/`stdout-path` (UART-гейт до `clk-mt6771` закрыт).
+
+## 6. 29.10.2026 — SoC-DTS на базе `mt8183.dtsi`, полный конфиг, сборка «реального» ядра
+
+Задача шага: получить не минимальный DTS, а дерево, на котором заводятся
+настоящие драйверы (клоки, pinctrl, PMIC, eMMC, USB, IOMMU, DRM, GPU), чтобы
+следующим шагом поднимать rootfs. Планшет не трогался (никаких прошивок).
+
+### 6.1. Что переиспользовано из `refs/mt6771-next` (WIP-порт того же изделия)
+
+| Что | Как |
+|---|---|
+| `mt6771.dtsi` = `#include "mt8183.dtsi"` + `compatible = "mediatek,mt6771"` | взято целиком как идея и структура |
+| Удаление cpufreq/cpuidle у CPU (`cpu-idle-states`, `operating-points-v2`, `idle-states`) | взято (с обоснованием: `mediatek-cpufreq` не знает MT6771) |
+| `/delete-node/ &scp` | взято; в 6.12 у MT8183 нет `vcodec_enc`, поэтому удаляется только `vcodec_dec` |
+| `&mmc0` (HS400, `hs400-ds-delay = <0x12814>`, VEMC/VIO18, `MSDCPLL_CK`) и `&mmc1` (SD, `cd-gpios = <&pio 3>`, VMCH/VMC) | взято |
+| `&ssusb` (peripheral, USB2-only, `mediatek,u3p-dis-msk = <1>`, `vusb33-supply`), `&usb_host`, `&u2port0 { mediatek,pre-emphasis = <3>; }` | взято |
+| Питание: `reg_vsys`, `i2c_vbus`, `panel_dvdd` (GPIO55), весь блок `vsys-*`/`vs1-*`/`vs2-*-supply` у `&mt6358regulator`, coupler VGPU/VSRAM_GPU, `&mt6358_vdram2_reg` always-on | взято |
+| `backlight` (pwm-backlight, `&pwm0 0 500000`, enable GPIO56, 1023 уровня, 576 по умолчанию) | взято, но `status = "disabled"` до появления драйвера панели |
+| `panel@56` на `i2c3` (`boe,tv110xum-lb2-it6112`, reset GPIO45, dvdd/panel_dvdd, vpos/vneg от MT6370), `dsi_out <-> panel_in` | взято, `status = "disabled"` |
+| `pmic@34` MT6370 на `i2c5`: `adc` + `regulators { dsvbst, dsvpos, dsvneg, vibldo }` | взято только это (зарядник/TCPC/LED выброшены) |
+| `gpio-keys` Volume Down на `&pio 93`, `&mt6358keys` (Volume Up, `power-off-time-sec = <10>`) | взято |
+| `&gpu { mali-supply = <&mt6358_vgpu_reg>; }`, `&mfg { domain-supply = ... }` | взято |
+| `battery` (simple-battery, 8 Ач, 4.35 В) | взято (для будущего зарядника) |
+| `chassis-type = "tablet"` | взято |
+
+### 6.2. Что пришлось менять под 6.12 (и почему)
+
+| Пункт | В референсе (6.16/linux-next) | У нас (6.12.114) | Причина |
+|---|---|---|---|
+| `/chosen` | `&chosen { ... }` | узел `chosen` внутри `/` в board DTS | в 6.12 у `mt8183.dtsi` **нет** метки/узла `chosen`: `&chosen` → «Label or path chosen not found» |
+| `simple-framebuffer` | `chosen/framebuffer@7cb80000` + `DRM_SIMPLEDRM` | удалён | требование задачи: экран отдаётся настоящему DRM; `DRM_SIMPLEDRM` выключен |
+| `&iommu` | `status = "disabled"` («ломает simple-framebuffer») | **включён** | simple-framebuffer-а больше нет; адрес и IRQ m4u совпадают со стоком (0x10205000, SPI 166) |
+| `vcodec_enc` | `/delete-node/ &vcodec_enc` | нет такого узла в 6.12 | в 6.12 у MT8183 только `vcodec_dec` |
+| Регистрация тача | reset `GPIO0` | reset `GPIO158` | стоковый pinctrl (`rstoutput0` → `pinmux = <0x9e00>`) и `odm/lcm.ts-rst-gpios = <55 45 44 56 175…158>`: reset тача — **158**, а не 0 |
+| Тач, совместимость | `himax,hx83102e` + патч в `himax_hx83112b.c` | оставлен `himax,hx83102e` без драйвера | в 6.12 драйвер знает только `hx83100a/hx83112b`; правка — одна строка (патч есть в референсе), но это код драйвера, а не DTS |
+| `pinctrl-0/1` у MMC | `mmc0_pins_default/uhs`, `mmc1_pins_default` | **не задаются** | таблица `PINMUX_GPIO122..133` для MSDC0 в `mt8183-pinfunc.h` не сверена с MT6771; LK уже сконфигурировал пады, чтобы отдать нам ядро с eMMC. Перемуксировать рабочий eMMC в непроверенную функцию = потерять rootfs |
+| HDMI (IT66121 + `&dpi0`) | полный путь + `dpi_func_pins`/`dpi_idle_pins` | не описан (`dpi0` остаётся `disabled` из `mt8183.dtsi`) | `ite,it66121` в 6.12 есть, но путь DPI→HDMI не входит в критерий, а pinmux DBPI (GPIO13..28) тоже непроверен |
+| MT6370 | полный sub-PMIC (charger, TCPC, LED, flashlight) | только DSV-регуляторы, `status = "disabled"` | TCPC перетягивает роль USB-порта, которая нужна для RNDIS; зарядка не нужна для userspace |
+| `sgm41513` (i2c6) | `status = "disabled"` | так же | драйвера нет |
+| `sound` (ES7210) | `mediatek,mt8183-mt6358-es7210` | нет | звук — не-цель v1, драйвера ES7210 в 6.12 нет |
+| `&systimer` | наследуется | `status = "disabled"` | MT6771 GPT @0x10017000 поднимает **SPI 202** (сток: `sys_timer@10017000, interrupts = <0 0xca 4>`), а `mt8183.dtsi` — 200 |
+| `&svs` | наследуется | `status = "disabled"` | пишет DVFS/PMIC по efuse-калибровке, layout MT6771 неизвестен (нет TRM) |
+| `&cci` | `&cci { proc-supply = ... }` | `status = "disabled"` | cpufreq нет, а CCI-devfreq с MT8183 clock-ID — непроверенная запись в клоки |
+| `gpio-ranges` | 192 пина | 191 | сток: `gpio-ranges = <&pio 0 0 0xbf>` |
+| bootargs | не задаёт | `console=tty0 maxcpus=1 panic=10 loglevel=7` + геометрия ramoops | добавлены `ramoops.mem_address=0x54410000 mem_size=0xe0000 record_size=0x10000 console_size=0x40000 pmsg_size=0x10000` (ровно как в стоковом `cmdline.txt`): у нашего ядра до сих пор **не было** канала логов |
+| `DTC_FLAGS` | — | `-Wno-gpios_property` для этого DTB | `__symbols__/gpio` (метка нужна вендорскому dtbo) ложно трактуется dtc как GPIO-спектификатор |
+
+### 6.3. Итоговый состав DTS
+
+`arch/arm64/boot/dts/mediatek/mt6771.dtsi` (148 строк) =
+`#include "mt8183.dtsi"` + `compatible` + правки из таблицы 6.2 (все они
+перечислены и в комментариях самого файла, с проверенными адресами).
+
+`arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts` (454 строки): board-факты
+(LCM GPIO 45/55/44/56/175, тач EINT 1 / reset 158 / vdd VLDO28, backlight PWM0 +
+GPIO56, PMIC EINT 182, клавиши, батарея), `chosen` с bootargs и ramoops,
+`memory@40000000` 4 GiB, `reserved-memory` **без детей**, и последним —
+`#include "mt6771-fplus-t1100-lk-compat.dtsi"`.
+
+Узлы, которые теперь есть в DTB (готовы к драйверам): `mmsys`, `ovl0`,
+`ovl_2l0/1`, `rdma0/1`, `color0`, `ccorr0`, `aal0`, `gamma0`, `dither0`,
+`dsi0`, `dpi0`, `mutex`, `larb0`, `smi_common`, `iommu`, `mipi_tx0`,
+`gpu` (panfrost), `topckgen`, `infracfg`, `pericfg`, `apmixedsys`, `mfgcfg`,
+`scpsys` + power domains, `pio`, `pwrap`, `watchdog`, `i2c0..11`, `mmc0/1`,
+`ssusb`/`usb_host`/`u3phy`, `pwm0/1`, `auxadc`, `thermal`.
+
+### 6.4. Что НЕ заведётся без доработки (факты, не догадки)
+
+1. **Дисплей.** `dsi0` и `panel@56` остаются `disabled`: драйвера панели
+   IT6112 `boe,tv110xum-lb2-it6112` в 6.12 нет (WIP-патч —
+   `refs/mt6771-next/patches/083d4e7fa2`, `refs/it6112/`). Без него DSI
+   повиснет в `-EPROBE_DEFER`, а без `simple-framebuffer` консоли на экране не
+   будет вообще - поэтому включать имеет смысл только вместе с драйвером.
+2. **Тач.** `himax,hx83102e` — в 6.12 нет; нужна одна строка в
+   `himax_hx83112b.c` + `vdd-supply` (патчи `0f649f913f`, `41dd7e6871`).
+3. **USB host / роли.** 6.12 не умеет role-switch в `phy-mtk-tphy`
+   (патч `96fe48bed8`); у нас `dr_mode = "peripheral"` — годится для RNDIS.
+4. **HDMI.** `dpi0` + `ite,it66121` — DPI-путь не описан (см. 6.2).
+5. **Звук** — машины `mt8183-mt6358-*` и ES7210 в 6.12 нет.
+6. **Wi-Fi.** В DTS не описан вообще: `wlan_drv_gen3` — out-of-tree драйвер
+   MediaTek (SDIO), это отдельная задача `distro-userspace`.
+7. **cpufreq/SMP.** `mediatek-cpufreq` не знает MT6771; `maxcpus=1` в
+   bootargs. PSCI в дереве есть (из `mt8183.dtsi`), сток подтверждает
+   `PSCIv1.0 detected in firmware`, но SMP на нашем ядре не проверялся.
+
+### 6.5. Признанные риски «MT8183-драйверы на MT6771»
+
+Это гипотеза, подтверждённая только чужим WIP-портом; на нашем железе не
+проверялась. Что именно может не совпасть — по пунктам:
+
+| Блок | Драйвер | Что может разойтись |
+|---|---|---|
+| `pwrap` (0x1000d000) | `mtk-pmic-wrap` c `pwrap_mt8183` | у MT6771 есть свой кандидат `mediatek,mt6765-pwrap`; без PMIC не заведутся eMMC (`vmmc/vqmmc`) и PMIC-клавиши |
+| `scpsys` (0x10006000) | `mediatek,mt8183-power-controller` | индексы power-domain (`MT8183_POWER_DOMAIN_*`) должны совпадать с MT6771: от них зависят DISP/MFG и larb |
+| `topckgen`/`infracfg`/`pericfg`/`apmixedsys`/`mfgcfg`/`mmsys` гейты | `clk-mt8183*` | соответствие gate-ID MT6771 неизвестно (downstream-таблица `clk-mt6771.c` не публична) |
+| `pio` (0x10005000 + iocfg 0x11c5..0x11f3) | `pinctrl-mt8183` | таблица функций/пинов MT6771 (`pinctrl-mt6771.c`) может отличаться; поэтому пады MMC не перемуксируются (6.2) |
+| `tphy` (0x11f40000) | `mediatek,mt8183-tphy` | downstream у MT6771 `mediatek,mt6771-phy` с другим набором регистров → USB может не подняться |
+| `smi_common`/`larb*` | `mediatek,mt8183-smi-common` | адреса larb0..6 совпадают (сверено), но число портов larb на MT6771 может быть меньше |
+
+Практический вывод: первый прогон должен показать в dmesg по порядку
+`pwrap` → `mt6358-regulator` → `mmc0` (eMMC) → `usb` → `iommu/larb` → `gpu`.
+
+### 6.6. Конфиг
+
+`configs/t1100.fragment` переписан под «реальное» ядро, из него сгенерирован
+`configs/t1100_defconfig` (`make savedefconfig`, 1695 строк). Проверено:
+`cp configs/t1100_defconfig → .config && make olddefconfig` даёт **побайтово
+тот же** `.config`, что и сборка из фрагмента (`diff` пуст).
+
+Ключевое (всё `=y`, модулей нет — в initramfs их некому загружать):
+`ARCH_MEDIATEK`, `COMMON_CLK_MT8183` (+ поддрайверы по умолчанию),
+`PINCTRL_MT8183`, `MTK_SCPSYS`, `MTK_INFRACFG`, `MTK_PMIC_WRAP`,
+`MFD_MT6397`, `REGULATOR_MT6358`, `RTC_DRV_MT6397`, `KEYBOARD_MTK_PMIC`,
+`KEYBOARD_GPIO`, `MMC`+`MMC_MTK`+`MMC_BLOCK`+`EXT4_FS`, `I2C_MT65XX`+`I2C_CHARDEV`,
+`SERIAL_8250_MT6577`, `MEDIATEK_WATCHDOG`, `MTK_IOMMU`, `MTK_SMI`,
+`DRM_MEDIATEK`+`MTK_MMSYS`+`MTK_CMDQ`+`MTK_CMDQ_MBOX`+`PHY_MTK_MIPI_DSI`,
+`DRM_PANFROST`, `PWM_MTK_DISP`, `BACKLIGHT_PWM`, `USB_MTU3`+`USB_XHCI_MTK`+
+`PHY_MTK_TPHY`, `USB_GADGET`+`USB_CONFIGFS`+`USB_CONFIGFS_RNDIS`+
+`USB_CONFIGFS_ECM`+`USB_F_RNDIS`+`USB_F_ECM`+`USB_U_ETHER`+`USB_USBNET`,
+`PSTORE`+`PSTORE_RAM`+`PSTORE_CONSOLE`+`PSTORE_PMSG`, `BLK_DEV_INITRD`+`RD_GZIP`,
+`DEVTMPFS`+`DEVTMPFS_MOUNT`, `ARM64_VA_BITS_39`, `DEBUG_INFO_NONE`,
+`PANIC_TIMEOUT=10`.
+
+Выключено осознанно: `MTK_SVS`, `ARM_MEDIATEK_CCI_DEVFREQ`, `DRM_SIMPLEDRM`.
+
+### 6.6.1. Регресс патч-серии на чистом дереве
+
+`patches/0001..0009` применяются на базовый коммит `728cd6e` (mainline
+6.12.114) без конфликтов (`git am`, rc=0), и `make ... mediatek/mt6771-fplus-t1100.dtb`
+в отдельном дереве `/home/l/projects/tmp/series-test` даёт **тот же DTB**:
+sha256 `a0ef84b4df3fe2c905e8ea9bfab9d663114f7885782f6be9ded8da67f5d577a7`.
+Значит серия самодостаточна и наш DTB воспроизводим.
+
