@@ -254,6 +254,27 @@ Ubuntu + KDE»), а не дальнейшие попытки «увидеть» 
 Новый образ `build/boot_full_net3.img` (md5 `462ae4bd…`) прошит; USB-гаджет
 пока не появился — нужен следующий лог (SRAM) чтобы увидеть, что осталось.
 
+## 30.10 (вечер): исправление PMIC/PD по эталону affenull
+
+Разбор `bringup` (по коду, подтверждено логом):
+1. `regulator-coupled-with` несовместим с generic coupler (только `always-on`) →
+   `mt6358-regulator` выходил на первой ошибке ⇒ **ни одного рельса** ⇒ все
+   `deferred probe pending`.
+2. `power-domain@2` (MFG_ASYNC) без `domain-supply` в самом узле домена →
+   `scpsys_probe` падал ⇒ провайдер power-доменов не регистрировался ⇒
+   `mutex/ovl/rdma/dsi/larb*/smi/pwm/mfgcfg` навсегда deferred.
+3. `mtk-ramconsole` не писал: искал узел `ramoops`, которого нет (ramoops из
+   параметров) → `-ENODEV`.
+4. `regulator_late_cleanup()` в mainline гасит «неиспользуемые» рельсы;
+   у вендора защищены 16, в mainline — 14. Без `always-on` гасятся
+   **VDRAM2/VBIF28** (питание LPDDR4X/bias) → SoC умирает до первого printk.
+
+Исправлено: coupling убран, `&gpu { mali-supply; sram-supply }`, `&mfg_async`
+получил `domain-supply`, `always-on` для VDRAM2/VBIF28/VAUX18/VIO28/VAUD28,
+`mmc0/mmc1/ssusb/usb_host` включены, ранняя консоль ищет зону по `mblock-N-pstore`
+и параметрам. Образ `build/boot_pmic2.img` (md5 `fd96f69d…`) прошит, планшет
+перезагружен; USB-гаджет не появился — нужен лог (ранняя консоль) из рекавери.
+
 ## Открытые вопросы
 
 - **Панель закрыта**: активный LCM — `tv110xum_lb2_incell`, панель за мостом
