@@ -12,3 +12,5 @@
 0012-soc-mediatek-mtk-ramconsole-actually-write-the-log-i.patch
 0013-arm64-dts-t1100-register-every-MT6358-rail-and-the-M.patch
 0014-arm64-dts-t1100-initcall_debug-and-regulator_ignore_.patch
+0015-soc-mediatek-mtk-ramconsole-write-persistent_ram-dir.patch
+0016-regulator-mt6358-keep-registering-the-remaining-rail.patch
