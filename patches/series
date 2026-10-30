@@ -7,3 +7,8 @@
 0007-arm64-head-drop-the-on-screen-debug-markers-T1100.patch
 0008-arm64-dts-mt6771-derive-the-SoC-description-from-mt8.patch
 0009-arm64-dts-t1100-describe-the-board-on-top-of-mt8183..patch
+0010-arm64-dts-t1100-drop-regulator-coupling-for-vgpu-vsr.patch
+0011-soc-mediatek-early-RAM-console-into-the-ramoops-cons.patch
+0012-soc-mediatek-mtk-ramconsole-actually-write-the-log-i.patch
+0013-arm64-dts-t1100-register-every-MT6358-rail-and-the-M.patch
+0014-arm64-dts-t1100-initcall_debug-and-regulator_ignore_.patch

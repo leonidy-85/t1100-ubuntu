@@ -1,0 +1,241 @@
+From 60ca4a167c8ea70654056d8a53e6b6c891ec9750 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Fri, 30 Oct 2026 17:17:52 +0300
+Subject: [PATCH] soc: mediatek: early RAM console into the ramoops console
+ zone (bring-up)
+
+Taken from the other developer's patch (Leonid, 6cf...): registers a console at
+early_initcall that writes printk into the vendor ramoops zone, readable from
+recovery via /proc/last_kmsg. Needed because our kernel now hangs before
+pstore initialises, leaving no trace at all.
+---
+ drivers/soc/mediatek/Kconfig          |   9 ++
+ drivers/soc/mediatek/Makefile         |   1 +
+ drivers/soc/mediatek/mtk-ramconsole.c | 188 ++++++++++++++++++++++++++
+ 3 files changed, 198 insertions(+)
+ create mode 100644 drivers/soc/mediatek/mtk-ramconsole.c
+
+diff --git a/drivers/soc/mediatek/Kconfig b/drivers/soc/mediatek/Kconfig
+index 1b7afb19c..b30a29dcc 100644
+--- a/drivers/soc/mediatek/Kconfig
++++ b/drivers/soc/mediatek/Kconfig
+@@ -78,4 +78,13 @@ config MTK_SOCINFO
+ 	  information about the SoC to the userspace including the
+ 	  manufacturer name, marketing name and soc name.
+ 
++config MTK_RAMCONSOLE
++	bool "MediaTek early RAM console (bring-up)"
++	depends on ARCH_MEDIATEK
++	help
++	  Register an early console that writes kernel printk output into the
++	  reserved ramoops console zone in RAM. The vendor recovery exposes it
++	  through /proc/last_kmsg, which makes early boot failures visible on
++	  boards without an accessible UART. Bring-up aid only.
++
+ endmenu
+diff --git a/drivers/soc/mediatek/Makefile b/drivers/soc/mediatek/Makefile
+index 683051284..9b0d20aaa 100644
+--- a/drivers/soc/mediatek/Makefile
++++ b/drivers/soc/mediatek/Makefile
+@@ -8,3 +8,4 @@ obj-$(CONFIG_MTK_MMSYS) += mtk-mmsys.o
+ obj-$(CONFIG_MTK_MMSYS) += mtk-mutex.o
+ obj-$(CONFIG_MTK_SVS) += mtk-svs.o
+ obj-$(CONFIG_MTK_SOCINFO) += mtk-socinfo.o
++obj-$(CONFIG_MTK_RAMCONSOLE) += mtk-ramconsole.o
+diff --git a/drivers/soc/mediatek/mtk-ramconsole.c b/drivers/soc/mediatek/mtk-ramconsole.c
+new file mode 100644
+index 000000000..bad8232e4
+--- /dev/null
++++ b/drivers/soc/mediatek/mtk-ramconsole.c
+@@ -0,0 +1,188 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Minimal early RAM console for MediaTek bring-up.
++ *
++ * The FPlus T1100 has no accessible UART and no display stack yet, so an early
++ * boot failure is invisible: the first test boot just resets in a loop. The
++ * vendor recovery exposes /proc/last_kmsg, and with CONFIG_PSTORE_CONSOLE its
++ * content comes from the *ramoops console zone* in RAM, which survives a warm
++ * reset. So this driver registers a console at early_initcall time and writes
++ * printk straight into that zone using the standard persistent_ram layout:
++ *
++ *   u32 sig = 0x43474244 ("DBGC"), u32 start, u32 size, then a ring of text
++ *
++ * The zone is located from the "ramoops" DT node exactly like
++ * ramoops_init_prz() does: it starts after the dmesg records and is
++ * console-size bytes long.
++ *
++ * With this the failing boot is readable from recovery:
++ *   head -c 4096 /proc/last_kmsg | strings
++ *
++ * Bring-up aid only; disable once a real console exists.
++ */
++
++#define pr_fmt(fmt) "mtk-ramconsole: " fmt
++
++#include <linux/console.h>
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/string.h>
++
++#define PERSISTENT_RAM_SIG	0x43474244u	/* "DBGC" */
++#define PR_HEADER_SIZE		12		/* sig, start, size */
++
++struct mrcm_zone {
++	u8 __iomem *base;	/* first byte of the zone */
++	u32 size;		/* including the 12-byte header */
++	u32 start;
++	u32 len;
++};
++
++/*
++ * Two candidates: the zone computed the mainline way (after the dmesg
++ * records) and the very start of the reserved region. The vendor ramoops
++ * layout is expected to match the first one; the second is written in case
++ * this firmware orders the zones differently. A bogus sig in an unused zone
++ * is ignored by pstore.
++ */
++static bool mrcm_wdt_was_on;
++static struct mrcm_zone zones[3];
++static unsigned int nzones;
++
++static void mrcm_kick(struct mrcm_zone *z)
++{
++	writel(z->start, z->base + 4);
++	writel(z->len, z->base + 8);
++}
++
++static void mrcm_console_write(struct console *con, const char *s,
++			       unsigned int count)
++{
++	unsigned int i, k;
++
++	for (k = 0; k < nzones; k++) {
++		struct mrcm_zone *z = &zones[k];
++		u32 ring = z->size - PR_HEADER_SIZE;
++
++		if (!ring)
++			continue;
++
++		for (i = 0; i < count; i++) {
++			if (z->len < ring) {
++				writeb(s[i], z->base + PR_HEADER_SIZE +
++				       ((z->start + z->len) % ring));
++				z->len++;
++			} else {
++				writeb(s[i], z->base + PR_HEADER_SIZE +
++				       z->start);
++				z->start = (z->start + 1) % ring;
++			}
++		}
++		mrcm_kick(z);
++	}
++}
++
++static struct console mrcm_console = {
++	.name	= "mrcm",
++	.write	= mrcm_console_write,
++	.flags	= CON_PRINTBUFFER,
++	.index	= -1,
++};
++
++static void __init mrcm_locate_zone(void)
++{
++	struct device_node *np;
++	void __iomem *base;
++	u64 paddr, size;
++	u32 console_size = 0, pmsg_size = 0, ftrace_size = 0, i;
++	u64 dump_size;
++
++	np = of_find_compatible_node(NULL, NULL, "ramoops");
++	if (!np)
++		return;
++
++	if (of_property_read_reg(np, 0, &paddr, &size) || !size)
++		return;
++
++	of_property_read_u32(np, "console-size", &console_size);
++	of_property_read_u32(np, "pmsg-size", &pmsg_size);
++	of_property_read_u32(np, "ftrace-size", &ftrace_size);
++
++	/* Same arithmetic as ramoops_init_prz(): console lives after dmesg. */
++	if (!console_size || size <= console_size)
++		return;
++	dump_size = size - console_size - pmsg_size - ftrace_size;
++	if (dump_size + console_size > size)
++		return;
++
++	base = of_iomap(np, 0);
++	if (!base)
++		return;
++
++	/*
++	 * Candidate offsets, in case this firmware orders the zones
++	 * differently from mainline: after dmesg (dump_size, mainline), at
++	 * +0x50000 (vendor 4.14 with two console zones) and at the very start.
++	 */
++	zones[nzones].base = (u8 __iomem *)base + dump_size;
++	zones[nzones].size = console_size;
++	nzones++;
++
++	if (size >= 0x90000) {
++		zones[nzones].base = (u8 __iomem *)base + 0x50000;
++		zones[nzones].size = console_size;
++		nzones++;
++	}
++
++	zones[nzones].base = (u8 __iomem *)base;
++	zones[nzones].size = console_size;
++	nzones++;
++
++	for (i = 0; i < nzones; i++) {
++		zones[i].start = 0;
++		zones[i].len = 0;
++		writel(PERSISTENT_RAM_SIG, zones[i].base);
++		mrcm_kick(&zones[i]);
++	}
++}
++
++/*
++ * LK can hand over a running TOPRGU watchdog; with no userspace to ping it,
++ * every early kernel hang becomes a silent ~15 s reset loop. Stop it here,
++ * long before driver init, so a hang stays a hang and our log survives.
++ */
++static void __init mrcm_stop_wdt(void)
++{
++	void __iomem *wdt;
++	u32 mode;
++
++	wdt = ioremap(0x10007000, 0x100);
++	if (!wdt)
++		return;
++
++	mode = readl(wdt + 0x00);
++	if (mode & 0x1) {
++		writel((mode & ~0x1u) | 0x22000000, wdt + 0x00);
++		mrcm_wdt_was_on = true;
++	}
++	iounmap(wdt);
++}
++
++static int __init mrcm_init(void)
++{
++	mrcm_stop_wdt();
++	mrcm_locate_zone();
++	if (!nzones) {
++		pr_err("no ramoops console zone, disabled\n");
++		return -ENODEV;
++	}
++
++	register_console(&mrcm_console);
++	pr_info("early RAM console, %u zone(s), %u bytes each (wdt stopped: %d)\n",
++		nzones, zones[0].size, mrcm_wdt_was_on);
++
++	return 0;
++}
++early_initcall(mrcm_init);
+-- 
+2.53.0
+

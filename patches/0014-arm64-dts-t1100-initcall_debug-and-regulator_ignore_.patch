@@ -1,0 +1,55 @@
+From 1379709143b796215b631b42b7651a8696b76a48 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Fri, 30 Oct 2026 17:47:25 +0300
+Subject: [PATCH] arm64: dts: t1100: initcall_debug and regulator_ignore_unused
+ for bring-up
+
+Both are temporary and both exist to make the next failed boot explain
+itself, given that this tablet has no accessible UART:
+
+ * initcall_debug prints every initcall with its duration, so the last
+   line in the RAM log names the initcall that never returned;
+ * regulator_ignore_unused skips regulator_late_cleanup(), which disables
+   every rail that is enabled in hardware but has no consumer in DT
+   (drivers/regulator/core.c, "disabling"). The rails the vendor kernel
+   refuses to disable are now marked always-on in the board file, so this
+   switch can be dropped once /sys/kernel/debug/regulator/regulator_summary
+   shows them all claimed.
+
+Signed-off-by: bringup <bringup@t1100.local>
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts    | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 988f8a3a3..4ef78b1db 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -51,8 +51,23 @@ chosen {
+ 		 * maxcpus=1: PSCI is present (stock dmesg: "PSCIv1.0 detected in
+ 		 * firmware"), but secondary-core bring-up is unrelated to this step and
+ 		 * a hang there would be invisible. Drop it to get 8 CPUs.
++		 *
++		 * Bring-up switches, both temporary:
++		 *   initcall_debug          - print every initcall with its duration, so
++		 *                             the last line in the RAM log names the
++		 *                             initcall that never returned;
++		 *   regulator_ignore_unused - do not run
++		 *                             regulator_late_cleanup(), which disables
++		 *                             every rail that is on in hardware but has no
++		 *                             consumer in DT (drivers/regulator/core.c
++		 *                             "disabling"). On this board that is VDRAM2 /
++		 *                             VBIF28 - cutting them kills the SoC
++		 *                             silently. The rails the vendor kernel itself
++		 *                             refuses to disable are marked always-on
++		 *                             below, so this switch can go once the
++		 *                             regulator_summary shows them all claimed.
+ 		 */
+-		bootargs = "console=tty0 maxcpus=1 panic=10 loglevel=7 pstore.backend=ramoops ramoops.mem_address=0x54410000 ramoops.mem_size=0xe0000 ramoops.record_size=0x10000 ramoops.console_size=0x40000 ramoops.pmsg_size=0x10000";
++		bootargs = "console=tty0 maxcpus=1 panic=10 loglevel=7 initcall_debug regulator_ignore_unused pstore.backend=ramoops ramoops.mem_address=0x54410000 ramoops.mem_size=0xe0000 ramoops.record_size=0x10000 ramoops.console_size=0x40000 ramoops.pmsg_size=0x10000";
+ 	};
+ 
+ 	/* LK rewrites reg; the tablet has 4 GiB. */
+-- 
+2.53.0
+
