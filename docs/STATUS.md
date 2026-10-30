@@ -357,6 +357,20 @@ GIC, память, PMIC/PD). Дискриминатор «initramfs-reboot-30s»
 
 Планшет возвращён на рабочую Aurora (`boot_a_imaoff_nodiehard_nosig.img`).
 
+## 31.10: eMMC работает, Ubuntu rootfs записан на p54
+
+- Своя зона pstore (`ramoops@70000000`, не `nomap`) **решила проблему логов**:
+  в `/proc/last_kmsg` приходит наш лог.
+- **eMMC поднялся**: `mmc0: new HS400 MMC card`, `mmcblk0 … 57.6 GiB`,
+  все разделы p1…p54 (лог: `refs/device/last_kmsg-emmc-ok.txt.gz`).
+- `p54` переформатирован в **ext4** (метка `ubuntu`; LVM `sailfish` снесён —
+  владелец подтвердил), распакован `rootfs-t1100-base.tar.gz`
+  (105 МБ, hostname `t1100`, ssh, systemd-networkd).
+- Прошит `build/boot_ubuntu.img` (md5 `47c1138f…`): наше ядро + DTB,
+  **без initramfs**, cmdline `root=/dev/mmcblk0p54 rootwait rw`.
+- Дальше: проверить по pstore-логу, дошёл ли systemd до multi-user;
+  затем USB-UDC (сеть/SSH), KDE-пакеты, KMS-панель, panfrost.
+
 ## Открытые вопросы
 
 - **Панель закрыта**: активный LCM — `tv110xum_lb2_incell`, панель за мостом
