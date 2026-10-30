@@ -9,10 +9,11 @@
 0009-arm64-dts-t1100-describe-the-board-on-top-of-mt8183..patch
 0010-arm64-dts-t1100-drop-regulator-coupling-for-vgpu-vsr.patch
 0011-soc-mediatek-early-RAM-console-into-the-ramoops-cons.patch
-0012-soc-mediatek-mtk-ramconsole-actually-write-the-log-i.patch
-0013-arm64-dts-t1100-register-every-MT6358-rail-and-the-M.patch
+0012-arm64-dts-t1100-register-every-MT6358-rail-and-the-M.patch
+0013-soc-mediatek-mtk-ramconsole-actually-write-the-log-i.patch
 0014-arm64-dts-t1100-initcall_debug-and-regulator_ignore_.patch
 0015-soc-mediatek-mtk-ramconsole-write-persistent_ram-dir.patch
 0016-regulator-mt6358-keep-registering-the-remaining-rail.patch
 0017-arm64-dts-t1100-give-MSDC0-MSDC1-their-pinctrl-state.patch
 0018-usb-mtu3-log-the-UDC-name-once-it-is-registered.patch
+0019-arm64-dts-t1100-own-non-nomap-ramoops-region-at-0x70.patch

@@ -1,7 +1,7 @@
 From 87754a0fead834c85560ceb3faea0abdf8ef1e69 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Thu, 29 Oct 2026 19:19:10 +0300
-Subject: [PATCH t1100 5/6] arm64: head: stop the MTK TOPRGU watchdog before
+Subject: [PATCH t1100 05/19] arm64: head: stop the MTK TOPRGU watchdog before
  anything else (T1100)
 
 ---

@@ -1,7 +1,8 @@
 From 32b82021f4b60c6062c4203d9eaa3077b8b03e5b Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Fri, 30 Oct 2026 16:54:41 +0300
-Subject: [PATCH] arm64: dts: t1100: drop regulator coupling for vgpu/vsram_gpu
+Subject: [PATCH t1100 10/19] arm64: dts: t1100: drop regulator coupling for
+ vgpu/vsram_gpu
 
 mt6358-regulator fails to probe ('vgpu: failed to get coupler: -ENOTSUPP'),
 which leaves every PMIC rail unregistered; mtk-pm-domains then fails with

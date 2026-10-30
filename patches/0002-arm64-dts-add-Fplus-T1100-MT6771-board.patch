@@ -1,7 +1,7 @@
 From e8d525f6a96adc2bddf9da2ef6d4ceb65f3e3b30 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Thu, 29 Oct 2026 03:23:35 +0300
-Subject: [PATCH t1100 2/6] arm64: dts: add Fplus T1100 (MT6771) board
+Subject: [PATCH t1100 02/19] arm64: dts: add Fplus T1100 (MT6771) board
 
 Board file for the Fplus T1100 tablet (MT6771/MT8788, 4 GiB, BOE
 1600x2176 in-cell panel). Everything is taken from the live FDT of

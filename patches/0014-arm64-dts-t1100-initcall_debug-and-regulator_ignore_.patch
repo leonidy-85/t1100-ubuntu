@@ -1,8 +1,8 @@
 From 1379709143b796215b631b42b7651a8696b76a48 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Fri, 30 Oct 2026 17:47:25 +0300
-Subject: [PATCH] arm64: dts: t1100: initcall_debug and regulator_ignore_unused
- for bring-up
+Subject: [PATCH t1100 14/19] arm64: dts: t1100: initcall_debug and
+ regulator_ignore_unused for bring-up
 
 Both are temporary and both exist to make the next failed boot explain
 itself, given that this tablet has no accessible UART:

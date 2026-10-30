@@ -1,7 +1,7 @@
 From 449b78f399d21741d13b2a425bacad3df7aa494f Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Fri, 30 Oct 2026 20:49:54 +0300
-Subject: [PATCH 18/18] usb: mtu3: log the UDC name once it is registered
+Subject: [PATCH t1100 18/19] usb: mtu3: log the UDC name once it is registered
 
 udc-core registers the class device silently, so a boot log from a board whose
 only debug channel is printk/pstore cannot distinguish "no UDC" from "UDC

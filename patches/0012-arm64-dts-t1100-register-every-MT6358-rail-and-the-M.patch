@@ -1,8 +1,8 @@
 From 586cb030128c0dc2d17f99f4bd4500dc22602ec7 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Fri, 30 Oct 2026 17:47:12 +0300
-Subject: [PATCH] arm64: dts: t1100: register every MT6358 rail and the MFG
- power domains
+Subject: [PATCH t1100 12/19] arm64: dts: t1100: register every MT6358 rail and
+ the MFG power domains
 
 Two independent defects kept eMMC, USB and the whole MM stack out of the
 kernel:

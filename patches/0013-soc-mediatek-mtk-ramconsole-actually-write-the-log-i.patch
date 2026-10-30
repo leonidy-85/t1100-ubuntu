@@ -1,8 +1,8 @@
 From b78d1c0e4a7aa9163a87828ee4ff584e13832bd4 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Fri, 30 Oct 2026 17:47:18 +0300
-Subject: [PATCH] soc: mediatek: mtk-ramconsole: actually write the log into
- LK's ramoops zone
+Subject: [PATCH t1100 13/19] soc: mediatek: mtk-ramconsole: actually write the
+ log into LK's ramoops zone
 
 The driver added for bring-up never wrote a single byte. It located the
 zone with of_find_compatible_node(NULL, NULL, "ramoops"), but this board

@@ -1,8 +1,8 @@
 From 5f13fc14c7fc0e48f62e67e1d00ad0f8c365e9df Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Fri, 30 Oct 2026 18:59:43 +0300
-Subject: [PATCH 16/16] regulator: mt6358: keep registering the remaining rails
- after an error
+Subject: [PATCH t1100 16/19] regulator: mt6358: keep registering the remaining
+ rails after an error
 
 mt6358_regulator_probe() returns on the first devm_regulator_register()
 failure, so a single unusable rail removes *every* MT6358 regulator from the

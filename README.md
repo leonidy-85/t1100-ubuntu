@@ -4,7 +4,12 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус: boot-chain пройден** — mainline 6.12 запускается на планшете
+> **Статус (31.10.2026): Ubuntu 24.04 загружается на планшете с eMMC.**
+> Ядро mainline 6.12.114, rootfs Ubuntu-base 24.04 arm64 (systemd, ssh,
+> systemd-networkd) на разделе `p54`. Пока нет: USB-сети (UDC), DRM/KMS-панели,
+> GPU и KDE. Подробности — `docs/STATUS.md`, план — `docs/ubuntu-rootfs-plan.md`.
+>
+> ~~**Статус: boot-chain пройден** — mainline 6.12 запускается на планшете
 > (LK принимает наш DTB; см. `docs/lk-dtb-rules.md`, `docs/STATUS.md`).
 > Дальше: логи через pstore, полноценное ядро, затем KMS.
 >
@@ -111,6 +116,22 @@ cd ../t1100-ubuntu && scripts/build_kernel.sh
 # 3) регресс DTB
 sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 ```
+
+## Где проект сейчас (31.10.2026)
+
+| Блок | Состояние |
+|---|---|
+| LK / образ boot.img | ✅ LK принимает наш DTB (4 правила, `docs/lk-dtb-rules.md`), перепаковка `scripts/repack_boot.py` |
+| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0019` |
+| Память/PSCI/GIC | ✅ |
+| PMIC MT6358 / power domains | ✅ рельсы и домены поднимаются |
+| eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
+| Логи без UART/экрана | ✅ своя зона `ramoops@70000000` + чтение из рекавери (`/proc/last_kmsg`) |
+| USB (mtu3/UDC) | ❌ контроллер пробуется, `/sys/class/udc` нет → нет сети/SSH |
+| Ubuntu rootfs | ✅ Ubuntu 24.04 arm64 с systemd на `p54`, грузится |
+| DRM/KMS + панель BOE TV110XUM (IT6112) | ⏳ не начато (DSI0/DPI0 выключены) |
+| GPU panfrost (Mali-G72) | ⏳ не начато |
+| KDE Plasma | ⏳ после KMS |
 
 ## С чего начать
 

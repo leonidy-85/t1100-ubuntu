@@ -1,8 +1,8 @@
 From f077836721c1728a6f52acffa221dcc7420d7356 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Thu, 29 Oct 2026 22:53:51 +0300
-Subject: [PATCH 2/3] arm64: dts: mt6771: derive the SoC description from
- mt8183.dtsi
+Subject: [PATCH t1100 08/19] arm64: dts: mt6771: derive the SoC description
+ from mt8183.dtsi
 
 There is no clk-mt6771 / pinctrl-mt6771 / mmsys-mt6771 in mainline 6.12,
 and writing them from scratch is impossible without the (non public)

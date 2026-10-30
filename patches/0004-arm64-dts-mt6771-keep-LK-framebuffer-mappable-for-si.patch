@@ -1,7 +1,7 @@
 From 7f1935a75f1e0c15505c8ad74b35532869090508 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Thu, 29 Oct 2026 15:24:08 +0300
-Subject: [PATCH t1100 4/6] arm64: dts: mt6771: keep LK framebuffer mappable
+Subject: [PATCH t1100 04/19] arm64: dts: mt6771: keep LK framebuffer mappable
  for simpledrm
 
 Reserved-memory with no-map cannot be ioremapped, so simpledrm/fbcon never

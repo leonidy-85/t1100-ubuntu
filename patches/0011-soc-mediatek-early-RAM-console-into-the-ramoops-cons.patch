@@ -1,8 +1,8 @@
 From 60ca4a167c8ea70654056d8a53e6b6c891ec9750 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Fri, 30 Oct 2026 17:17:52 +0300
-Subject: [PATCH] soc: mediatek: early RAM console into the ramoops console
- zone (bring-up)
+Subject: [PATCH t1100 11/19] soc: mediatek: early RAM console into the ramoops
+ console zone (bring-up)
 
 Taken from the other developer's patch (Leonid, 6cf...): registers a console at
 early_initcall that writes printk into the vendor ramoops zone, readable from

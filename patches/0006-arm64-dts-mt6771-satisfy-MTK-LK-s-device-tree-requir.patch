@@ -1,7 +1,7 @@
 From 547600fded45fb37ab8c4c029a065e979b50c888 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Thu, 29 Oct 2026 21:31:54 +0300
-Subject: [PATCH t1100 6/6] arm64: dts: mt6771: satisfy MTK LK's device-tree
+Subject: [PATCH t1100 06/19] arm64: dts: mt6771: satisfy MTK LK's device-tree
  requirements
 
 The board reset-looped before the kernel ever ran: LK asserts/hangs while

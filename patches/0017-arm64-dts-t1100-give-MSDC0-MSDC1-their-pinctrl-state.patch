@@ -1,7 +1,7 @@
 From 6fe59dbd1c4c78739a0965396ee6337421646367 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Fri, 30 Oct 2026 20:49:51 +0300
-Subject: [PATCH 17/18] arm64: dts: t1100: give MSDC0/MSDC1 their pinctrl
+Subject: [PATCH t1100 17/19] arm64: dts: t1100: give MSDC0/MSDC1 their pinctrl
  states back
 
 mtk-sd does devm_pinctrl_get() and then looks up the "default" and "state_uhs"

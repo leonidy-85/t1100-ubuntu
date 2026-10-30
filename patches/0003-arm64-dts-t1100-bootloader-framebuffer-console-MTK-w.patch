@@ -1,8 +1,8 @@
 From 9c5bc95697d6ff3da71a6f26754fec4715dccc3b Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Thu, 29 Oct 2026 15:15:06 +0300
-Subject: [PATCH t1100 3/6] arm64: dts: t1100: bootloader framebuffer console +
- MTK watchdog
+Subject: [PATCH t1100 03/19] arm64: dts: t1100: bootloader framebuffer console
+ + MTK watchdog
 
 There is no UART access on this board. LK leaves a 1600x2176 XRGB8888
 buffer at 0x7cd80000, so expose it as simple-framebuffer and use
