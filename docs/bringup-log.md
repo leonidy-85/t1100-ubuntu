@@ -1111,3 +1111,153 @@ merged size 87147.
 Если зона снова окажется нетронутой (нет даже `T1100LOG`), то это уже не
 драйвер: значит ядро не дожило до `early_initcall`, и смотреть надо
 `setup_arch`/`memremap`-путь и сам образ.
+
+## 9. 30.10.2026 — реальный лог 6.12: eMMC без pinctrl, UDC без строки, DRM без DSI/DPI
+
+Источник фактов — лог живой загрузки `refs/device/last_kmsg-pmic-cycle.txt.gz`
+(распакован в `build/lk/lk_bisectC.txt`, наша часть — с строки 3129),
+ядро `6.12.114-g1379709143b7`, DTB `61978c90…`.
+
+### 9.1. Три отказа, как они выглядят в логе
+
+```
+[0.284158] mtk-msdc 11240000.mmc: Got CD GPIO
+[0.284468] mtk-msdc 11230000.mmc: error -ENODEV: Cannot find pinctrl
+[0.284492] mtk-msdc 11240000.mmc: error -ENODEV: Cannot find pinctrl
+[0.345299] mtu3 11201000.usb: max_speed: high-speed
+[0.345336] mtu3 11201000.usb: dma mask: 36 bits
+[0.367884] mediatek-drm mediatek-drm.3.auto: Not creating crtc 0 because component 14 is disabled or missing
+[0.367899] mediatek-drm mediatek-drm.3.auto: Not creating crtc 0 because component 10 is disabled or missing
+[0.367913] mediatek-drm mediatek-drm.3.auto: Need at least one OVL device
+[0.367978] mediatek-drm mediatek-drm.3.auto: adev bind failed: -19
+```
+
+Разбор по источникам, а не по догадкам:
+
+1. **`Cannot find pinctrl`** — это `devm_pinctrl_get()` в
+   `drivers/mmc/host/mtk-sd.c:2811` (`dev_err_probe(..., "Cannot find pinctrl")`).
+   `devm_pinctrl_get()` возвращает `-ENODEV`, когда у устройства в DT **нет ни
+   одного** `pinctrl-0`/`pinctrl-names`; состояния `default`/`state_uhs`
+   (`pinctrl_lookup_state()`, строки 2816/2822) ищутся уже после. `mt8183.dtsi`
+   описывает `mmc@11230000`/`mmc@11240000` без pinctrl (их добавляет board
+   DTS), а наш board DTS их не добавлял — значит узел доехал до драйвера
+   «голым».
+2. **`mtu3` без UDC** — строки в логе **не доказывают** отсутствие UDC:
+   `usb_add_gadget_udc()` в 6.12 (`drivers/usb/gadget/udc/core.c:1561`)
+   ничего не печатает при успехе, только на ошибках (`failed to start %s`,
+   `request irq %d failed`). В логе нет ни одной ошибки после `dma mask:
+   36 bits`, и `mtu3 11201000.usb: shutdown` в конце подтверждает, что probe
+   дошёл до конца и устройство связано с драйвером. То есть вопрос был не
+   «починить», а «получить признак в логе» (см. 9.3).
+3. **`component 14` / `component 10`** — это `enum mtk_ddp_comp_id`
+   (`include/linux/soc/mediatek/mtk-mmsys.h`), а не индексы: 14 =
+   `DDP_COMPONENT_DSI0`, 10 = `DDP_COMPONENT_DPI0`. Путь mt8183 main
+   (`mt8183_mtk_ddp_main`: OVL0 → OVL_2L0 → RDMA0 → COLOR0 → CCORR → AAL0 →
+   GAMMA → DITHER0 → DSI0) прошёл восемь компонентов из девяти и упёрся
+   в `DSI0`; ext-путь — в `DPI0`. Оба узла в нашем DTS `disabled`
+   (панели нет). `-19`/`Need at least one OVL device` — следствие: без CRTC
+   нет и `dma_dev`. **`&gpu`/`&mfg` тут ни при чём**: они не входят в пути
+   DDP, и OVL/RDMA/COLOR/CCORR/AAL/GAMMA уже связались
+   (`bound 14008000.ovl`, …), т.е. DSI-путь не собирается ровно из-за
+   выключенных DSI/DPI.
+
+### 9.2. eMMC/SD: вернули pinctrl-состояния (патч 0017)
+
+`&mmc0`/`&mmc1` получили `pinctrl-names = "default", "state_uhs"` и четыре
+узла-состояния в `&pio` (`mmc0_pins_default/uhs`, `mmc1_pins_default/uhs`).
+Номера пинов и функций взяты из `refs/mt6771-next/mt8788-fplus-t1100.dts` —
+это **та же плата**, порт другого автора поверх `mt8183.dtsi` (именно оттуда
+взята и наша SoC-описание): `MSDC0_CMD`=GPIO122, `DAT0..7`=123,128,125,132,
+126,129,127,130, `CLK`=124, `RSTB`=133; `MSDC1_CMD`=31, `DAT0..3`=32,34,33,30,
+`CLK`=29. Все они есть в `mt8183-pinfunc.h` с функцией 1 (`MSDC0_*`/`MSDC1_*`).
+
+Что сознательно **не** задаётся: drive-strength и pull (`mediatek,pull-*-adv`).
+LK уже настроил электрику MSDC0 под HS400, чтобы загрузить ядро; состояние
+только восстанавливает mux (и `input-enable` на cmd/dat), чтобы `mtk-sd`
+смог выбрать его через `pinctrl_select_state()`.
+
+**Про отдельный `pinctrl-mt6771`.** Доказательств, что он нужен, пока нет:
+`pinctrl-mt8183` биндится (`mt8183-pinctrl 10005000.pinctrl` в списке
+shutdown), GPIO-часть работает (`Got CD GPIO` на MSDC1, `gpio-keys`, PMIC
+IRQ), а `gpio-ranges` стока (191 пин) укладывается в таблицу MT8183
+(192 пина). Проверка гипотезы — эта же загрузка: если mux MSDC0 в таблице
+MT8183 верен, появится `mmcblk0`; если пины разъедутся, будет
+`mmc0: error -110 whilst initialising MMC card` (или таймаут) и **не будет**
+`mmcblk0` — тогда нужен `pinctrl-mt6771` с настоящей таблицей, и это будет
+доказано, а не предположено. Кирпича тут нет: LK каждый раз заново
+настраивает пады при загрузке.
+
+### 9.3. USB: цепочка проверена по DTS/коду, добавлена строка-признак (патч 0018)
+
+Проверено по собранному DTB и исходникам:
+
+| Звено | Факт |
+|---|---|
+| `&ssusb` (`usb@11201000`) | `mediatek,mt8183-mtu3` + `mediatek,mtu3`, `status = "okay"`, `dr_mode = "peripheral"` |
+| `phys` | `<&u2port0 PHY_TYPE_USB2>, <&u3port0 PHY_TYPE_USB3>` на месте |
+| `mtk-tphy` | связан (`mtk-tphy soc:t-phy@11f40000: shutdown`), u2port0 `status = "okay"` |
+| `vusb33` | в логе нет `failed to get vusb33` — регулятор взят |
+| Kconfig | `CONFIG_USB_MTU3=y`, `USB_MTU3_DUAL_ROLE=y`, `USB_GADGET=y`, `USB_CONFIGFS=y`, `USB_CONFIGFS_RNDIS=y`, `USB_F_RNDIS=y` |
+| путь probe | `dr_mode=2` → `ssusb_gadget_init()` → `mtu3_gadget_setup()` → `usb_add_gadget_udc()` |
+
+`usb-role-switch`/`extcon` для периферийного режима не нужны: в
+`get_ssusb_rscs()` они читаются только чтобы решить, кто рулит ролью; при
+`dr_mode = peripheral` драйвер идёт в gadget-init напрямую (и
+`mtu3_dr.c`/TCPC на этой ветке не задействован — см.
+`refs/mt6771-next/patches/96fe48bed8` про host-режим).
+
+Единственное, чего не хватало — **наблюдаемости**: `udc-core` молчит при
+успехе. Патч 0018 печатает имя UDC:
+
+```
+mtu3 11201000.usb: UDC 'mtu3' registered
+```
+
+Это ровно то имя, которое появится в `/sys/class/udc/`. Если строка есть, а
+гаджет не поднялся — вопрос уже в userspace (`/sys/kernel/config`), а не в
+ядре; если строки нет, значит `usb_add_gadget_udc()` вернул ошибку, и в логе
+теперь будет `failed to register UDC: <errno>`.
+
+### 9.4. Артефакты
+
+```
+build/full/arch/arm64/boot/Image   39670272
+  md5 03e0a089fe5952cd8b2cda1bf21dae07
+  sha256 8fdd878184f6f05e9a8882aeea7407d8d0e9712cb769043076c3769df353460b
+  Linux version 6.12.114-g449b78f399d2
+
+build/full/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb   52741
+  md5 d83f4fe2a2c71d1b4521b5e54db48eef
+  sha256 d8d3af4731af1a970f359b4d8548b42fc392a900a84d2da02d4c01109f17a7b1
+
+build/boot_pmic4.img   33554432   (kernel addr 0x40080000, ramdisk 0x55000000,
+  md5 d6fd3746ceb1eb3e446ccdb803a4f8c7      tags 0x54000000, page 2048,
+  sha256 14415428921c65ca96bcdbb433cbeb80b855f61e79be8e2c5f1b981c37a652e9
+                                             initramfs_net3, cmdline = boot_pmic3)
+```
+
+Проверено извлечением из готового образа (`scripts/bootimg_extract.py`):
+`kernel` после `gzip -dc` → md5 `03e0a089…` (= `Image`), `dtb` → md5
+`d83f4fe2…` (64 байта MTK-заголовка добавляет `repack_boot.py`), `ramdisk` →
+`96c4d113…` (= `initramfs_net3.cpio.gz`).
+
+LK-валидатор (`refs/pennyos-lk/check-lk-dtb.py <dtb> build/lk/dtbo_a.img
+build/lk/live.dts`): 9/9 `ok`, merged size 87963 ≤ 524288,
+`RESULT: LK should accept this DTB`.
+
+Патч-серия `0001..0018` применяется `git am` на `728cd6e` без конфликтов
+(rc=0), файлы после применения побайтово равны рабочим.
+
+### 9.5. Что должно быть в следующем логе
+
+1. **нет** ни одной строки `Cannot find pinctrl`;
+2. `mmc0: new HS400 MMC card at address 0001`, затем
+   `mmcblk0: mmc0:0001 … 57.6 GiB` и `mmcblk0: p1 … p54` (в стоке
+   60416000 блоков по 1 КиБ — `refs/device/partitions.txt`);
+   `mmc1: …` — только если воткнута microSD;
+3. `mtu3 11201000.usb: UDC 'mtu3' registered` — и `/sys/class/udc/mtu3`;
+4. `mediatek-drm … adev bind failed: -19` **останется**: DSI0/DPI0 всё ещё
+   `disabled`, это задача `kernel-drm` (панель + включение `&dsi0`), а не
+   побочный эффект MMC/USB;
+5. при неудаче MMC — `mmc0: error -110 …`/таймаут без `mmcblk0` ⇒ нужен
+   `pinctrl-mt6771` (см. 9.2).
