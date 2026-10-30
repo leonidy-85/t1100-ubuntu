@@ -63,6 +63,15 @@ if [ -c /dev/mem ]; then
     && echo "dumped $(stat -c%s /tmp/dump) bytes to SRAM 0x11d000"
 fi
 
+# eMMC log channel: dump dmesg into the scratch partition (expdb, p03)
+i=0
+while [ $i -lt 20 ] && [ ! -b /dev/mmcblk0p3 ]; do sleep 1; i=$((i+1)); done
+if [ -b /dev/mmcblk0p3 ]; then
+  { printf 'T1100LOG v4 '; date; echo; dmesg; } > /tmp/emmc_log
+  dd if=/tmp/emmc_log of=/dev/mmcblk0p3 bs=4096 seek=1024 conv=fsync 2>/dev/null \
+    && echo "emmc log written ($(stat -c%s /tmp/emmc_log) bytes)"
+fi
+
 echo "=== T1100-INITRAMFS-OK ==="
 # never exit (exit of pid 1 panics the kernel); refresh the SRAM black box
 while :; do
