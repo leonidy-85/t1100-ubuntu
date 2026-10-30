@@ -1,0 +1,168 @@
+From 6fe59dbd1c4c78739a0965396ee6337421646367 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Fri, 30 Oct 2026 20:49:51 +0300
+Subject: [PATCH 17/18] arm64: dts: t1100: give MSDC0/MSDC1 their pinctrl
+ states back
+
+mtk-sd does devm_pinctrl_get() and then looks up the "default" and "state_uhs"
+states before it touches the controller; a node without `pinctrl-0` makes
+devm_pinctrl_get() fail with -ENODEV and both controllers died in probe:
+
+  mtk-msdc 11230000.mmc: error -ENODEV: Cannot find pinctrl
+  mtk-msdc 11240000.mmc: error -ENODEV: Cannot find pinctrl
+
+Add the two states (plus the SD ones) with the MSDC0/MSDC1 pad mux taken from
+refs/mt6771-next/mt8788-fplus-t1100.dts - the same tablet, ported by another
+author on top of mt8183.dtsi, which is also where our SoC description comes
+from. Every pin number used there exists in mt8183-pinfunc.h as MSDC0_* /
+MSDC1_*, which is the working hypothesis for MT6771 (191 GPIOs vs 192 on
+MT8183, same 12 nm platform).
+
+Only the mux function and input-enable are set. Drive strength and pulls are
+left alone on purpose: LK programmed them for eMMC boot and this change must
+not risk the boot device just to satisfy a state lookup.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 110 +++++++++++++++++-
+ 1 file changed, 105 insertions(+), 5 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 4ef78b1db..10097d7ca 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -315,14 +315,25 @@ charger@1a {
+ };
+ 
+ /*
+- * eMMC: MSDC0, HS400, 8 bit, on MT6358 VEMC/VIO18. The pad mux and drive
+- * strength are deliberately *not* touched here: LK has already configured
+- * MSDC0 to load the kernel, and the MT8183 pin table (PINMUX_GPIO122..133)
+- * has not been verified against MT6771 yet. The reference pin states are in
+- * refs/mt6771-next/mt8788-fplus-t1100.dts under mmc0_pins_default/uhs.
++ * eMMC: MSDC0, HS400, 8 bit, on MT6358 VEMC/VIO18.
++ *
++ * mtk-sd refuses to probe without pinctrl states ("Cannot find pinctrl",
++ * drivers/mmc/host/mtk-sd.c: devm_pinctrl_get() + pinctrl_lookup_state()
++ * for "default" and "state_uhs"), so both states must exist even though LK
++ * has already muxed MSDC0 to load the kernel. The pin numbers/functions come
++ * from refs/mt6771-next/mt8788-fplus-t1100.dts (same board, mt8183 pin table)
++ * and, for every pin used here, exist in mt8183-pinfunc.h with the MSDC0
++ * function at the same pin number. Electrical settings (drive strength, pull)
++ * are deliberately left to LK: this state only re-asserts the mux so that the
++ * driver can select it; if MT6771's pad map ever turns out to differ from
++ * MT8183's, the symptom is a dead eMMC in the kernel (no mmcblk0), not a
++ * brick - LK re-muxes the pads on every boot.
+  */
+ &mmc0 {
+ 	status = "okay";
++	pinctrl-names = "default", "state_uhs";
++	pinctrl-0 = <&mmc0_pins_default>;
++	pinctrl-1 = <&mmc0_pins_uhs>;
+ 	bus-width = <8>;
+ 	max-frequency = <200000000>;
+ 	cap-mmc-highspeed;
+@@ -343,6 +354,9 @@ &mmc0 {
+ /* microSD slot: MSDC1, card detect on GPIO3. */
+ &mmc1 {
+ 	status = "okay";
++	pinctrl-names = "default", "state_uhs";
++	pinctrl-0 = <&mmc1_pins_default>;
++	pinctrl-1 = <&mmc1_pins_uhs>;
+ 	bus-width = <4>;
+ 	max-frequency = <200000000>;
+ 	cap-sd-highspeed;
+@@ -359,6 +373,92 @@ &mmc1 {
+ 	cd-gpios = <&pio 3 GPIO_ACTIVE_HIGH>;
+ };
+ 
++/*
++ * Pad states for the two MMC controllers. Only the mux function (and
++ * input-enable on the data/cmd lines) is set: LK has already programmed drive
++ * strength and pulls for eMMC boot, and keeping that untouched is the least
++ * invasive way to find out whether MT6771's pads really follow the MT8183
++ * table. Pin numbers/functions: refs/mt6771-next/mt8788-fplus-t1100.dts
++ * (mmc0_pins_default/uhs, mmc1_pins_default) - see the comment at &mmc0.
++ */
++&pio {
++	mmc0_pins_default: mmc0-pins-default {
++		pins-cmd-dat {
++			pinmux = <PINMUX_GPIO122__FUNC_MSDC0_CMD>,
++				 <PINMUX_GPIO123__FUNC_MSDC0_DAT0>,
++				 <PINMUX_GPIO128__FUNC_MSDC0_DAT1>,
++				 <PINMUX_GPIO125__FUNC_MSDC0_DAT2>,
++				 <PINMUX_GPIO132__FUNC_MSDC0_DAT3>,
++				 <PINMUX_GPIO126__FUNC_MSDC0_DAT4>,
++				 <PINMUX_GPIO129__FUNC_MSDC0_DAT5>,
++				 <PINMUX_GPIO127__FUNC_MSDC0_DAT6>,
++				 <PINMUX_GPIO130__FUNC_MSDC0_DAT7>;
++			input-enable;
++		};
++
++		pins-clk {
++			pinmux = <PINMUX_GPIO124__FUNC_MSDC0_CLK>;
++		};
++
++		pins-rst {
++			pinmux = <PINMUX_GPIO133__FUNC_MSDC0_RSTB>;
++		};
++	};
++
++	mmc0_pins_uhs: mmc0-pins-uhs {
++		pins-cmd-dat {
++			pinmux = <PINMUX_GPIO122__FUNC_MSDC0_CMD>,
++				 <PINMUX_GPIO123__FUNC_MSDC0_DAT0>,
++				 <PINMUX_GPIO128__FUNC_MSDC0_DAT1>,
++				 <PINMUX_GPIO125__FUNC_MSDC0_DAT2>,
++				 <PINMUX_GPIO132__FUNC_MSDC0_DAT3>,
++				 <PINMUX_GPIO126__FUNC_MSDC0_DAT4>,
++				 <PINMUX_GPIO129__FUNC_MSDC0_DAT5>,
++				 <PINMUX_GPIO127__FUNC_MSDC0_DAT6>,
++				 <PINMUX_GPIO130__FUNC_MSDC0_DAT7>;
++			input-enable;
++		};
++
++		pins-clk {
++			pinmux = <PINMUX_GPIO124__FUNC_MSDC0_CLK>;
++		};
++
++		pins-rst {
++			pinmux = <PINMUX_GPIO133__FUNC_MSDC0_RSTB>;
++		};
++	};
++
++	mmc1_pins_default: mmc1-pins-default {
++		pins-cmd-dat {
++			pinmux = <PINMUX_GPIO31__FUNC_MSDC1_CMD>,
++				 <PINMUX_GPIO32__FUNC_MSDC1_DAT0>,
++				 <PINMUX_GPIO34__FUNC_MSDC1_DAT1>,
++				 <PINMUX_GPIO33__FUNC_MSDC1_DAT2>,
++				 <PINMUX_GPIO30__FUNC_MSDC1_DAT3>;
++			input-enable;
++		};
++
++		pins-clk {
++			pinmux = <PINMUX_GPIO29__FUNC_MSDC1_CLK>;
++		};
++	};
++
++	mmc1_pins_uhs: mmc1-pins-uhs {
++		pins-cmd-dat {
++			pinmux = <PINMUX_GPIO31__FUNC_MSDC1_CMD>,
++				 <PINMUX_GPIO32__FUNC_MSDC1_DAT0>,
++				 <PINMUX_GPIO34__FUNC_MSDC1_DAT1>,
++				 <PINMUX_GPIO33__FUNC_MSDC1_DAT2>,
++				 <PINMUX_GPIO30__FUNC_MSDC1_DAT3>;
++			input-enable;
++		};
++
++		pins-clk {
++			pinmux = <PINMUX_GPIO29__FUNC_MSDC1_CLK>;
++		};
++	};
++};
++
+ /*
+  * USB: the port is USB 2.0 only on this board (no SuperSpeed pairs), and the
+  * data role is fixed to peripheral so that the kernel exposes a UDC and the
+-- 
+2.53.0
+
