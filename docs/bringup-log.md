@@ -983,3 +983,131 @@ merged size 87147 байт.
 MT6771 (eMMC/USB могут не подняться из-за неверных gate-ID), `tphy`
 (`mediatek,mt8183-tphy` против `mediatek,mt6771-phy`), и то, что
 `mt8183-power-controller` действительно совместим с SPM MT6771.
+
+
+## 8. 30.10.2026 — почему «нет ни одной строки»: `ioremap` по RAM, и лог в обход консоли
+
+Вход: `boot_pmic2.img` (Image md5 `db153cbb…`, DTB md5 `4fbe401d…`, md5 образа
+`fd96f69d…`) прошит; чёрный экран, сбросов нет, `/proc/last_kmsg` — старый лог
+(289537 Б, uptime 3603, ядро `6.12.114-g97f79731b0d7`, т.е. содержимое зоны от
+прошлого удачного прогона). Счётчик `mrcm` в логе — 0.
+
+### 8.1. Корневая причина пустой зоны — в самом `mrcm`, а не в плате
+
+`mrcm_locate()` брал зону через `ioremap(paddr, console_size)`. Зона ramoops
+лежит в **system RAM**: LK её резервирует, но она остаётся в memory map, а
+arm64 такие адреса мапить через `ioremap` запрещает:
+
+```c
+/* arch/arm64/mm/ioremap.c */
+	/* Don't allow RAM to be mapped. */
+	if (WARN_ON(pfn_is_map_memory(__phys_to_pfn(phys_addr))))
+		return NULL;
+```
+
+Итог: `mrcm_base == NULL` → `pr_err("no ramoops console zone found")` →
+`-ENODEV` → ни одного байта в зону. То есть «нет лога» здесь означало не
+«ядро не дошло до раннего initcall», а «драйвер молча не нашёл зону»:
+сообщение об этом уходило в printk-ring, который читать было нечем.
+
+Вторая половина проблемы — сам механизм: запись делалась через
+`register_console(CON_PRINTBUFFER)` + `pr_info()` + `unregister_console()`,
+т.е. ровно тем путём, которым уже пользуется ramoops; если printk в этот
+момент не переигрывает ring, в зоне не появляется ничего.
+
+### 8.2. Что сделано (патчи 0015, 0016)
+
+`drivers/soc/mediatek/mtk-ramconsole.c` переписан на прямую запись
+`persistent_ram` (патч 0015):
+
+* формат — `struct persistent_ram_buffer` из `fs/pstore/ram_core.c`:
+  заголовок 12 байт (`sig = 0x43474244` "DBGC", `start`, `size`) + текстовое
+  кольцо; `sig` совпадает с тем, что после `sig ^= PERSISTENT_RAM_SIG`
+  ожидает `persistent_ram_post_init()` при `sig = 0` у console-зоны, поэтому
+  ramoops позже видит «existing buffer» и **дописывает** в него, а не затирает;
+* отображение — `memremap(paddr, len, MEMREMAP_WB)` (для валидной RAM это
+  линейное отображение, `ioremap` больше не используется), fallback —
+  `ioremap` только если зона не в RAM; после каждой порции текста —
+  `dcache_clean_poc()`, иначе при мгновенной смерти SoC в DRAM остаётся
+  только то, что успело вымыться само;
+* геометрия — только из `ramoops.mem_address/mem_size/console_size/
+  pmsg_size/ftrace_size` в `boot_command_line`; узел `ramoops`/`mblock-*` в DT
+  не ищется вообще. Нет параметров — жёсткий fallback
+  `0x54410000`/`0xe0000`/console `0x40000`/pmsg `0x10000`;
+* смещение console-зоны считается как в `ramoops_probe()`:
+  `size - console - pmsg - ftrace` (зона идёт после dmesg-записей, pmsg и
+  ftrace);
+* снимки ring buffer'а — `kmsg_dump_rewind()` + `kmsg_dump_get_line()`
+  (хронологически, без регистрации консоли) в четырёх точках:
+  `early_initcall` (самый ранний initcall: до SMP и до любых драйверов),
+  `postcore_initcall_sync`, `arch_initcall`, `late_initcall_sync`. Каждый
+  снимок переписывает кольцо заново и начинается строкой
+  `T1100LOG mrcm: stage=…`, так что уже сам факт этой строки в
+  `/proc/last_kmsg` доказывает, что чёрный ящик отработал;
+* стоп TOPRGU в `head.S` и в драйвере сохранён.
+
+`drivers/regulator/mt6358-regulator.c` (патч 0016): `mt6358_regulator_probe()`
+больше не выходит на первой ошибке — печатает `failed to register <rail>:
+<err>, continuing`, считает и идёт дальше; в конце
+`"%d of %d regulators registered, %d failed"`; `-ENODEV` только если не
+зарегистрировался ни один. `mt6358_sync_vcn33_setting()` (Wi-Fi/BT LDO) тоже
+стал нефатальным (`dev_warn`). Так один негодный рельс не уносит остальные
+~40 и не оставляет eMMC/USB/дисплей в вечном `-EPROBE_DEFER`, а виновник
+попадает в лог по имени.
+
+DTS не менялся: `always-on` для VDRAM2/VBIF28/VAUX18/VIO28/VAUD28 и
+`regulator_ignore_unused` из патчей 0013/0014 на месте.
+
+### 8.3. Артефакты
+
+```
+build/full/arch/arm64/boot/Image
+  39670272  md5 64d4fec7114f75c03c510cef9599f4ac
+            sha256 eb587132f6fdbf1aa10a32d56ce1602239d862e207c3db664bca4d6c13378b03
+  Linux version 6.12.114-g5f13fc14c7fc   (0 warnings)
+build/full/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
+  51871     md5 4fbe401d3b20540d92e891798dafaaad
+            sha256 61978c90a4e7d733950e4771de64bce29f0e3282c52923b178198a36f6c8fea4
+build/boot_pmic3.img                       33554432
+            md5 dc99e2b61942c4d63c64ad168d811737
+            sha256 6ffc7484fa4f85db73b90cdc038dea22fb457ac9638bb2eacd0641f3cfec515e
+```
+
+Образ собран `scripts/make_test_boot.sh` из этого `Image` (kernel addr
+`0x40080000`, ramdisk addr `0x55000000`, tags `0x54000000`, page 2048), DTB `61978c90…`, initramfs `build/initramfs_net3.cpio.gz`; cmdline
+в заголовке — побайтово как у `boot_pmic2.img`
+(`bootopt=64S3,32N2,64N2 console=tty0 maxcpus=8 panic=10 … loglevel=7`).
+Проверено извлечением из готового образа: kernel → `Image` (md5 совпадает),
+dtb → `61978c90…`, ramdisk → `initramfs_net3.cpio.gz`.
+
+Валидатор LK (`refs/pennyos-lk/check-lk-dtb.py`, `build/lk/dtbo_a.img`,
+`build/lk/live.dts`): 9/9 `ok`, `RESULT: LK should accept this DTB`,
+merged size 87147.
+
+Патч-серия: `0001..0016` применяется `git am` на базовый `728cd6e` без
+конфликтов (rc=0), файлы после применения побайтово равны рабочим; последние
+два патча трогают только `drivers/`, поэтому DTB не меняется (`61978c90…`).
+
+### 8.4. Что должно быть видно в `/proc/last_kmsg`
+
+1. в начале зоны — строка последнего отработавшего снимка, например
+   `T1100LOG mrcm: stage=late_initcall_sync done=early_initcall,
+   postcore_initcall_sync,arch_initcall,late_initcall_sync, zone=0x5441... map=wb
+   uptime_ms=…`; `done` перечисляет **все** пройденные этапы (каждый снимок
+   переписывает кольцо заново, поэтому список этапов переносится в самой
+   строке). Нет даже `T1100LOG` — значит не отработал и `early_initcall`;
+2. далее весь printk-ring с `[0.000000] Linux version 6.12.114-gf9f8035fa…`,
+   затем `mrcm: zone 0x…+0x40000, wdt stopped: …`;
+3. чем короче `done`, тем раньше умерло ядро: `early_initcall` = смерть до
+   SMP/драйверов, `postcore`+`arch` = где-то в начале `do_initcalls`,
+   все четыре = смерть на драйверах (там уже должен быть виден виновник);
+4. `mt6358-regulator … Chip ID = 0x5820` и, если какой-то рельс не регистрируется,
+   `failed to register <имя>: <errno>, continuing` + итоговая
+   `N of M regulators registered, K failed` — вместо прежнего обрыва на
+   первой ошибке;
+5. при `initcall_debug` (он в DT bootargs) последняя строка перед смертью —
+   имя initcall'а, который не вернулся.
+
+Если зона снова окажется нетронутой (нет даже `T1100LOG`), то это уже не
+драйвер: значит ядро не дожило до `early_initcall`, и смотреть надо
+`setup_arch`/`memremap`-путь и сам образ.
