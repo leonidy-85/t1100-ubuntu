@@ -556,3 +556,63 @@ initramfs теперь сам поднимает RNDIS + `telnetd` на 2323 д�
 (канал, переживающий `switch_root`) и пишет снимки `dmesg` в `p3` (expdb),
 затем `switch_root` в Ubuntu. Проверка — USB-сеть с хоста
 (`tools/host/usb-net.sh`), без похода в recovery.
+
+## 02.11 (ночь): **Ubuntu 24.04 + systemd загрузилась на железе**; USB не энумерируется
+
+Прошит `build/boot_ubuntu4.img` (md5 `30729fab…`, sha256 `e2183a39…de2a0e`):
+ядро текущего дерева (`Image` sha256 `afedc97a…`, 0 warnings, `O=build/k1`),
+наш initramfs с RNDIS/telnetd, DTB `e11c39df…` (тот же, что в рабочем
+`boot_ubuntu3`), `KERNEL_ADDR=0x40080000`, `root=/dev/mmcblk0p54`.
+Прошивка через recovery по USB (`tools/host/recovery.py put`), md5 на устройстве
+сверен: `30729fab…` — совпадает.
+
+**Подтверждено журналом systemd с самой платы** (`refs/device/journal-ubuntu4-first-boot.txt.gz`):
+
+```
+systemd[1]: Reach target sysinit/basic/getty/usb-gadget/multi-user/graphical
+systemd[1]: Startup finished in 3.540s (kernel) + 2.279s (userspace) = 5.819s
+```
+То есть **mainline 6.12 + Ubuntu 24.04 + systemd дошли до multi-user и
+graphical.target**; hostname `t1100`. Отключение питания в 20:01:24 — это
+**нажатие кнопки питания** (`systemd-logind: Power key pressed short` →
+`Powering off`), а не падение.
+
+**Что сломалось и уже исправлено:** `ssh.service` падал с
+`/etc/ssh/sshd_config: No such file or directory` — в rootfs из ubuntu-base
+`openssh-server` распаковался не полностью (в `/etc/ssh` лежали только
+`*.dpkg-new`). С хоста починено на `p54`: `sshd_config`, `ssh_config`, `moduli`,
+хостовые ключи (ed25519+rsa) и `root/.ssh/authorized_keys` (ключ этого хоста).
+SSH заработает, как только поднимется USB-сеть.
+
+**USB: гаджет собран, но хост его не видит.** Из dmesg
+(`refs/device/dmesg-ubuntu4-boot.txt.gz`):
+
+```
+mtu3 11201000.usb: IP version 0x0(U3 IP)          <-- у вендора на этом SoC 0x20160812
+mtu3 11201000.usb: UDC 'mtu3' registered          (маркер патча 0018)
+configfs-gadget.t1100 gadget.0: MAC e6:df:28:4a:fa:b8
+mtu3 11201000.usb: gadget (high-speed) pullup D+
+```
+`/sys/class/udc` = `11201000.usb`, `usb0` создан и `UP`, `carrier:0`; ошибок нет.
+При этом на хосте за 2,5 минуты работы ядра — **ни одного нового USB-устройства**
+(был только preloader `0e8d:2000` при загрузке и тишина после).
+Значит D+ pull-up не доходит до разъёма: MAC пишет бит, а порт U2/IPPC не включён.
+
+**Рабочая гипотеза (делегирована `bringup`):** `mt6771.dtsi` берёт `&ssusb` из
+`mt8183.dtsi`, а идентификаторы гейтов там mt8183-шные: `CLK_INFRA_UNIPRO_SCK=61`,
+`CLK_INFRA_USB=90`. В стоковом DTB MT6771 у того же узла клоки `<0x15 0x5b>` и
+`<0x15 0x3e>` — **91 и 62**, ровно на 1 больше. Если биты гейтов уехали, IPPC не
+так hard-тактируется, `U3D_SSUSB_HW_SUB_ID` (IPPC+0xA4) читается 0, а запись
+«power on U2 port» уходит в никуда. Побочно это объясняет, почему eMMC/PMIC
+работают: их гейты оставил включёнными LK, а USB-гейты LK при передаче гасит.
+
+**Перепроверка вывода 02.11 «LK не принимает наш DTB» — не подтверждается:**
+DTB из дерева байт-в-байт равен DTB внутри `boot_ubuntu3.img` (`e11c39df…`) и
+внутри `boot_ubuntu4.img`; ядро с ним загрузилось до userspace (журнал выше).
+Оффлайн-валидатор LK против `dtbo_a` этого планшета — 10/10 ok. Протокол и
+инструменты: `docs/lk-dtb-verification.md`, `tools/lk/`.
+
+**Артефакты этой ночи:** `build/boot_ubuntu4.img`, `build/k1/…/Image`,
+`build/k1/…/mt6771-fplus-t1100.dtb`, initramfs `build/initramfs_root_usb.cpio.gz`;
+`build/full` после прерванного `merge_config` **рассогласован** — для сборки
+использовать `build/k1` (в нём тот же `.config`).
