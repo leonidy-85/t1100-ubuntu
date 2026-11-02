@@ -677,3 +677,38 @@ ping 10.42.66.66
 ssh root@10.42.66.66            # ключ ~/.ssh/id_ed25519 уже в authorized_keys
 ```
 Прошивка/логи без SSH — `tools/host/recovery.py` (recovery: `telnet 10.42.66.66`, меню `3` → `y`).
+
+## 03.11: фаза 2 в работе — KMS-стек поднят, экран чёрный
+
+Патчи `kernel-drm` 0021–0026 (панель IT6112/BOE TV110XUM-LB2, DSI0, MT6370 DSV,
+подсветка) собраны и прошиты (`build/boot_ubuntu7.img`). Стек KMS **работает**:
+
+```
+it6112_bridge 3-0056: IT6112 bridge found, product id 0x6112
+mediatek-drm: bound ovl*3/rdma*2/color/ccorr/aal/gamma/14014000.dsi
+[drm] Initialized mediatek 1.0.0 … ; fb0: mediatekdrmfb
+dummy 3-005e: RCLK=25MHz ; it6112_bridge: MCLK=199MHz
+```
+По SSH: `card0-DSI-1` = `connected`, `enabled`, `1600x2176`; `/dev/fb0`
+1600×2176 32bpp; CRTC `active=1`; подсветка `pwm-0 … duty 500000ns`
+(100 %), `gpio-568 (enable) out hi`, DSV `vpos/vneg` 5500 мВ.
+**Но экран чёрный** — картинка не доходит до панели.
+
+Диагностика без пересборки:
+- `devmem` недоступен (`/dev/mem` denied), `/proc/interrupts` для DSI = 0
+  (в video-mode IRQ не используются — не признак).
+- Собран `tools/i2cpeek`; регистры моста читаются и **совпадают с тем, что
+  писал драйвер**: TX `0x56`: `05=00 24=01 3c=23 44=0d 45=23 47=12 b0=27`;
+  RX `0x5e`: `09=ff 0a=ff 0b=3f 18=43 27=3e 72=07 0c=03 11=03 19=03 21=08
+  44=22 8a=02 a0=01 80=07`. `0x21 bit3` = RX автоопределил DSI video format ⇒
+  **DSI до моста доезжает**.
+- `kernel-drm` доказал (по таблице MIPI-ECC `sun6i_dsi_ecc_array`), что 4 байта
+  в регистр `0x73` — корректный short-packet с ECC (0x36/0x1c/0x2c/0x06), т.е.
+  DCS-протокол референса верен; и что 1534.8 Мбит/с у нас против 1580 у
+  вендора — не причина (лимиты downstream 1–2 Гбит/с, `posdiv=1`).
+
+**Следующий шаг:** патчи 0027 (поднять `stby-gpios` GPIO44 и `ext-pwr-gpios`
+GPIO175 — единственное известное расхождение с вендорным LCM; в стоковом dmesg
+`elink_configurate_gpio … stby-gpios … active = 1`) и 0028 (замеры клоков в
+`enable()` + дампы регистров моста «до потока / с потоком»), затем S2: повторная
+отправка `exit sleep`/`display on` через `i2cpeek` уже после снятия `HOLD_TX`.
