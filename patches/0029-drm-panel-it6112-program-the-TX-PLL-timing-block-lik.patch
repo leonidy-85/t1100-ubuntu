@@ -1,0 +1,235 @@
+From 715ccc62db1e4859175d339bd0ef70a32aa54ca6 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Tue, 3 Nov 2026 00:18:20 +0300
+Subject: [PATCH] drm/panel: it6112: program the TX PLL/timing block like the
+ stock LK
+
+The 6.16 WIP driver only carried a subset of what the stock bootloader
+does, and got two of the TX registers wrong. Reconstructed the real
+sequence from the stock LK (lk-verified.img, Thumb code 0x1ed9c..0x1eeb8,
+tv110xum_lb2 config struct at file offset 0x90ea8) - the stock 4.14
+kernel driver (built-in, symbols it6112_mipi_tx_init et al.) is only a
+re-init stub and never touches the PLL registers at all.
+
+What LK actually writes on the TX half (0x56):
+
+  0x05 bit0|bit5, 0xd0 = (cfg[0x14] << 2) = 0, 0x21 bit1 = 1,
+  0x23 = cfg[0x1c] = 0, 0x24 low nibble = cfg[0x1c] >> 8 = 0,
+  0x25 = cfg[0x18] = 0, 0x26 low nibble = cfg[0x18] >> 8 = 0,
+  0x3c low nibble = cfg[0x20] = 3, 0x10 bit5 = 1, 0x22 = cfg[0x21],
+  0x11 bit4 = 0 / bit3 = cfg[3] = 0 (8-lane), 0x10 bit1 = cfg[6] = 0,
+  0x3c bit5 = 1, 0x44 bit2 = cfg[0xa] = 1, 0x45 low nibble = cfg[0x24] = 4,
+  0x47 high nibble = 1, 0xb0 = 0x27, 0x1f = cfg[0x22]
+
+and with cfg[0xb] = 1 it recomputes 0x22/0x1f from the measured MCLK
+instead of using the static 0x40/0x80:
+
+  q     = 1e9 / mclk_khz
+  reg1f = ((6*q - K) / q) + 9          (or 3 when that is 0)
+  reg22 = ((K*8 - 3*q) / (2*q)) + 20   (8-lane variant)
+
+with K = 125 * (cfg[0x24] + 4) * cfg[0x61] = 20000. For the 193..199 MHz
+this board measures that gives 0x1f = 0x0b (the register default) and
+0x22 = 0x21..0x22, while the chip is currently left at its own 0x30.
+
+Registers 0x27, 0x46 and 0xd3 are *not* programmed for this panel:
+0x46 is only used when cfg[9] = 0, 0xd3 belongs to the cfg[0x55] = 2
+path. So "0x23/0x25/0x27/0x3d/0x3e are zero" is not evidence of a dead
+TX PLL: the dividers are zero in the working vendor configuration too.
+
+Also fix what the WIP driver got wrong: 0x24 low nibble is the high
+nibble of the PLL divider, not V_LPS time (writing 1 there corrupted the
+divider), 0x45 low nibble must be 4, and 0x05 wants bit0, not bit1.
+
+Measured MCLK is now kept in the context and the timing registers are
+programmed right before the DCS exit-sleep/display-on pair, as in LK.
+
+Signed-off-by: t1100 port <t1100@localhost>
+---
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 126 +++++++++++++++++-
+ 1 file changed, 120 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index d8880d2cf..2bdb7b3a6 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -25,6 +25,10 @@
+  *  - I2C write errors are actually reported (the original tested "reg",
+  *    not "ret", and logged every successful write as an error).
+  *  - detach only if attach succeeded.
++ *  - the TX PLL / timing block (0xd0, 0x21..0x26, 0x1f, 0x22, 0x45) is
++ *    programmed the way the stock LK does it, not the way the 6.16 original
++ *    guessed it: see it6112_tv110xum_lb2_init_tx() and
++ *    it6112_tx_calc_clk().
+  */
+ 
+ #include <linux/backlight.h>
+@@ -77,6 +81,7 @@ struct it6112_ctx {
+ 	struct gpio_desc *reset_gpio;
+ 	struct gpio_desc *stby_gpio;
+ 	struct gpio_desc *ext_pwr_gpio;
++	unsigned int mclk_khz;
+ };
+ 
+ static struct it6112_ctx *panel_to_it6112(struct drm_panel *panel)
+@@ -164,21 +169,124 @@ static void it6112_mipi_power_on(struct it6112_ctx *ctx)
+ 	mdelay(2);
+ }
+ 
++/*
++ * TX side of the bridge, transcribed from the stock LK's it6112 driver
++ * (lk-verified.img, Thumb code at 0x1ed9c..0x1eeb8) and the tv110xum_lb2
++ * config struct it is handed (file offset 0x90ea8). The values in that
++ * struct, in the order they are used:
++ *
++ *	cfg[0x03] = 0	TX lane mode: 0 -> 8 lanes (two 4-lane outputs)
++ *	cfg[0x06] = 0	no inverse MCLK
++ *	cfg[0x09] = 1	extended timing block, register 0x46 is not used
++ *	cfg[0x0a] = 1	0x44 bit2 (PRE_1T)
++ *	cfg[0x0b] = 1	recompute 0x22/0x1f from the measured MCLK
++ *	cfg[0x0c] = 1	0x21 bit1 (PLL mode selector)
++ *	cfg[0x14] = 0	0xd0 (PLL reference divider)
++ *	cfg[0x18] = 0	0x25 + 0x26 low nibble (PLL divider M)
++ *	cfg[0x1c] = 0	0x23 + 0x24 low nibble (PLL divider N)
++ *	cfg[0x20] = 3	0x3c low nibble
++ *	cfg[0x21] = 0x40	0x22, overwritten by the MCLK formula
++ *	cfg[0x22] = 0x80	0x1f, overwritten by the MCLK formula
++ *	cfg[0x23] = 1	0x11 bit4 is cleared
++ *	cfg[0x24] = 4	0x45 low nibble
++ *	cfg[0x55] = 0	no extra 0x78/0xd3 programming
++ *	cfg[0x61] = 20	used by the MCLK formula
++ *
++ * Note that LK sets bit0 (not bit1) of 0x05 before the TX block: the
++ * "SW_RST" bit in the 6.16 original is a misread of this sequence.
++ */
+ static void it6112_tv110xum_lb2_init_tx(struct it6112_ctx *ctx)
+ {
+-	/* Reversed LK init config */
+-	it6112_mipi_tx_set_bits(ctx, 0x5, IT6112_SW_RST, IT6112_SW_RST);
+-	it6112_mipi_tx_set_bits(ctx, 0x5, IT6112_HOLD_TX, IT6112_HOLD_TX);
++	it6112_mipi_tx_set_bits(ctx, 0x05, 0x01, 0x01);
++	it6112_mipi_tx_set_bits(ctx, 0x05, IT6112_HOLD_TX, IT6112_HOLD_TX);
++
++	/* TX PLL reference divider */
++	it6112_mipi_tx_set_bits(ctx, 0xd0, 0xfc, 0x00);
++	mdelay(2);
++
++	/* PLL mode selector */
++	it6112_mipi_tx_set_bits(ctx, 0x21, 0x02, 0x02);
++
++	/* PLL divider N: low byte on 0x23, high nibble on 0x24 */
++	it6112_mipi_tx_write(ctx, 0x23, 0x00);
++	it6112_mipi_tx_set_bits(ctx, 0x24, IT6112_MIPI_TX_V_LPS_TIME, 0x00);
++
++	/* PLL divider M: low byte on 0x25, high nibble on 0x26 */
++	it6112_mipi_tx_write(ctx, 0x25, 0x00);
++	it6112_mipi_tx_set_bits(ctx, 0x26, IT6112_MIPI_TX_LPX_NUM, 0x00);
++
++	it6112_mipi_tx_set_bits(ctx, 0x3c, 0x0f, 0x03);
++	it6112_mipi_tx_set_bits(ctx, 0x10, 0x20, 0x20);
++
++	/* Extended timing block (cfg[9] = 1; with cfg[9] = 0 LK instead
++	 * writes 0x46 high nibble = 0xf0 and stops here). */
++	it6112_mipi_tx_set_bits(ctx, 0x11, 0x10, 0x00);
+ 	it6112_mipi_tx_set_bits(ctx, 0x10, IT6112_TX_INVERSE_MCLK, 0);
+ 	it6112_mipi_tx_set_bits(ctx, 0x11, IT6112_MIPI_TX_LANE_MODE,
+ 			       IT6112_MIPI_TX_8LANE_MODE);
+-	it6112_mipi_tx_set_bits(ctx, 0x24, IT6112_MIPI_TX_V_LPS_TIME, 1);
+ 	it6112_mipi_tx_set_bits(ctx, 0x3c, 0x20, 0x20);
+ 	it6112_mipi_tx_set_bits(ctx, 0x44, IT6112_MIPI_TX_PRE_1T_EN,
+ 			       IT6112_MIPI_TX_PRE_1T_EN);
+-	it6112_mipi_tx_set_bits(ctx, 0x45, IT6112_MIPI_TX_LPX_NUM, 3);
++	it6112_mipi_tx_set_bits(ctx, 0x45, IT6112_MIPI_TX_LPX_NUM, 0x04);
+ 	it6112_mipi_tx_set_bits(ctx, 0x47, IT6112_MIPI_TX_HS_PREPARE, 16);
+ 	it6112_mipi_tx_set_bits(ctx, 0xb0, 0xff, 0x27);
++
++	/* 0x22 and 0x1f are programmed by it6112_tx_calc_clk() as soon as
++	 * the bridge has a locked MCLK. */
++	mdelay(2);
++}
++
++/*
++ * LK derives the two remaining TX timing registers from the MCLK it measures
++ * on the RX side (function at 0x1eef6 in lk-verified.img):
++ *
++ *	q     = 1e9 / mclk_khz
++ *	reg1f = ((6*q - K) / q) ? ((6*q - K) / q) + 9 : 3        [0x1f]
++ *	reg22 = ((K*8 - 3*q) / (2*q)) + 20                       [0x22]
++ *
++ * with K = 125 * (cfg[0x24] + 4) * cfg[0x61] = 125 * 8 * 20 = 20000 and the
++ * 3*q / 2*q accumulator being the 8-lane (cfg[3] = 0) variant.
++ *
++ * For the MCLK range this hardware measures (193..199 MHz) that yields
++ * 0x22 = 0x21..0x22 and 0x1f = 0x0b, i.e. 0x1f agrees with the register
++ * default while 0x22 does not - the chip currently runs with its own 0x30.
++ */
++#define IT6112_TX_CLK_K		20000
++
++static void it6112_tx_calc_clk(struct it6112_ctx *ctx)
++{
++	u32 q, acc, div, reg1f, reg22;
++
++	if (!ctx->mclk_khz) {
++		dev_warn(&ctx->i2c_mipi_tx->dev,
++			 "no MCLK measurement, TX timing registers left alone\n");
++		return;
++	}
++
++	q = 1000000000u / ctx->mclk_khz;
++	if (!q)
++		return;
++
++	acc = 3 * q;
++	div = 2 * q;
++
++	if (IT6112_TX_CLK_K >= 6 * q)
++		reg1f = 3;
++	else
++		reg1f = ((6 * q - IT6112_TX_CLK_K) / q) + 9;
++
++	if (acc >= IT6112_TX_CLK_K * 8)
++		reg22 = 20;
++	else
++		reg22 = ((IT6112_TX_CLK_K * 8 - acc) / div) + 20;
++	reg22 &= 0xff;
++
++	it6112_mipi_tx_write(ctx, 0x22, reg22);
++	it6112_mipi_tx_write(ctx, 0x1f, reg1f & 0xff);
++
++	dev_info(&ctx->i2c_mipi_tx->dev,
++		 "TX clk: MCLK=%u kHz -> 0x22=0x%02x 0x1f=0x%02x\n",
++		 ctx->mclk_khz, reg22, reg1f & 0xff);
+ }
+ 
+ static void it6112_tv110xum_lb2_init_rx(struct it6112_ctx *ctx)
+@@ -254,10 +362,12 @@ static void it6112_mipi_rx_calc_clk(struct it6112_ctx *ctx)
+ 
+ 	mclk = rclk * 2048 / sum;
+ 
++	ctx->mclk_khz = mclk;
+ 	dev_info(&ctx->i2c_mipi_tx->dev, "MCLK=%dMHz\n", mclk / 1000);
+ 	return;
+ 
+ out:
++	ctx->mclk_khz = 0;
+ 	dev_warn(&ctx->i2c_mipi_tx->dev,
+ 		 "MCLK measurement failed, bridge clock left untouched\n");
+ }
+@@ -324,9 +434,13 @@ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ 	 * mtk_dsi powers its PHY on (drm_atomic_bridge_chain_pre_enable()
+ 	 * walks the chain in reverse), so the counters only ever see a
+ 	 * free-running clock.
++	 *
++	 * LK measures the clocks, programs 0x22/0x1f from them and only then
++	 * pushes the DCS commands, so do the same here.
+ 	 */
+-	it6112_dump(ctx, "stream-on");
+ 	it6112_mipi_rx_calc_clk(ctx);
++	it6112_tx_calc_clk(ctx);
++	it6112_dump(ctx, "stream-on");
+ 
+ 	it6112_mipi_tx_set_bits(ctx, 0x11, 0x80, 0x80);
+ 	msleep(10);
+-- 
+2.53.0
+

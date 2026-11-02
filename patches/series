@@ -26,3 +26,4 @@
 0026-arm64-dts-t1100-enable-the-DSI0-display-path-and-the.patch
 0027-drm-panel-it6112-drive-the-bridge-STBY-and-EXT_PWR-p.patch
 0028-drm-panel-it6112-measure-the-bridge-clocks-while-the.patch
+0029-drm-panel-it6112-program-the-TX-PLL-timing-block-lik.patch
