@@ -17,3 +17,4 @@
 0017-arm64-dts-t1100-give-MSDC0-MSDC1-their-pinctrl-state.patch
 0018-usb-mtu3-log-the-UDC-name-once-it-is-registered.patch
 0019-arm64-dts-t1100-own-non-nomap-ramoops-region-at-0x70.patch
+0020-phy-mediatek-tphy-force-the-MT6771-U2-PHY-into-a-dev.patch

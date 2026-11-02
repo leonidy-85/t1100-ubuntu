@@ -1,0 +1,131 @@
+From d7e8f7f1dd8663eb3304f6ef09fd87ee63e7fe01 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Mon, 2 Nov 2026 20:24:25 +0300
+Subject: [PATCH] phy: mediatek: tphy: force the MT6771 U2 PHY into a device
+ session
+
+On the Fplus T1100 (MT6771) the gadget reaches userspace - UDC "mtu3"
+registered, usb0 up, configfs RNDIS bound, mtu3 prints "pullup D+" - but
+the host never sees a connect event at all. The MAC and IPPC are alive:
+ssusb_check_clocks() passes, the IPPC USB/UNIPRO_SCK gate bits are
+identical to MT8183 (INFRA2 bit 1 and bit 11, verified against the
+MT6771 downstream clk driver), and the topckgen usb_top_sel/
+ssusb_top_xhci_sel muxes are at the same 0xb0 register with the same
+bits. So the missing pull-up is below the MAC, in the T-PHY.
+
+mainline's u2_phy_instance_power_on() only writes the *registered*
+RG_VBUSVALID/RG_AVALID/RG_SESSEND values and relies on the hardware
+IDDIG/VBUS comparators. On MT6771 those inputs come from the Type-C
+controller (MT6370 TCPC, disabled in our DTS) and the PHY stays out of
+device mode, so the MAC's SOFTCONN pull-up never reaches D+. The vendor
+PHY code (mtk-phy-asic.c, usb_phy_recover()) does not rely on them: it
+forces VBUSVALID=1/AVALID=1/SESSEND=0, and the MT6771 T-PHY is
+documented as having broken hardware dual-role (see the
+"phy: mediatek: tphy: Add software role switching" work by the same
+board's mt6771-next port).
+
+Add an opt-in "mediatek,force-device-mode" property that forces those
+session bits plus IDDIG=1 in u2_phy_instance_power_on(), clears them in
+power_off(), and logs DTM1 before/after on every power_on so the next
+boot log can prove the register write. Enable it for &u2port0 on the
+T1100.
+
+Files:
+  drivers/phy/mediatek/phy-mtk-tphy.c
+  arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  |  7 +++++
+ drivers/phy/mediatek/phy-mtk-tphy.c           | 31 +++++++++++++++++++
+ 2 files changed, 38 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 9aa12a342..b7bc60dbf 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -483,6 +483,13 @@ &usb_host {
+ 
+ &u2port0 {
+ 	mediatek,pre-emphasis = <3>;
++	/*
++	 * MT6771 does not bring its U2 PHY out of host mode on its own and the
++	 * Type-C role/VBUS inputs run through the (currently disabled) MT6370,
++	 * so the PHY never sees a valid device session and the MAC's SOFTCONN
++	 * pull-up stays off the wire. Force device mode in the T-PHY.
++	 */
++	mediatek,force-device-mode;
+ 	status = "okay";
+ };
+ 
+diff --git a/drivers/phy/mediatek/phy-mtk-tphy.c b/drivers/phy/mediatek/phy-mtk-tphy.c
+index 3f7095ec5..b99905225 100644
+--- a/drivers/phy/mediatek/phy-mtk-tphy.c
++++ b/drivers/phy/mediatek/phy-mtk-tphy.c
+@@ -112,6 +112,9 @@
+ #define U3P_U2PHYDTM1		0x06C
+ #define P2C_RG_UART_EN			BIT(16)
+ #define P2C_FORCE_IDDIG		BIT(9)
++#define P2C_FORCE_AVALID		BIT(10)
++#define P2C_FORCE_SESSEND		BIT(12)
++#define P2C_FORCE_VBUSVALID		BIT(13)
+ #define P2C_RG_VBUSVALID		BIT(5)
+ #define P2C_RG_SESSEND			BIT(4)
+ #define P2C_RG_AVALID			BIT(2)
+@@ -332,6 +335,7 @@ struct mtk_phy_instance {
+ 	int pre_emphasis;
+ 	bool bc12_en;
+ 	bool type_force_mode;
++	bool force_device_mode;
+ };
+ 
+ struct mtk_tphy {
+@@ -899,6 +903,26 @@ static void u2_phy_instance_power_on(struct mtk_tphy *tphy,
+ 
+ 		mtk_phy_set_bits(com + U3P_U2PHYDTM0, P2C_RG_SUSPENDM | P2C_FORCE_SUSPENDM);
+ 	}
++
++	/*
++	 * Some mobile SoCs (MT6771 among them) do not drive the U2 PHY out of
++	 * host mode by themselves: IDDIG and the session comparators come from
++	 * a Type-C controller that mainline may not manage. Without this the
++	 * MAC's SOFTCONN pull-up never reaches D+. Force the device session
++	 * with the same values the vendor usb_phy_recover() uses:
++	 * VBUSVALID/AVALID = 1, SESSEND = 0, IDDIG = 1.
++	 */
++	if (instance->force_device_mode) {
++		u32 dtm1 = readl(com + U3P_U2PHYDTM1);
++
++		mtk_phy_set_bits(com + U3P_U2PHYDTM1,
++			P2C_FORCE_IDDIG | P2C_RG_IDDIG |
++			P2C_FORCE_AVALID | P2C_FORCE_SESSEND |
++			P2C_FORCE_VBUSVALID);
++		dev_info(&instance->phy->dev,
++			 "forced device session: DTM1 %#08x -> %#08x\n",
++			 dtm1, readl(com + U3P_U2PHYDTM1));
++	}
+ 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
+ }
+ 
+@@ -922,6 +946,11 @@ static void u2_phy_instance_power_off(struct mtk_tphy *tphy,
+ 		mtk_phy_clear_bits(com + U3D_U2PHYDCR0, P2C_RG_SIF_U2PLL_FORCE_ON);
+ 	}
+ 
++	if (instance->force_device_mode)
++		mtk_phy_clear_bits(com + U3P_U2PHYDTM1,
++			P2C_FORCE_IDDIG | P2C_FORCE_AVALID |
++			P2C_FORCE_SESSEND | P2C_FORCE_VBUSVALID);
++
+ 	dev_dbg(tphy->dev, "%s(%d)\n", __func__, index);
+ }
+ 
+@@ -1149,6 +1178,8 @@ static void phy_parse_property(struct mtk_tphy *tphy,
+ 		return;
+ 
+ 	instance->bc12_en = device_property_read_bool(dev, "mediatek,bc12");
++	instance->force_device_mode =
++		device_property_read_bool(dev, "mediatek,force-device-mode");
+ 	device_property_read_u32(dev, "mediatek,eye-src",
+ 				 &instance->eye_src);
+ 	device_property_read_u32(dev, "mediatek,eye-vrt",
+-- 
+2.53.0
+
