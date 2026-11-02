@@ -16,6 +16,7 @@ mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev 2>/dev/null
 mkdir -p /mnt /sys/kernel/config
+mount -t configfs none /sys/kernel/config 2>/dev/null
 
 expdb_dump() {
   # p3 = expdb (2 MiB, vendor debug area, safe to overwrite)
