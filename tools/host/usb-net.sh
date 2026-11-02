@@ -21,6 +21,9 @@ iface() {
 up() {
   i=$(iface)
   [ -n "$i" ] || { echo "no USB net interface"; return 1; }
+  # NetworkManager manages new USB NICs and drops a manual address a minute
+  # later (symptom: ping works, then "No route to host"). Unmanage it first.
+  command -v nmcli >/dev/null && nmcli device set "$i" managed no 2>/dev/null
   ip addr flush dev "$i" 2>/dev/null
   ip addr add "$HOST_IP" dev "$i"
   ip link set "$i" up
