@@ -18,3 +18,9 @@
 0018-usb-mtu3-log-the-UDC-name-once-it-is-registered.patch
 0019-arm64-dts-t1100-own-non-nomap-ramoops-region-at-0x70.patch
 0020-phy-mediatek-tphy-force-the-MT6771-U2-PHY-into-a-dev.patch
+0021-drm-panel-add-the-ITE-IT6112-BOE-TV110XUM-LB2-panel-.patch
+0022-drm-mediatek-dsi-take-the-per-lane-rate-limit-from-t.patch
+0023-arm64-dts-t1100-keep-the-LCM-DVDD-rail-and-its-I2C-s.patch
+0024-arm64-dts-t1100-enable-the-MT6370-DSV-rails-for-the-.patch
+0025-arm64-dts-t1100-enable-the-display-backlight.patch
+0026-arm64-dts-t1100-enable-the-DSI0-display-path-and-the.patch
