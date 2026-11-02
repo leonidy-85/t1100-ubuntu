@@ -513,3 +513,46 @@ overlay, `/__symbols__`, форма `/chosen`). Экранная консоль 
 того, как LK начнёт передавать управление нашему ядру.
 
 Планшет восстановлен: Aurora 5.1.6.230, `boot_a` = сток (`9601bcd6…`).
+
+## 02.11 (вечер, lead): проверка «LK не принимает DTB» — не подтверждается
+
+**Факт 1. Наш DTB в дереве байт-в-байт равен DTB из образа, который загрузился.**
+DTB вынут из `build/boot_ubuntu3.img` (тот самый прогон, что дал лог
+`/proc/last_kmsg` от 30–31.10: 6.12 → userspace, eMMC HS400, pstore) и сравнён
+со сборкой текущего дерева (`cpp -D__DTS__` + `dtc`):
+оба — `52900` Б, sha256 `e11c39df…80e186`, `cmp` → идентичны. Значит вывод
+02.11 «LK по-прежнему не принимает наш DTB» **не доказан**: уличаемого
+различия DTB нет, а артефактов того прогона в `build/` не осталось (новых
+файлов за 02.11, кроме `build/lk/lk_ubuntu_final.txt`, нет), т.е. точный
+прошитый образ неизвестен. Повторять «правку правил LK» по этой гипотезе не
+имеет смысла.
+
+**Факт 2. Что реально лежит на плате (снято через recovery).**
+- `p29` (`boot_a`) = `build/boot_ubuntu3.img`: `ANDROID!`, kernel `14485775` @
+  `0x40080000`, ramdisk `1031181`, DTB `52964` (MTK-обёртка = 0x40 + 52900),
+  cmdline `… root=/dev/mmcblk0p54 rootwait rw panic=10 …`.
+- `p54` — Ubuntu 24.04.3 LTS, 587 МБ занято: `/usr/lib/systemd/systemd` (133 КБ),
+  `/sbin/init → ../lib/systemd/systemd`, `ssh.service` и
+  `systemd-networkd.service` **включены**, есть
+  `/etc/systemd/network/usb0.network` → `Address=10.42.66.66/29`.
+- Значит rootfs готов; логи 30.10 снимались, когда systemd ещё не был
+  установлен.
+
+**Факт 3. Причина паники 30.10 — не eMMC и не initramfs.** В логе
+`EXT4-fs (mmcblk0p54): mounted filesystem … r/w` (t=1.395), сразу за ним
+`Attempted to kill init! … Comm: switch_root` (t=1.403): `switch_root` ушёл с
+кодом 1, потому что в rootfs тогда не было `/sbin/init`. Теперь он есть ⇒
+образ можно просто перезагрузить, ничего не меняя в DTB/ядре.
+
+**Факт 4. mtu3 по логу:** probe проходит (`dr_mode: 2` = peripheral, задан DT,
+`USB_MTU3_DUAL_ROLE=y`, `# CONFIG_USB_MTU3_HOST is not set` — принудительный
+host-режим исключён), но `IP version 0x0` против `0x20160812` у вендора ⇒
+регистр `U3D_SSUSB_IP_TRUNK_VERS` в IPPC на MT6771 лежит иначе, чем в
+`mt8183.dtsi`. Наличие `/sys/class/udc` этим логом не проверялось.
+
+**Решение:** идём дальше по функциональной ветке, а не по «правилам LK»:
+пересобрать ядро текущим деревом (патчи 0001–0019, в т.ч. лог UDC из 0018),
+initramfs теперь сам поднимает RNDIS + `telnetd` на 2323 до `switch_root`
+(канал, переживающий `switch_root`) и пишет снимки `dmesg` в `p3` (expdb),
+затем `switch_root` в Ubuntu. Проверка — USB-сеть с хоста
+(`tools/host/usb-net.sh`), без похода в recovery.
