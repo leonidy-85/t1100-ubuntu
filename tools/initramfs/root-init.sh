@@ -1,31 +1,86 @@
 #!/bin/busybox sh
+# T1100 (MT6771) initramfs init: boot Ubuntu from eMMC, and open a debug
+# channel over USB *before* switching root.
+#
+# Channels (no UART on this tablet):
+#   1. dmesg snapshot -> expdb (p3), readable from recovery with dd/grep
+#   2. ramoops/pstore in RAM (own region at 0x70000000 from the DTB)
+#   3. RNDIS gadget + busybox telnetd on port 2323 (survives switch_root,
+#      because the process keeps running after the initramfs is deleted)
+#   4. the same logs copied into /var/log/pstore on the rootfs
+set -x
+
 /bin/busybox --install -s /bin
 export PATH=/bin
 mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev 2>/dev/null
-mkdir -p /mnt
+mkdir -p /mnt /sys/kernel/config
+
+expdb_dump() {
+  # p3 = expdb (2 MiB, vendor debug area, safe to overwrite)
+  {
+    echo "=== T1100-INITRAMFS $1 uptime=$(cat /proc/uptime) ==="
+    dmesg
+    echo "=== UDC: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ') ==="
+    echo "=== net: $(ifconfig 2>/dev/null | tr '\n' '|') ==="
+    echo "=== END $1 ==="
+  } | dd of=/dev/mmcblk0p3 bs=4096 conv=fsync 2>/dev/null
+  sync
+}
+
+# --- USB: RNDIS + telnet shell ------------------------------------------------
+usb_up() {
+  udc=$(ls /sys/class/udc 2>/dev/null | head -n 1)
+  [ -n "$udc" ] || { echo "no UDC yet"; return 1; }
+  G=/sys/kernel/config/usb_gadget/t1100
+  [ -d "$G" ] && return 0
+  mkdir -p "$G" || return 1
+  echo 0x1d6b > "$G/idVendor"
+  echo 0x0104 > "$G/idProduct"
+  echo 0x0100 > "$G/bcdDevice"
+  echo 0x0200 > "$G/bcdUSB"
+  mkdir -p "$G/strings/0x409"
+  echo "T1100-0001" > "$G/strings/0x409/serialnumber"
+  echo "Fplus"      > "$G/strings/0x409/manufacturer"
+  echo "T1100 Ubuntu" > "$G/strings/0x409/product"
+  mkdir -p "$G/configs/c.1/strings/0x409"
+  echo "RNDIS" > "$G/configs/c.1/strings/0x409/configuration"
+  echo 250    > "$G/configs/c.1/MaxPower"
+  mkdir -p "$G/functions/rndis.usb0"
+  ln -s "$G/functions/rndis.usb0" "$G/configs/c.1/" 2>/dev/null
+  # busybox telnetd gives a shell even if systemd never comes up
+  telnetd -p 2323 -l /bin/sh >/dev/null 2>&1 &
+  echo "$udc" > "$G/UDC"
+  echo "UDC set to $udc"
+  sleep 2
+  for n in usb0 usb1 eth0; do
+    ifconfig "$n" 10.42.66.66 netmask 255.255.255.248 up 2>/dev/null && break
+  done
+  ifconfig -a
+}
+
+# --- wait for the root partition -------------------------------------------------
 i=0
 while [ $i -lt 30 ]; do
   [ -b /dev/mmcblk0p54 ] && break
   sleep 1; i=$((i+1))
 done
-echo "rootfs wait ${i}s; saving boot log to expdb (p3)"
-{
-  echo "=== T1100-INITRAMFS-RAN ==="
-  cat /sys/fs/pstore/console-ramoops 2>/dev/null
-  echo
-  echo "=== DMESG ==="
-  dmesg
-} | dd of=/dev/mmcblk0p3 bs=4096 conv=fsync 2>/dev/null
-sync
-echo "rootfs wait ${i}s; trying mount"
+echo "rootfs wait ${i}s"
+
+expdb_dump "before-usb"
+usb_up || echo "usb_up failed"
+expdb_dump "after-usb"
+
 if mount -t ext4 -o rw /dev/mmcblk0p54 /mnt; then
-  echo "rootfs mounted, saving pstore log, switching root"
   mkdir -p /mnt/var/log/pstore
+  dmesg > /mnt/var/log/pstore/dmesg-initramfs.txt 2>/dev/null
   cp /sys/fs/pstore/* /mnt/var/log/pstore/ 2>/dev/null
+  cp /proc/uptime /mnt/var/log/pstore/ 2>/dev/null
   sync
+  echo "switching root"
   exec switch_root /mnt /sbin/init
 fi
-echo "rootfs mount FAILED, dropping to shell"
-exec /bin/sh
+
+echo "rootfs mount FAILED, keeping telnet shell"
+while true; do sleep 3600; done
