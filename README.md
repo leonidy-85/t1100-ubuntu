@@ -4,7 +4,9 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус (31.10.2026): Ubuntu 24.04 загружается на планшете с eMMC.**
+> **Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
+> подтверждена косвенно (петли сбросов нет), лог подтверждения — следующий шаг.
+> Не хватает: USB-UDC (сеть), KMS-панели, GPU, KDE.**
 > Ядро mainline 6.12.114, rootfs Ubuntu-base 24.04 arm64 (systemd, ssh,
 > systemd-networkd) на разделе `p54`. Пока нет: USB-сети (UDC), DRM/KMS-панели,
 > GPU и KDE. Подробности — `docs/STATUS.md`, план — `docs/ubuntu-rootfs-plan.md`.
