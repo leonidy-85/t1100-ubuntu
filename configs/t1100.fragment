@@ -119,3 +119,10 @@ CONFIG_SYSFS=y
 # CONFIG_MTK_SVS is not set
 # CONFIG_ARM_MEDIATEK_CCI_DEVFREQ is not set
 # CONFIG_DRM_SIMPLEDRM is not set
+
+# --- display: panel power (MT6370 DSV) + IT6112/BOE panel (phase 2) ----------
+# VPOS/VNEG for the LCM come from the MT6370 DSV regulators; the panel itself is
+# a BOE TV110XUM-LB2 behind an ITE IT6112 MIPI-DSI bridge (i2c3 0x56/0x5e).
+CONFIG_MFD_MT6370=y
+CONFIG_REGULATOR_MT6370=y
+CONFIG_DRM_PANEL_IT6112_BOE_TV110XUM_LB2=y
