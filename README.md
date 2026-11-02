@@ -4,12 +4,20 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
+> **Статус (03.11.2026): фаза 1 принята — Ubuntu 24.04 с systemd загружается на
+> планшете, eMMC и USB-сеть работают, SSH доступен.**
+> mainline 6.12.114 + наши патчи 0001–0020: ядро доходит до `systemd running`
+> (`Startup finished in 3.5s (kernel) + 2.3s (userspace)`, нет failed units),
+> eMMC HS400 (`mmcblk0` 57.6 ГБ, 56 разделов), RAM 3.5 ГБ, USB-RNDIS гаджет
+> (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу (`tools/host/usb-net.sh up`).
+> Ключевые блокеры сняты: LK принимает наш DTB (`docs/lk-dtb-verification.md`),
+> T-PHY форсируется в device-сессию (патч 0020), USB-гаджет поднимается из
+> initramfs. **Не хватает: KMS-панели (фаза 2), GPU panfrost (фаза 3), KDE
+> (фаза 4).** Текущее состояние — `docs/STATUS.md`.
+>
+> ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
 > подтверждена косвенно (петли сбросов нет), лог подтверждения — следующий шаг.
-> Не хватает: USB-UDC (сеть), KMS-панели, GPU, KDE.**
-> Ядро mainline 6.12.114, rootfs Ubuntu-base 24.04 arm64 (systemd, ssh,
-> systemd-networkd) на разделе `p54`. Пока нет: USB-сети (UDC), DRM/KMS-панели,
-> GPU и KDE. Подробности — `docs/STATUS.md`, план — `docs/ubuntu-rootfs-plan.md`.
+> Не хватает: USB-UDC (сеть), KMS-панели, GPU, KDE.**~~
 >
 > ~~**Статус: boot-chain пройден** — mainline 6.12 запускается на планшете
 > (LK принимает наш DTB; см. `docs/lk-dtb-rules.md`, `docs/STATUS.md`).

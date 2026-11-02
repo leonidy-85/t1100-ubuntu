@@ -616,3 +616,64 @@ DTB из дерева байт-в-байт равен DTB внутри `boot_ubu
 `build/k1/…/mt6771-fplus-t1100.dtb`, initramfs `build/initramfs_root_usb.cpio.gz`;
 `build/full` после прерванного `merge_config` **рассогласован** — для сборки
 использовать `build/k1` (в нём тот же `.config`).
+
+## 03.11 (после полуночи 02.11): **USB работает, SSH в Ubuntu с планшета — фаза 1 закрыта**
+
+**Патч 0020 (форс device-сессии T-PHY) решил блокер с первого прогона.** Хост
+увидел гаджет на 20:37:13:
+
+```
+usb 1-1.3: New USB device found, idVendor=1d6b, idProduct=0104
+usb 1-1.3: Product: T1100 Ubuntu / Manufacturer: Fplus / SerialNumber: T1100-0001
+rndis_host 1-1.3:1.0 usb0: register 'rndis_host' ... → enxaa5eb20b97a3
+```
+Доказательство причины — строка самого патча:
+`phy phy-soc:t-phy@11f40000.0: forced device session: DTM1 0x000024 -> 0x003626`
+(было `RG_IDDIG=1` и ни `VBUSVALID`, ни `SESSEND`-форса ⇒ PHY считал себя
+хостом; после форса выставлены `FORCE_IDDIG|RG_IDDIG|FORCE_AVALID|
+FORCE_SESSEND|FORCE_VBUSVALID`).
+
+**Итог на 20:39 (по SSH):**
+```
+Linux t1100 6.12.114-gd7e8f7f1dd86 #2 SMP PREEMPT aarch64
+PRETTY_NAME="Ubuntu 24.04.3 LTS"
+systemctl is-system-running → running;  failed units → нет
+UDC 11201000.usb;  usb0 = 10.42.66.66, networkd State: routable (configured)
+mmcblk0 57.6G / mmcblk0p54 50.1G;  Mem 3542 MB;  load 0.00
+```
+Хост: `10.42.66.67/29` на `enx…` (RNDIS), `ping` 0.10–0.26 мс,
+`ssh root@10.42.66.66` по ключу — доступ есть.
+
+**Что было починено по дороге (важно для будущих сессий):**
+1. `patches/0020` — `mediatek,force-device-mode` в `phy-mtk-tphy` (+DT-флаг у
+   `&u2port0`). Клок-гипотеза **опровергнута**: гейты USB у MT6771 и MT8183
+   совпадают побитно (INFRA2 bit 1/bit 11), раскладка IPPC тоже; ID в стоковом
+   заголовке — просто «+1» из-за занятого слота 0.
+2. В rootfs не было пользователя `sshd` → `ssh.service` падал
+   (`Privilege separation user sshd does not exist`). Добавлены
+   `sshd:x:110:` в passwd/group/shadow/gshadow, а также `sshd_config`,
+   `ssh_config`, `moduli`, хостовые ключи (ed25519/rsa) и
+   `root/.ssh/authorized_keys` (ключ этого хоста).
+3. initramfs: монтируется `devpts` (без него busybox `telnetd` рвёт соединение),
+   `chroot /mnt /usr/sbin/sshd -t` пишет результат в expdb.
+
+**Артефакты:** `build/boot_ubuntu6.img` (md5 `7a67a79d…`, sha256 `31fe2596…`),
+`Image` sha256 `59bfb0b4…` (`O=build/k1`), DTB `f8d935da…` (валидатор LK 10/10),
+`refs/device/dmesg-ubuntu6-ssh.txt.gz`.
+Откат: `build/boot_ubuntu5.img` / `boot_ubuntu4.img` / `boot_ubuntu3.img` /
+сток `../t1100/backup_5.1.6.110/boot_a_imaoff_nodiehard_nosig.img`.
+
+### Фаза 1 — принята
+Критерий «ядро+DTB грузятся до консоли/USB, RAM/eMMC видны» выполнен:
+mainline 6.12 + наш DTB → systemd `running`, eMMC HS400 и все 56 разделов,
+RAM 3.5 ГБ, USB-RNDIS и SSH. Дальше — **фаза 2 (KMS)**: `mediatek-drm` без
+DSI0/DPI0 не собирает CRTC (`Need at least one OVL device`), нужен `&dsi0`
++ панель BOE TV110XUM через IT6112 (`refs/it6112/`) и mmsys-route.
+
+### Как подключиться (для следующей сессии)
+```sh
+tools/host/usb-net.sh up        # 10.42.66.67/29 на RNDIS-интерфейсе (нужен root: sudo)
+ping 10.42.66.66
+ssh root@10.42.66.66            # ключ ~/.ssh/id_ed25519 уже в authorized_keys
+```
+Прошивка/логи без SSH — `tools/host/recovery.py` (recovery: `telnet 10.42.66.66`, меню `3` → `y`).

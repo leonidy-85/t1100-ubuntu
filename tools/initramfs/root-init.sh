@@ -15,7 +15,9 @@ export PATH=/bin
 mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev 2>/dev/null
-mkdir -p /mnt /sys/kernel/config
+mkdir -p /dev/pts /mnt /sys/kernel/config
+# busybox telnetd needs a pty; devtmpfs alone gives /dev/ptmx but no pts
+mount -t devpts none /dev/pts 2>/dev/null
 mount -t configfs none /sys/kernel/config 2>/dev/null
 
 expdb_dump() {
@@ -25,6 +27,10 @@ expdb_dump() {
     dmesg
     echo "=== UDC: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ') ==="
     echo "=== net: $(ifconfig 2>/dev/null | tr '\n' '|') ==="
+    if [ -f /tmp/sshd_t ]; then
+      echo "=== sshd -t ==="
+      cat /tmp/sshd_t
+    fi
     echo "=== END $1 ==="
   } | dd of=/dev/mmcblk0p3 bs=4096 conv=fsync 2>/dev/null
   sync
@@ -74,6 +80,9 @@ usb_up || echo "usb_up failed"
 expdb_dump "after-usb"
 
 if mount -t ext4 -o rw /dev/mmcblk0p54 /mnt; then
+  # is sshd startable at all? (its config/keys/users were repaired by hand)
+  { chroot /mnt /usr/sbin/sshd -t; echo "sshd -t rc=$?"; } > /tmp/sshd_t 2>&1
+  expdb_dump "pre-switch"
   mkdir -p /mnt/var/log/pstore
   dmesg > /mnt/var/log/pstore/dmesg-initramfs.txt 2>/dev/null
   cp /sys/fs/pstore/* /mnt/var/log/pstore/ 2>/dev/null
