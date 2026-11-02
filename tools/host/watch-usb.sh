@@ -13,7 +13,7 @@ set -u
 SECS=${1:-180}
 echo "watching for ${SECS}s; Ctrl-C to stop"
 timeout "$SECS" journalctl -k -f -o short-iso 2>/dev/null \
-  | grep --line-buffered -E "usb [0-9a-f]{4}:[0-9a-f]{4}|rndis|cdc_ether|mtu3|usb0" \
+  | grep --line-buffered -E "usb 1-|New USB device|idVendor|rndis|cdc_ether|mtu3|usb0|0e8d" \
   | while IFS= read -r line; do
       printf '%s\n' "$line"
       case "$line" in
