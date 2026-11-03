@@ -126,3 +126,10 @@ CONFIG_SYSFS=y
 CONFIG_MFD_MT6370=y
 CONFIG_REGULATOR_MT6370=y
 CONFIG_DRM_PANEL_IT6112_BOE_TV110XUM_LB2=y
+
+# --- bring-up debug: userspace access to SoC registers ----------------------
+# devmem access is needed to inspect the DSI/RDMA/OVL registers while the
+# display pipeline does not produce a picture; STRICT_DEVMEM stays off so that
+# io-mapped (non-RAM) ranges are readable.
+CONFIG_DEVMEM=y
+# CONFIG_STRICT_DEVMEM is not set
