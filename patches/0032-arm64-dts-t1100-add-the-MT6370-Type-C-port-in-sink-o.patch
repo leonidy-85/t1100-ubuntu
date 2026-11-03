@@ -1,0 +1,141 @@
+From abebd61d0032deb198cfb2c829c13720047e667f Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Tue, 3 Nov 2026 17:05:41 +0300
+Subject: [PATCH] arm64: dts: t1100: add the MT6370 Type-C port in sink-only
+ mode
+
+With the charger node in place the MT6370 runs its own BC1.2 engine, but
+nothing tells the port controller what is on the other end of the cable,
+and the stock DT has a full tcpc-dual/type_c_port0 stack for it (live DT:
+mt6370_pd_eint on GPIO41, mt-tcpc role_def 0x04). Add the mainline
+equivalent, deliberately reduced.
+
+The connector child is not optional: tcpci_parse_config() looks up a child
+named "connector" and fails the probe with "Can't find connector node."
+otherwise (drivers/usb/typec/tcpm/tcpci.c: tcpci_parse_config), and tcpm
+re-reads the same fwnode in tcpm_register_port(). Of the connector
+properties power-role is the only mandatory one (typec_get_fw_cap(),
+drivers/usb/typec/class.c:2233); sink-pdos is mandatory as soon as the
+port is a sink (tcpm.c:7315), source-pdos is not even read for
+TYPEC_PORT_SNK (tcpm.c:7287).
+
+Sink-only on purpose. The tablet's only interactive channel is the RNDIS
+gadget, and letting tcpm drive the USB role is what killed it before:
+
+  - tcpm resolves the role switch from the connector fwnode through the
+    endpoint graph (fwnode_usb_role_switch_get, drivers/usb/roles/class.c:
+    190 -> fwnode_graph_devcon_matches, drivers/base/property.c:1293) and
+    then requires class device whose fwnode is the remote port parent,
+    i.e. &ssusb, with the property "usb-role-switch" present;
+  - mtu3 only reads that property and registers the switch when
+    dr_mode != "peripheral" (mtu3_plat.c:275 early-out before line 302),
+    so with our dr_mode the lookup returns -EPROBE_DEFER and the TCPC
+    would never probe;
+  - if the port were moved to dr_mode = "otg" instead, mtu3's default
+    role is HOST unless role-switch-default-mode = "peripheral"
+    (mtu3_dr.c:287-291), i.e. the port would come up as a host.
+
+So neither ports/endpoint graph nor usb-role-switch is added: tcpm gets no
+role switch, keeps its hands off the PHY/MAC, and &u2port0's
+mediatek,force-device-mode plus dr_mode = "peripheral" stay authoritative.
+Charging does not depend on the TCPC at all - the charger node is a
+separate MFD child - so this patch is safe to drop if the TCPC misbehaves.
+
+Also not added: usb-otg-vbus-regulator. tcpci_mt6370 looks for a "vbus"
+supply on the tcpc node, not on the connector (devm_regulator_get_optional
+(dev, "vbus"), tcpci_mt6370.c: mt6370_tcpc_probe), and when it is absent
+tcpci_set_vbus() still exists and falls back to the standard TCPCI
+SRC/SINK VBUS commands (tcpci.c:523), so tcpm_register_port() does not
+fail. The boost is only needed to source VBUS, which a sink-only port
+never does.
+
+Requires CONFIG_TYPEC=y, CONFIG_TYPEC_TCPM=y, CONFIG_TYPEC_TCPCI=y,
+CONFIG_TYPEC_TCPCI_MT6370=y (all currently =m, and the image ships no
+modules).
+
+To verify on hardware: /sys/class/typec/port0 exists with power_role
+sink, dmesg shows no "Can't find connector node." / "Failed to register
+tcpci port", RNDIS still enumerates on the host, and /sys/class/
+power_supply/mt6370-charger/usb_type follows the attached charger.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 57 +++++++++++++++++++
+ 1 file changed, 57 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 860f6fa8c..b3479760c 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -25,6 +25,7 @@
+ #include <dt-bindings/iio/adc/mediatek,mt6370_adc.h>
+ #include <dt-bindings/input/input.h>
+ #include <dt-bindings/interrupt-controller/irq.h>
++#include <dt-bindings/usb/pd.h>
+ 
+ #include "mt6771.dtsi"
+ #include "mt6358.dtsi"
+@@ -310,6 +311,62 @@ charger {
+ 				      <&mt6370_adc MT6370_CHAN_IBAT>;
+ 		};
+ 
++		/*
++		 * Type-C port controller, sink only.
++		 *
++		 * The alert pad is GPIO41 (stock DT: mt6370_pd_eint,
++		 * interrupts = <0x29 ...>; mt6771-next: <&pio 41>), and it is
++		 * a different pad from the PMIC interrupt on GPIO10 above.
++		 * interrupts-extended is mandatory here: the node's parent is
++		 * the MT6370 irqchip, so plain "interrupts" would be decoded
++		 * as an MT6370 hw number.
++		 *
++		 * The connector child is mandatory, tcpci_parse_config() fails
++		 * with "Can't find connector node." without a child named
++		 * exactly "connector" (drivers/usb/typec/tcpm/tcpci.c:
++		 * tcpci_parse_config), and tcpci_mt6370 then hands that
++		 * fwnode to tcpm_register_port(). power-role is mandatory
++		 * there (typec_get_fw_cap(), drivers/usb/typec/class.c:2233);
++		 * with power-role = "sink" tcpm never reads source-pdos and
++		 * never tries to source VBUS (tcpm.c:7287), while sink-pdos
++		 * is required for a sink port (tcpm.c:7315).
++		 *
++		 * Deliberately no ports/endpoint graph to &ssusb and no
++		 * usb-role-switch on &ssusb: tcpm finds a role switch through
++		 * the connector's graph endpoints (fwnode_connection_find_
++		 * match -> fwnode_graph_devcon_matches, drivers/base/
++		 * property.c:1293) and would then drive mtu3's role. mtu3
++		 * only registers that switch when its node has
++		 * "usb-role-switch" and dr_mode != peripheral
++		 * (mtu3_plat.c:275/302), and its default role is host unless
++		 * role-switch-default-mode says otherwise (mtu3_dr.c:287).
++		 * So the graph link would either flip our RNDIS port to host
++		 * or - in peripheral mode - make tcpm defer forever on a role
++		 * switch nobody registers. Neither is needed to charge: the
++		 * charger above is an independent BC1.2 engine.
++		 *
++		 * pd-disable keeps the PD state machine out of the picture
++		 * for the first bring-up; sink-pdos documents the single 5 V
++		 * contract the port accepts.
++		 */
++		tcpc {
++			compatible = "mediatek,mt6370-tcpc";
++			interrupts-extended = <&pio 41 IRQ_TYPE_LEVEL_LOW>;
++
++			connector {
++				compatible = "usb-c-connector";
++				label = "USB-C";
++
++				power-role = "sink";
++				data-role = "device";
++				pd-disable;
++				op-sink-microwatt = <15000000>;
++
++				sink-pdos = <PDO_FIXED(5000, 3000,
++						       PDO_FIXED_USB_COMM)>;
++			};
++		};
++
+ 		regulators {
+ 			dsvbst {
+ 				regulator-name = "mt6370-dsv-vbst";
+-- 
+2.53.0
+

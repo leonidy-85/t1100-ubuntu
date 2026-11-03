@@ -1,0 +1,119 @@
+From 535830a96f0670af3f46f62ae2c2d3b4f1028098 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Tue, 3 Nov 2026 17:05:03 +0300
+Subject: [PATCH] arm64: dts: t1100: enable the MT6370 battery charger
+
+The tablet runs off the battery and drains in ~20 minutes because nothing
+in the kernel ever configures the charger: the MT6370 charger child of the
+sub-PMIC is absent from DT, and mt6370_probe() creates a platform device
+only for MFD_CELL_OF entries whose compatible exists as a child node
+(drivers/mfd/mt6370.c:133-145, matched in drivers/mfd/mfd-core.c:198), so
+mt6370-charger.c never probes and the BC1.2/input-limit state machine that
+the vendor tree runs in the PMIC never runs here at all.
+
+Add the charger child with the three IRQs the driver requests by name
+(mt6370-charger.c:828-846: attach_i, uvp_d_evt, mivr). The numbers 68/48/6
+are the MT6370 irqchip hw numbers (drivers/mfd/mt6370.h: MT6370_IRQ_
+OVPCTRL_UVP_D=68, MT6370_IRQ_ATTACH=48, MT6370_IRQ_CHG_MIVR=6); regmap-irq
+uses the ID as an array index (REGMAP_IRQ_REG_LINE, include/linux/regmap.h:
+1504), so they are the same numbers the mt6771-next port of this board
+uses. platform_get_irq_byname() resolves them through the child node's own
+interrupts/interrupt-names (drivers/base/platform.c:438), i.e. into the
+MT6370 irqchip declared 40 lines above, so no resources are needed in the
+MFD cell. The IRQ trigger stays that of the EINT pad (GPIO10, level low);
+the IRQF_TRIGGER_FALLING the driver passes is ignored by regmap_irq_set_type
+because the mt6370 lines carry no type info (regmap-irq.c:249).
+
+io-channels mirrors the binding order and is not cosmetic: the driver
+indexes the array (priv->iio_adcs[MT6370_ADC_CHAN_IBUS], mt6370-charger.c:
+345/376), so ibus must stay at position 5 and at least 6 entries must be
+present. The ADCs are only used by the MIVR workaround.
+
+Not added: usb-otg-vbus-regulator. It is the source-side (OTG) boost and
+regulator registration does not need it (regulator_of_get_init_node()
+returns NULL and registration continues, drivers/regulator/of_regulator.c:
+475-499), while the port stays sink-only.
+
+Requires CONFIG_MEDIATEK_MT6370_ADC=y, CONFIG_CHARGER_MT6370=y: without the
+ADC driver devm_iio_channel_get_all() in the charger probe defers forever.
+
+To verify on hardware: "mt6370-charger mt6370-charger.0" appears in
+/sys/bus/platform/drivers/mt6370-charger/, /sys/class/power_supply/
+mt6370-charger/ shows online/status/usb_type, and dmesg has no
+"Failed to ..." from the driver. Note the driver never touches F_CHG_EN,
+it only programs ICHG/IAICR and runs BC1.2, so charge enable stays as LK
+left it.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 42 +++++++++++++++++--
+ 1 file changed, 38 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 8dd898484..860f6fa8c 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -22,6 +22,7 @@
+ /dts-v1/;
+ 
+ #include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/iio/adc/mediatek,mt6370_adc.h>
+ #include <dt-bindings/input/input.h>
+ #include <dt-bindings/interrupt-controller/irq.h>
+ 
+@@ -253,10 +254,13 @@ panel_in: endpoint {
+ };
+ 
+ /*
+- * I2C5: MT6370 sub-PMIC. Only the DSV rails matter for the display path
+- * (vpos/vneg of the panel). The charger/TCPC/LED children of the vendor
+- * description are left out on purpose - MT6370 charging is not needed to
+- * reach userspace and the TCPC would fight the USB port we use for RNDIS.
++ * I2C5: MT6370 sub-PMIC: DSV rails for the panel (vpos/vneg), the battery
++ * charger and (see &i2c5 below the regulators) the Type-C port controller.
++ *
++ * mt6370_probe() instantiates one platform device per MFD_CELL_OF
++ * (drivers/mfd/mt6370.c:133) and only for children that exist in DT, so a
++ * child node is the on/off switch for a sub-driver. The flashlight and
++ * indicator children of the vendor description are still absent on purpose.
+  */
+ &i2c5 {
+ 	vbus-supply = <&i2c_vbus>;
+@@ -276,6 +280,36 @@ mt6370_adc: adc {
+ 			#io-channel-cells = <1>;
+ 		};
+ 
++		/*
++		 * Battery charger. The three IRQs are hw numbers inside the
++		 * MT6370 irqchip above (drivers/mfd/mt6370.h: 68 =
++		 * MT6370_IRQ_OVPCTRL_UVP_D "cable plugged", 48 =
++		 * MT6370_IRQ_ATTACH "BC1.2 done", 6 = MT6370_IRQ_CHG_MIVR);
++		 * regmap-irq uses the ID as the array index, so the numbers
++		 * are stable ABI and not register offsets. Same set as the
++		 * mt6771-next port of this board.
++		 *
++		 * io-channels order must match the driver's index, it reads
++		 * priv->iio_adcs[MT6370_ADC_CHAN_IBUS] = entry #5
++		 * (mt6370-charger.c:345,376), so "ibus" may not move and the
++		 * list may not be shortened below 6. The ADC channels are
++		 * only used for the MIVR workaround, charging itself does not
++		 * need them.
++		 */
++		charger {
++			compatible = "mediatek,mt6370-charger";
++			interrupts = <68>, <48>, <6>;
++			interrupt-names = "uvp_d_evt", "attach_i", "mivr";
++
++			io-channels = <&mt6370_adc MT6370_CHAN_VBUSDIV5>,
++				      <&mt6370_adc MT6370_CHAN_VBUSDIV2>,
++				      <&mt6370_adc MT6370_CHAN_VSYS>,
++				      <&mt6370_adc MT6370_CHAN_VBAT>,
++				      <&mt6370_adc MT6370_CHAN_TS_BAT>,
++				      <&mt6370_adc MT6370_CHAN_IBUS>,
++				      <&mt6370_adc MT6370_CHAN_IBAT>;
++		};
++
+ 		regulators {
+ 			dsvbst {
+ 				regulator-name = "mt6370-dsv-vbst";
+-- 
+2.53.0
+
