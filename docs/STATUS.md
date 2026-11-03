@@ -766,3 +766,38 @@ adomerle узел панели вообще был `status = "disabled"`, то �
 включить `CHARGER_MT6370` + `TYPEC_TCPCI_MT6370` и описать узлы в DTS, **не
 сломав peripheral-гаджет** (TCPC умеет перетягивать роль — из-за этого его
 раньше выключали).
+
+### 03.11: зарядка — патчи 0031/0032 и конфиг
+
+`bringup` подготовил:
+- **0031** (`armsoc dts`): узел `charger` (`mediatek,mt6370-charger`) с
+  `interrupts/interrupt-names` = `uvp_d_evt`/`attach_i`/`mivr` (hw-номера
+  irqchip MT6370: 68/48/6) и `io-channels` из `mt6370_adc` (порядок важен:
+  `ibus` — 5-й, короче 6 нельзя — драйвер индексирует массив);
+- **0032**: `tcpc` (`mediatek,mt6370-tcpc`) в **sink-only** (`power-role =
+  "sink"`, `data-role = "device"`, `pd-disable`) с `interrupts-extended` на
+  GPIO41; **без** `ports`/`usb-role-switch` — иначе при нашем
+  `dr_mode = "peripheral"` `mtu3` не регистрирует role-switch
+  (`mtu3_plat.c:275`, ранний `goto out`), tcpm получает `-EPROBE_DEFER`
+  навсегда; а при `dr_mode = "otg"` порт встаёт хостом и RNDIS/SSH умирает.
+
+Конфиг (добавлен в `configs/t1100.fragment`):
+```
+CONFIG_CHARGER_MT6370=y
+CONFIG_MEDIATEK_MT6370_ADC=y      # без него charger вечно в -EPROBE_DEFER (IIO-каналы)
+CONFIG_TYPEC=y                    # TYPEC=m блокирует сборку tcpm в ядро
+CONFIG_TYPEC_TCPM=y
+CONFIG_TYPEC_TCPCI=y
+CONFIG_TYPEC_TCPCI_MT6370=y
+```
+
+Известные ограничения, которые надо помнить на железе:
+- в mainline **нет топливомера** (`mt6358_gauge` вендорский) ⇒ в
+  `/sys/class/power_supply/` не будет `capacity`, только `mt6370-charger`
+  (`online`, `status`, `charge_type`, `usb_type`, лимиты) и
+  `tcpm-source-psy-mt6370-tcpc.N`;
+- `mt6370-charger` ставит `F_USBCHGEN=0` до прерывания `attach_i` и жёстко
+  пишет `ICHG=900 мА` (вендор ставил 2 А) — при необходимости поднимать из
+  userspace: `echo 2000000 > /sys/class/power_supply/mt6370-charger/constant_charge_current`;
+- процентов заряда не будет; «идёт ли заряд» = `online=1` + `status=Charging`
+  (+ рост `vbat` через IIO).

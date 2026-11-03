@@ -133,3 +133,15 @@ CONFIG_DRM_PANEL_IT6112_BOE_TV110XUM_LB2=y
 # io-mapped (non-RAM) ranges are readable.
 CONFIG_DEVMEM=y
 # CONFIG_STRICT_DEVMEM is not set
+
+# --- battery charging: MT6370 charger + Type-C (sink only) -------------------
+# The vendor kernel charges through the MT6370 charger and a vendor charging
+# framework; mainline has mt6370-charger + tcpci_mt6370. Without the ADC cell
+# the charger driver defers forever (it gets VBUS/IBUS/IBAT via IIO), and with
+# TYPEC=m (no modules in the image) the tcpm stack cannot be built in.
+CONFIG_CHARGER_MT6370=y
+CONFIG_MEDIATEK_MT6370_ADC=y
+CONFIG_TYPEC=y
+CONFIG_TYPEC_TCPM=y
+CONFIG_TYPEC_TCPCI=y
+CONFIG_TYPEC_TCPCI_MT6370=y
