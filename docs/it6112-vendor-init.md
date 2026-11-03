@@ -277,7 +277,7 @@ LK в рабочей последовательности пишет в него
 ### 8.5 Патч 0030
 
 `patches/0030-drm-panel-it6112-take-the-mode-timings-and-power-seq.patch`
-(коммит `cc74a5bfd` в `../linux-t1100`):
+(коммит `79d83faa7` в `../linux-t1100`):
 
 - тайминги → `1600×2176`, hsa 14, hbp/hfp 44/44, vsa 8, vbp 28, vfp 220,
   clock 248 356 кГц;

@@ -1,4 +1,4 @@
-From cc74a5bfd3d5666cceb39ba43dc48ac8c3308159 Mon Sep 17 00:00:00 2001
+From 79d83faa765a3505173a1d1b63a227a6362bd178 Mon Sep 17 00:00:00 2001
 From: bringup <bringup@t1100.local>
 Date: Tue, 3 Nov 2026 14:44:11 +0300
 Subject: [PATCH] drm/panel: it6112: take the mode timings and power sequence
@@ -33,11 +33,11 @@ no-op). Power-down mirrors the LK: rails off, 23 ms, EXT_PWR low.
 
 Signed-off-by: bringup <bringup@t1100.local>
 ---
- .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 112 +++++++++++++-----
- 1 file changed, 82 insertions(+), 30 deletions(-)
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 113 +++++++++++++-----
+ 1 file changed, 83 insertions(+), 30 deletions(-)
 
 diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
-index 2bdb7b3a6..5eb98c73b 100644
+index 2bdb7b3a6..a44075b25 100644
 --- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
 +++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
 @@ -29,6 +29,10 @@
@@ -133,7 +133,7 @@ index 2bdb7b3a6..5eb98c73b 100644
  
  	it6112_bridge_init(ctx);
  
-@@ -543,19 +584,33 @@ static int boe_tv110xum_lb2_unprepare(struct drm_panel *panel)
+@@ -543,19 +584,34 @@ static int boe_tv110xum_lb2_unprepare(struct drm_panel *panel)
  	regulator_bulk_disable(ARRAY_SIZE(ctx->regulators),
  			       ctx->regulators);
  
@@ -156,7 +156,8 @@ index 2bdb7b3a6..5eb98c73b 100644
 + */
  static const struct drm_display_mode boe_tv110xum_lb2_mode = {
 -	.clock = (1600 + 109 + 34 + 10) * (2176 + 220 + 28 + 8) * 60 / 1000,
-+	.clock = (1600 + 14 + 44 + 44) * (2176 + 8 + 28 + 220) * 60 / 1000,
++	/* 1702 x 2432 x 60.00 Hz = 248355840 Hz */
++	.clock = 248356,
  	.hdisplay = 1600,
 -	.hsync_start = 1600 + 109,
 -	.hsync_end = 1600 + 109 + 34,
@@ -174,7 +175,7 @@ index 2bdb7b3a6..5eb98c73b 100644
  	.width_mm = 166,
  	.height_mm = 226,
  };
-@@ -653,24 +708,21 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+@@ -653,24 +709,21 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
  
  	/*
  	 * The IT6112 only answers on I2C while DVDD and the DSV rails are up.
