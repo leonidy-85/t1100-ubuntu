@@ -27,3 +27,4 @@
 0027-drm-panel-it6112-drive-the-bridge-STBY-and-EXT_PWR-p.patch
 0028-drm-panel-it6112-measure-the-bridge-clocks-while-the.patch
 0029-drm-panel-it6112-program-the-TX-PLL-timing-block-lik.patch
+0030-drm-panel-it6112-take-the-mode-timings-and-power-seq.patch
