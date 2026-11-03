@@ -801,3 +801,35 @@ CONFIG_TYPEC_TCPCI_MT6370=y
   userspace: `echo 2000000 > /sys/class/power_supply/mt6370-charger/constant_charge_current`;
 - процентов заряда не будет; «идёт ли заряд» = `online=1` + `status=Charging`
   (+ рост `vbat` через IIO).
+
+### 03.11: «не выключается» — PSCI SYSTEM_OFF не снимает рельсы PMIC
+
+Симптом: `systemctl poweroff` не обесточивает плату, через время она сама
+перезагружается в нашу `boot_a`.
+
+Причина (по коду): обработчик выключения **был**, но не тот — для PSCI ≥ v0.2
+ядро безусловно ставит `pm_power_off = psci_sys_poweroff`
+(`drivers/firmware/psci/psci.c:630`), и `do_kernel_power_off()` подхватывает его
+как legacy-хендлер (`kernel/reboot.c:666-669`). На MT6771 `PSCI SYSTEM_OFF` не
+снимает рельсы PMIC (это делает PMIC по RTC-последовательности), поэтому
+получается сброс вместо выключения.
+
+Патч **0033** (`rtc: mt6397: power off MT6358/MT6397 through the RTC block`):
+в `rtc-mt6397.c` регистрируется `sys_off`-обработчик `SYS_OFF_MODE_POWER_OFF`
+(`SYS_OFF_PRIO_DEFAULT`), который пишет `RTC_BBPU = KEY`, дёргает `WRTGR`
+(`0x3a` для MT6358 / `0x3c` для MT6397) и ждёт снятия `CBUSY` — тем же
+`mtk_rtc_write_trigger()`, что уже есть в драйвере. `addr_base` берётся из
+MFD-ячейки (`MT6358_RTC_BASE 0x588`), поэтому DT менять не нужно. MT6323 не
+затронут (у него отдельная запись `mtk_rtc_data`).
+
+Проверка на железе: хвост dmesg должен содержать `Power down` и
+`mt6397-rtc ...: powering off`, после чего плата гаснет; если вместо этого
+`WARNING … Unable to power off system` — последовательность для MT6358 не
+подошла, сверять с LK/ATF. Watchdog исключён: `mtk_wdt` не стартует на probe, а
+`WDOG_STOP_ON_REBOOT` останавливает его на `SYS_POWER_OFF` раньше нашего
+обработчика.
+
+Попутно: host-side профиль NetworkManager был привязан к `enx*` и раздавал
+`10.42.66.67/29` любому RNDIS-устройству (в том числе чужому планшету
+Byterg MVK-2020); теперь интерфейс T1100 переименовывается udev-правилом в
+`t1100usb` по USB ID `1d6b:0104`, и профиль матчится по этому имени.
