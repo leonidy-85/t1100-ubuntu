@@ -26,6 +26,8 @@ USB-сеть работают, SSH доступен, батарея заряжа
   `patches/0001…0034` (0035 отключён, лежит как `wip-0035-*.disabled`).
 - Образы: `build/boot_ubuntu14.img` (md5 `38fe9c1f…`, зарядка+выключение, экран
   чёрный), `build/boot_ubuntu17.img` (md5 `36397256…`, + трасса DSI).
+- Rootfs-оверлей: `rootfs-overlay/` (страховка от разряда `t1100-power-guard`),
+  ставится `tools/host/install-power-guard.sh [host|--rootfs DIR]`.
 - Rootfs: `build/rootfs/rootfs-t1100.tar.gz`, на планшете — `p54` (ext4, метка
   `ubuntu`, Ubuntu 24.04 + systemd + sshd + root authorized_keys этого хоста).
 - Инструменты: `tools/host/{recovery.py,flash-ssh.sh,usb-net.sh,check-power.sh,
@@ -65,6 +67,10 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
    Прошивка: `tools/host/flash-ssh.sh <img> /dev/mmcblk0p29 [--reboot]` (по SSH)
    или `tools/host/recovery.py put <img> /dev/mmcblk0p29` (в recovery).
    **Без кабеля к ноутбуку доступа нет** — Wi-Fi в mainline не поддержан.
+1a. **Страховка от разряда** (сделана, на планшете не установлена):
+   `tools/host/install-power-guard.sh` — юнит `t1100-power-guard.timer` следит
+   за `vbat` и гасит плату ниже 3.5 В, `tools/host/watch-power.sh` показывает
+   баланс. Пороги/ток заряда — `/etc/default/t1100-power-guard`.
 2. **Дисплей — по порядку:**
    a. снять **безопасный** дамп: только DSI/PHY (`0x14014000…`, `0x11e50000…`),
       без `mmsys/ovl/rdma` (их чтение при выключенных PD вешает interconnect —
@@ -81,10 +87,10 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
       (только DSI + DCS), и посмотреть, появится ли картинка.
 3. **Дальше по плану:** GPU (panfrost, `&gpu`/`&mfg` сейчас disabled, нужны
    `mali-supply`/`sram-supply` и рабочие PD) → KDE Plasma/Wayland.
-4. **Мелочи:** в `mt6370-charger` поднять `constant_charge_current` до 2 А
-   (по умолчанию 900 мА, вендор ставил 2 А); вернуть `tcpc`, когда понадобится
-   OTG/host (сейчас отключён, `tcpci` не находит узел `connector`); топливомера
-   (проценты заряда) в mainline нет — только `status`/`current`.
+4. **Мелочи:** `constant_charge_current` = 2 А теперь поднимает
+   `t1100-power-guard` (драйвер сам ставит 900 мА); вернуть `tcpc`, когда
+   понадобится OTG/host (сейчас отключён, `tcpci` не находит узел `connector`);
+   топливомера (проценты заряда) в mainline нет — только `status`/`current`.
 
 ## Грабли (не наступать снова)
 
@@ -100,8 +106,13 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
 - `TCG/NetworkManager`: статический адрес на USB-интерфейсе сбрасывается, если
   NM управляет устройством — снимать с управления (`tools/host/usb-net.sh`).
 - RNDIS рвётся при уходе в suspend — sleep-таргеты замаскированы на планшете.
-- Зарядка от USB-порта ноутбука = 500 мА; при работе Ubuntu этого мало —
-  заряжать выключенным/в recovery или от 2 А зарядника.
+- Зарядка от USB-порта ноутбука = 500 мА (SDP): при работе Ubuntu это
+  отрицательный баланс. Больше не разряжается в ноль только благодаря
+  `t1100-power-guard` (гасит ниже 3.5 В), но работать так нельзя — нужен 2 А
+  зарядник, либо зарядка выключенным/в recovery.
+- **«boot on charger»**: после `poweroff` с воткнутым кабелем плата сама
+  включается от VBUS. Выключать и выдёргивать кабель, иначе цикл «включилась →
+  садится».
 
 ## Прочее по инфраструктуре
 

@@ -1,0 +1,176 @@
+#!/bin/sh
+# t1100-power-guard - deep-discharge protection for the Fplus T1100 (MT6771).
+#
+# В mainline нет топливомера (нет capacity%), поэтому следим за напряжением
+# батареи через IIO-канал MT6370 (`vbat`, мВ) и гасим систему, пока батарея
+# ещё жива. Запускается таймером `t1100-power-guard.timer` (раз в минуту).
+#
+# Настройки - /etc/default/t1100-power-guard.
+# Логи - journalctl -t t1100-power-guard (stdout сервиса идёт в journal).
+
+set -u
+
+CONF=/etc/default/t1100-power-guard
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+VBAT_LOW_MV=${VBAT_LOW_MV:-3500}
+VBAT_WARN_MV=${VBAT_WARN_MV:-3650}
+VBAT_OK_MV=${VBAT_OK_MV:-3900}
+SAMPLES=${SAMPLES:-3}
+ICHRG_UA=${ICHRG_UA:-2000000}
+IAICR_UA=${IAICR_UA:-}
+BRIGHTNESS_PERCENT=${BRIGHTNESS_PERCENT:-}
+
+# Пути переопределяемы - чтобы страховку можно было прогнать на фейковом дереве
+# без планшета (POWEROFF_CMD тоже, иначе выключит машину, на которой запущено).
+PS=${PS:-/sys/class/power_supply/mt6370-charger}
+IIO_ROOT=${IIO_ROOT:-/sys/bus/iio/devices}
+BL_ROOT=${BL_ROOT:-/sys/class/backlight}
+POWEROFF_CMD=${POWEROFF_CMD:-}
+STATE=${STATE:-/run/t1100-power-guard}
+VARDIR=${VARDIR:-/var/lib/t1100-power-guard}
+MARK=$VARDIR/low-battery-poweroff
+TAG=t1100-power-guard
+
+mkdir -p "$STATE" "$VARDIR" 2>/dev/null
+
+log() {
+	printf '%s\n' "$*"
+	if command -v logger >/dev/null 2>&1; then
+		logger -t "$TAG" -p daemon.notice "$*" 2>/dev/null
+	fi
+}
+
+# vbat в милливольтах: ищем IIO-канал с меткой vbat.
+vbat_mv() {
+	for l in "$IIO_ROOT"/iio:device*/in_voltage*_label; do
+		[ -r "$l" ] || continue
+		case "$(cat "$l" 2>/dev/null)" in
+		vbat|VBAT) ;;
+		*) continue ;;
+		esac
+		d=${l%_label}
+		raw=$(cat "${d}_raw" 2>/dev/null) || return 1
+		scale=$(cat "${d}_scale" 2>/dev/null)
+		[ -n "$scale" ] || scale=1
+		awk -v r="$raw" -v s="$scale" 'BEGIN {
+			v = r * s;
+			if (v > 10000) v /= 1000;   # канал может отдавать мкВ
+			printf "%d\n", v + 0.5;
+		}'
+		return 0
+	done
+	return 1
+}
+
+online=0
+[ -r "$PS/online" ] && online=$(cat "$PS/online" 2>/dev/null)
+[ -n "$online" ] || online=0
+
+# ---------------------------------------------------------------------------
+# 1. Ток заряда. Драйвер при probe жёстко ставит ICHG=900 мА (workaround), а
+#    IAICR (input current limit) приходит из BC1.2: от порта ноутбука это
+#    500 мА, чего при работающей Ubuntu не хватает - баланс отрицательный.
+#    Здесь поднимаем ICHG до 2 А, а IAICR - только если задан явно
+#    (завышать лимит порта хоста без спроса не будем).
+# ---------------------------------------------------------------------------
+if [ "$online" = 1 ] && [ -d "$PS" ]; then
+	if [ -w "$PS/constant_charge_current" ] && [ "$ICHRG_UA" -gt 0 ] 2>/dev/null; then
+		cur=$(cat "$PS/constant_charge_current" 2>/dev/null || echo 0)
+		if [ "${cur:-0}" -lt "$ICHRG_UA" ] 2>/dev/null; then
+			if echo "$ICHRG_UA" >"$PS/constant_charge_current" 2>/dev/null; then
+				log "заряд: constant_charge_current $cur -> $ICHRG_UA мкА"
+			else
+				log "заряд: не удалось поднять constant_charge_current (было $cur)"
+			fi
+		fi
+	fi
+	if [ -n "$IAICR_UA" ] && [ -w "$PS/input_current_limit" ]; then
+		cur=$(cat "$PS/input_current_limit" 2>/dev/null || echo 0)
+		if [ "${cur:-0}" -lt "$IAICR_UA" ] 2>/dev/null; then
+			if echo "$IAICR_UA" >"$PS/input_current_limit" 2>/dev/null; then
+				log "заряд: input_current_limit $cur -> $IAICR_UA мкА"
+			else
+				log "заряд: не удалось поднять input_current_limit (было $cur)"
+			fi
+		fi
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Подсветка. На время фазы 2 панель чёрная, но подсветка светит на 100% -
+#    это чистый расход. BRIGHTNESS_PERCENT=0 отключает вмешательство.
+# ---------------------------------------------------------------------------
+if [ -n "$BRIGHTNESS_PERCENT" ] && [ "$BRIGHTNESS_PERCENT" -ge 0 ] 2>/dev/null; then
+	for b in "$BL_ROOT"/*; do
+		[ -w "$b/brightness" ] && [ -r "$b/max_brightness" ] || continue
+		max=$(cat "$b/max_brightness" 2>/dev/null) || continue
+		[ "${max:-0}" -gt 0 ] 2>/dev/null || continue
+		want=$((max * BRIGHTNESS_PERCENT / 100))
+		have=$(cat "$b/brightness" 2>/dev/null || echo "$want")
+		if [ "${have:-0}" -gt "$want" ] 2>/dev/null; then
+			echo "$want" >"$b/brightness" 2>/dev/null &&
+				log "подсветка: $have -> $want (из $max, ${BRIGHTNESS_PERCENT}%)"
+		fi
+	done
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Напряжение батареи.
+# ---------------------------------------------------------------------------
+if ! vbat=$(vbat_mv); then
+	log "канал vbat в IIO не найден - страховка от разряда не работает"
+	exit 0
+fi
+
+now=$(date +%s)
+
+# Батарея заряжена - снимаем метку.
+if [ "$vbat" -ge "$VBAT_OK_MV" ] 2>/dev/null; then
+	rm -f "$MARK"
+fi
+
+# Прошлое выключение было по низкому заряду - напомнить один раз за загрузку.
+if [ -f "$MARK" ]; then
+	ts=$(sed -n 's/^ts=\([0-9]*\).*/\1/p' "$MARK" 2>/dev/null)
+	if [ -n "${ts:-}" ] && [ $((now - ts)) -lt 3600 ]; then
+		log "ВНИМАНИЕ: предыдущее выключение было по низкому заряду ($(cat "$MARK"))"
+		log "  заряжайте выключенным или из recovery: от USB-порта ноутбука идёт только 500 мА"
+	fi
+fi
+
+# Тревожная зона: пишем в journal не чаще раза в 15 минут.
+if [ "$vbat" -lt "$VBAT_WARN_MV" ] 2>/dev/null; then
+	last=$(cat "$STATE/warn-ts" 2>/dev/null || echo 0)
+	if [ $((now - last)) -ge 900 ]; then
+		echo "$now" >"$STATE/warn-ts"
+		log "низкий заряд: vbat=${vbat} мВ (порог тревоги ${VBAT_WARN_MV}), online=${online}"
+	fi
+fi
+
+# Порог отключения. На зарядке ждём втрое дольше: если напряжение не растёт
+# при подключённом VBUS, значит зарядка не тянет (или кабель/порт слабый).
+need=$SAMPLES
+[ "$online" = 1 ] && need=$((SAMPLES * 3))
+
+if [ "$vbat" -lt "$VBAT_LOW_MV" ] 2>/dev/null; then
+	c=$(cat "$STATE/low-count" 2>/dev/null || echo 0)
+	c=$((c + 1))
+	echo "$c" >"$STATE/low-count"
+	log "разряд: vbat=${vbat} мВ < ${VBAT_LOW_MV} мВ, отсчёт $c/$need (online=${online})"
+	if [ "$c" -ge "$need" ]; then
+		sync
+		printf 'ts=%s vbat=%s online=%s\n' "$now" "$vbat" "$online" >"$MARK"
+		log "КРИТИЧНО: выключаю плату, чтобы не разрядить батарею в ноль"
+		if [ -n "$POWEROFF_CMD" ]; then
+			$POWEROFF_CMD
+		else
+			systemctl poweroff --no-block 2>/dev/null || poweroff -f 2>/dev/null
+		fi
+	fi
+	exit 0
+fi
+
+echo 0 >"$STATE/low-count"
+exit 0

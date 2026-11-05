@@ -1,0 +1,9 @@
+[Unit]
+Description=T1100 low-battery guard (deep-discharge protection)
+Documentation=https://gitflic.ru/project/py6on/t1100-ubuntu
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/t1100-power-guard
+Nice=5

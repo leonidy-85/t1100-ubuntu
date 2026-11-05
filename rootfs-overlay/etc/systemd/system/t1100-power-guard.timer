@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the T1100 low-battery guard every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=t1100-power-guard.service
+
+[Install]
+WantedBy=timers.target

@@ -87,6 +87,7 @@ t1100-ubuntu/
 ├── patches/                   # изменения ядра (series + *.patch)
 ├── configs/t1100.fragment     # Kconfig-фрагмент (pstore, watchdog…)
 ├── scripts/                   # сборка, перепаковка boot, initramfs, root
+├── rootfs-overlay/            # файлы для rootfs (юнит-страховка от разряда…)
 ├── refs/                      # референсы: stock DTS, дампы, IT6112, mt6771-next
 └── .opencode/
     ├── agent/
