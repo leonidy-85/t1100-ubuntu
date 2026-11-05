@@ -8,6 +8,13 @@
         "headers": {
           "User-Agent": "opencode"
         }
+      },
+      "web-search": {
+        "type": "local",
+        "command": [
+          "/usr/bin/node",
+          "/home/l/projects/web-search/build/index.js"
+        ]
       }
     }
   }
