@@ -1,0 +1,290 @@
+From a5825e70e85390565036a55873e8efcb5fe508ec Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 5 Nov 2026 15:36:31 +0300
+Subject: [PATCH] drm/mediatek: dump the display pipeline registers once after
+ enable
+
+The T1100 panel stays black with the DSI path fully configured, and there
+is no way to look at the controller from userspace: /dev/mem reads of the
+DISP registers fail (devmem_is_allowed() under CONFIG_STRICT_DEVMEM), and
+the only log channel is the kernel console (ramoops).
+
+Add a one-shot dump of the whole path, printed 500 ms after the first
+CRTC enable - by then drm_atomic_bridge_chain_enable() (forward order,
+drivers/gpu/drm/drm_bridge.c) has run the DSI bridge enable, so DSI_START
+is set if the video stream was ever started, and the sticky OVL/RDMA
+interrupt status bits show whether frames and pixel data really moved.
+
+Dumped, one line per block, "name=value" in hex:
+
+  mmsys@14000000  cfg0, CG_CON0/1 (clk-mt8183-mm.c: 0x100/0x110) and the
+                  routing registers from mt8183-mmsys.h (0xf00 OVL0_MOUT,
+                  0xf04 OVL0_2L_MOUT, 0xf0c DITHER0_MOUT, 0xf24
+                  PATH0_SEL, 0xf2c DSI0_SEL, 0xf50 RDMA0_SOUT), SW0_RST
+  mutex@14016000  EN/MUTEX/RST/SOF/MOD/MOD2 (mtk-mutex.c, MT8183 layout:
+                  MOD 0x30, SOF 0x2c)
+  ovl0, ovl_2l0   INTEN/INTSTA/EN/RST/ROI/DATAPATH_CON/SRC_CON and the
+                  layer 0 CON/SIZE/OFFSET/PITCH/RDMA_CTRL/ADDR (0x0f40)
+  rdma0           INTEN/INTSTA/GLOBAL_CON/SIZE_CON/TARGET_LINE/MEM_CON/
+                  MEM_SRC_PITCH/MEM_GMC/MEM_START_ADDR(0x0f00)
+  dsi0            START/INTEN/INTSTA/CON/MODE/TXRX/PS/VSA/VBP/VFP/VACT/
+                  SIZE_CON/HSA/HBP/HFP/CMDQ_SIZE/CKL_WC/LCCON/LD0CON/
+                  TIMECON0-1/VM_CMD
+  mipi_tx0        resolved through the DSI node's "phys" phandle:
+                  LANE_CON/VOLTAGE_SEL/PLL_PWR/PLL_CON0-4/RTCODE/lane
+                  SW_CTL_EN/CK_CKMODE_EN
+
+Also prints the active mode with the porches it was derived from, so the
+programmed values can be checked against it.
+
+Gated by the "dump_regs" module parameter (default on) and done at most
+once per CRTC; it is cancelled in ->atomic_disable() and the dump holds
+hw_lock so it cannot read a block whose clock was just gated.
+
+Notes on what the driver does *not* program, so the dump is not
+misinterpreted: this driver has no RDMA_ACT/RDMA_TRIG register (the engine
+is DISP_REG_RDMA_GLOBAL_CON.RDMA_ENGINE_EN), no OVL_TRIG, no
+MUTEX_INTSTA and no DSI_ERR_STA. DSI_START is written by mtk_dsi_start()
+from mtk_dsi_bridge_atomic_enable(), not by the CRTC path, so a DSI_START
+of 0 with everything else programmed means the bridge/panel chain was
+never enabled.
+---
+ drivers/gpu/drm/mediatek/mtk_crtc.c | 181 ++++++++++++++++++++++++++++
+ 1 file changed, 181 insertions(+)
+
+diff --git a/drivers/gpu/drm/mediatek/mtk_crtc.c b/drivers/gpu/drm/mediatek/mtk_crtc.c
+index aa8e6f6dd..8cf92c182 100644
+--- a/drivers/gpu/drm/mediatek/mtk_crtc.c
++++ b/drivers/gpu/drm/mediatek/mtk_crtc.c
+@@ -5,12 +5,16 @@
+ 
+ #include <linux/clk.h>
+ #include <linux/dma-mapping.h>
++#include <linux/io.h>
+ #include <linux/mailbox_controller.h>
++#include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_address.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/soc/mediatek/mtk-cmdq.h>
+ #include <linux/soc/mediatek/mtk-mmsys.h>
+ #include <linux/soc/mediatek/mtk-mutex.h>
++#include <linux/workqueue.h>
+ 
+ #include <asm/barrier.h>
+ 
+@@ -71,6 +75,10 @@ struct mtk_crtc {
+ 	bool				config_updating;
+ 	/* lock for config_updating to cmd buffer */
+ 	spinlock_t			config_lock;
++
++	/* one-shot register dump, see mtk_crtc_dump_work() */
++	struct delayed_work		dump_work;
++	bool				dumped;
+ };
+ 
+ struct mtk_crtc_state {
+@@ -770,6 +778,170 @@ void mtk_crtc_async_update(struct drm_crtc *crtc, struct drm_plane *plane,
+ 	mtk_crtc_update_config(mtk_crtc, false);
+ }
+ 
++/*
++ * One-shot bring-up dump of the whole display path.
++ *
++ * There is no way to look at the display controller from userspace here
++ * (/dev/mem is filtered by CONFIG_STRICT_DEVMEM) and the console is the only
++ * log channel, so after the first CRTC enable dump the state of every block
++ * in the pipeline into the log. The work runs half a second later, when the
++ * DSI bridge has been enabled, frames have been produced and the sticky
++ * interrupt status bits tell whether pixel data really moved.
++ *
++ * The offsets are the ones the driver itself programs:
++ *   - mtk_dsi.c (DSI_START ... DSI_PHY_LD0CON, DSI_VM_CMD_CON)
++ *   - mtk_disp_rdma.c (GLOBAL_CON, MEM_CON, MEM_START_ADDR, ...)
++ *   - mtk_disp_ovl.c (OVL_EN, DATAPATH_CON, layer 0 registers)
++ *   - drivers/soc/mediatek/mtk-mutex.c (MT8183: MOD 0x30, SOF 0x2c)
++ *   - drivers/soc/mediatek/mt8183-mmsys.h (routing) and clk-mt8183-mm.c
++ *     (CG_CON0/1 at 0x100/0x110)
++ *   - drivers/phy/mediatek/phy-mtk-mipi-dsi-mt8183.c (PLL and lane regs)
++ */
++static bool mtk_dump_regs __read_mostly = true;
++module_param_named(dump_regs, mtk_dump_regs, bool, 0644);
++MODULE_PARM_DESC(dump_regs, "Dump the display pipeline registers once after the first CRTC enable");
++
++struct mtk_dump_reg {
++	const char *name;
++	u32 off;
++};
++
++static const struct mtk_dump_reg mtk_dump_dsi[] = {
++	{ "start", 0x000 }, { "inten", 0x008 }, { "intsta", 0x00c },
++	{ "con", 0x010 }, { "mode", 0x014 }, { "txrx", 0x018 },
++	{ "ps", 0x01c }, { "vsa", 0x020 }, { "vbp", 0x024 },
++	{ "vfp", 0x028 }, { "vact", 0x02c }, { "size", 0x038 },
++	{ "hsa", 0x050 }, { "hbp", 0x054 }, { "hfp", 0x058 },
++	{ "cmdq_size", 0x060 }, { "cklp_wc", 0x064 },
++	{ "lccon", 0x104 }, { "ld0con", 0x108 },
++	{ "timecon0", 0x110 }, { "timecon1", 0x114 },
++	{ "vmcmd", 0x130 },
++};
++
++static const struct mtk_dump_reg mtk_dump_rdma[] = {
++	{ "inten", 0x0000 }, { "intsta", 0x0004 }, { "global", 0x0010 },
++	{ "size0", 0x0014 }, { "size1", 0x0018 }, { "tline", 0x001c },
++	{ "mem_con", 0x0024 }, { "pitch", 0x002c }, { "gmc0", 0x0030 },
++	{ "fifo", 0x0040 }, { "addr", 0x0f00 },
++};
++
++static const struct mtk_dump_reg mtk_dump_ovl[] = {
++	{ "inten", 0x0004 }, { "intsta", 0x0008 }, { "en", 0x000c },
++	{ "rst", 0x0014 }, { "roi", 0x0020 }, { "dpath", 0x0024 },
++	{ "src_con", 0x002c }, { "l0_con", 0x0030 }, { "l0_size", 0x0038 },
++	{ "l0_off", 0x003c }, { "l0_pitch", 0x0044 },
++	{ "l0_rdma", 0x00c0 }, { "l0_addr", 0x0f40 },
++};
++
++static const struct mtk_dump_reg mtk_dump_mmsys[] = {
++	{ "cfg0", 0x0000 },
++	{ "cg0", 0x0100 }, { "cg0_set", 0x0104 }, { "cg0_clr", 0x0108 },
++	{ "cg1", 0x0110 }, { "cg1_set", 0x0114 }, { "cg1_clr", 0x0118 },
++	{ "sw0_rst", 0x0140 },
++	{ "ovl0_mout", 0x0f00 }, { "ovl0_2l_mout", 0x0f04 },
++	{ "ovl1_2l_mout", 0x0f08 }, { "dither_mout", 0x0f0c },
++	{ "path0_sel", 0x0f24 }, { "dsi0_sel", 0x0f2c },
++	{ "dpi0_sel", 0x0f30 }, { "rdma0_sout", 0x0f50 },
++};
++
++static const struct mtk_dump_reg mtk_dump_mutex[] = {
++	{ "en", 0x20 }, { "mutex", 0x24 }, { "rst", 0x28 },
++	{ "sof", 0x2c }, { "mod", 0x30 }, { "mod2", 0x34 },
++};
++
++static const struct mtk_dump_reg mtk_dump_mipi_tx[] = {
++	{ "lane_con", 0x000c }, { "voltage", 0x0010 },
++	{ "pll_pwr", 0x0028 }, { "pll_con0", 0x002c }, { "pll_con1", 0x0030 },
++	{ "pll_con2", 0x0034 }, { "pll_con3", 0x0038 }, { "pll_con4", 0x003c },
++	{ "rtcode", 0x0100 }, { "d2_sw", 0x0144 }, { "d0_sw", 0x0244 },
++	{ "ck_ckmode", 0x0328 }, { "ck_sw", 0x0344 }, { "d1_sw", 0x0444 },
++	{ "d3_sw", 0x0544 },
++};
++
++static void mtk_dump_block(struct device *dev, const char *tag,
++			   struct device_node *node,
++			   const struct mtk_dump_reg *regs, int n)
++{
++	struct resource res;
++	void __iomem *base;
++	char buf[512];
++	int i, len;
++
++	if (!node || of_address_to_resource(node, 0, &res))
++		return;
++
++	base = ioremap(res.start, resource_size(&res));
++	if (!base)
++		return;
++
++	buf[0] = '\0';
++	len = 0;
++	for (i = 0; i < n && len < sizeof(buf) - 32; i++)
++		len += scnprintf(buf + len, sizeof(buf) - len, "%s=%08x ",
++				 regs[i].name, readl_relaxed(base + regs[i].off));
++
++	iounmap(base);
++
++	dev_info(dev, "dump %s: %s\n", tag, buf);
++}
++
++static void mtk_crtc_dump_work(struct work_struct *work)
++{
++	struct mtk_crtc *mtk_crtc = container_of(work, struct mtk_crtc,
++						 dump_work.work);
++	struct drm_crtc *crtc = &mtk_crtc->base;
++	struct device *dev = crtc->dev->dev;
++	const struct drm_display_mode *mode;
++	struct mtk_drm_private *priv;
++	struct device_node *dsi, *mipi_tx;
++	unsigned int idx = drm_crtc_index(crtc);
++
++	if (!mtk_crtc->enabled || !crtc->state)
++		return;
++
++	priv = ((struct mtk_drm_private *)crtc->dev->dev_private)
++		->all_drm_private[idx];
++	mode = &crtc->state->adjusted_mode;
++
++	mutex_lock(&mtk_crtc->hw_lock);
++
++	dev_info(dev, "dump mode: %dx%d@%d clock=%d hfp=%d hs=%d hbp=%d vfp=%d vs=%d vbp=%d\n",
++		 mode->hdisplay, mode->vdisplay, drm_mode_vrefresh(mode),
++		 mode->clock,
++		 mode->hsync_start - mode->hdisplay,
++		 mode->hsync_end - mode->hsync_start,
++		 mode->htotal - mode->hsync_end,
++		 mode->vsync_start - mode->vdisplay,
++		 mode->vsync_end - mode->vsync_start,
++		 mode->vtotal - mode->vsync_end);
++
++	mtk_dump_block(dev, "mmsys", mtk_crtc->mmsys_dev->of_node,
++		       mtk_dump_mmsys, ARRAY_SIZE(mtk_dump_mmsys));
++	mtk_dump_block(dev, "mutex", priv->mutex_node,
++		       mtk_dump_mutex, ARRAY_SIZE(mtk_dump_mutex));
++	mtk_dump_block(dev, "ovl0", priv->comp_node[DDP_COMPONENT_OVL0],
++		       mtk_dump_ovl, ARRAY_SIZE(mtk_dump_ovl));
++	mtk_dump_block(dev, "ovl_2l0", priv->comp_node[DDP_COMPONENT_OVL_2L0],
++		       mtk_dump_ovl, ARRAY_SIZE(mtk_dump_ovl));
++	mtk_dump_block(dev, "rdma0", priv->comp_node[DDP_COMPONENT_RDMA0],
++		       mtk_dump_rdma, ARRAY_SIZE(mtk_dump_rdma));
++
++	dsi = priv->comp_node[DDP_COMPONENT_DSI0];
++	mtk_dump_block(dev, "dsi0", dsi, mtk_dump_dsi, ARRAY_SIZE(mtk_dump_dsi));
++
++	if (dsi) {
++		mipi_tx = of_parse_phandle(dsi, "phys", 0);
++		if (mipi_tx) {
++			mtk_dump_block(dev, "mipi_tx", mipi_tx,
++				       mtk_dump_mipi_tx,
++				       ARRAY_SIZE(mtk_dump_mipi_tx));
++			of_node_put(mipi_tx);
++		}
++	}
++
++	mutex_unlock(&mtk_crtc->hw_lock);
++}
++
+ static void mtk_crtc_atomic_enable(struct drm_crtc *crtc,
+ 				   struct drm_atomic_state *state)
+ {
+@@ -795,6 +967,12 @@ static void mtk_crtc_atomic_enable(struct drm_crtc *crtc,
+ 
+ 	drm_crtc_vblank_on(crtc);
+ 	mtk_crtc->enabled = true;
++
++	if (READ_ONCE(mtk_dump_regs) && !mtk_crtc->dumped) {
++		mtk_crtc->dumped = true;
++		schedule_delayed_work(&mtk_crtc->dump_work,
++				      msecs_to_jiffies(500));
++	}
+ }
+ 
+ static void mtk_crtc_atomic_disable(struct drm_crtc *crtc,
+@@ -808,6 +986,8 @@ static void mtk_crtc_atomic_disable(struct drm_crtc *crtc,
+ 	if (!mtk_crtc->enabled)
+ 		return;
+ 
++	cancel_delayed_work_sync(&mtk_crtc->dump_work);
++
+ 	/* Set all pending plane state to disabled */
+ 	for (i = 0; i < mtk_crtc->layer_nr; i++) {
+ 		struct drm_plane *plane = &mtk_crtc->planes[i];
+@@ -1115,6 +1295,7 @@ int mtk_crtc_create(struct drm_device *drm_dev, const unsigned int *path,
+ 	drm_crtc_enable_color_mgmt(&mtk_crtc->base, 0, has_ctm, gamma_lut_size);
+ 	mutex_init(&mtk_crtc->hw_lock);
+ 	spin_lock_init(&mtk_crtc->config_lock);
++	INIT_DELAYED_WORK(&mtk_crtc->dump_work, mtk_crtc_dump_work);
+ 
+ #if IS_REACHABLE(CONFIG_MTK_CMDQ)
+ 	i = priv->mbox_index++;
+-- 
+2.53.0
+

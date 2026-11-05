@@ -32,3 +32,4 @@
 0032-arm64-dts-t1100-add-the-MT6370-Type-C-port-in-sink-o.patch
 0033-rtc-mt6397-power-off-MT6358-MT6397-through-the-RTC-.patch
 0034-rtc-mt6397-reproduce-the-vendor-MT6358-RTC-power-dow.patch
+0035-drm-mediatek-dump-the-display-pipeline-registers-onc.patch
