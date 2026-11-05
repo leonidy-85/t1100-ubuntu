@@ -1,66 +1,111 @@
-# Передача проекта (состояние на 02.11.2026)
+# Передача проекта (состояние на 05.11.2026, конец сессии)
 
-Кратко: **mainline 6.12 грузится на T1100, eMMC работает, установлен Ubuntu 24.04
-с systemd; не хватает USB (UDC), KMS/панели, GPU и KDE.**
+Кратко: **mainline 6.12 грузится на T1100 до Ubuntu 24.04 (systemd), eMMC и
+USB-сеть работают, SSH доступен, батарея заряжается, `poweroff` плату гасит.
+Единственный блокер — нет картинки на панели (KMS-стек поднят, DSI стартует,
+экран чёрный).**
 
 ## Что проверено на железе
 
 | Что | Доказательство |
 |---|---|
-| LK принимает наш DTB | `python3 refs/pennyos-lk/check-lk-dtb.py <dtb> build/lk/dtbo_a.img build/lk/live.dts` → 9/9 ok |
-| Ядро 6.12 загружается | лог: `refs/device/last_kmsg-6.12-first-boot.txt.gz` |
-| PMIC/PD | лог `refs/device/last_kmsg-pmic-cycle.txt.gz` |
-| eMMC HS400 | `refs/device/last_kmsg-emmc-ok.txt.gz` (`mmcblk0 … 57.6 GiB`, p1…p54) |
-| Логи без UART | своя зона `ramoops@70000000` (не `nomap`), читается из рекавери через `/proc/last_kmsg` |
-| Ubuntu rootfs на `p54` | ext4, 575 МБ, `/sbin/init → ../lib/systemd/systemd`, ssh, systemd-networkd |
-| Было причиной «петли» | в ubuntu-base tarball **нет systemd** → `switch_root` падал (`Attempted to kill init`) |
-
-## Что не работает (следующие шаги)
-
-1. **USB-UDC**: `mtu3 11201000.usb` пробуется (`dr_mode: 2`, IP U3), но
-   `/sys/class/udc/*` не появляется → нет RNDIS/SSH. Смотреть `tphy`
-   (`u2port0`) и `usb-role-switch` по `refs/affenull-mt6771/`.
-2. **DRM/KMS**: `&dsi0`/`&dpi0` выключены; панель **BOE TV110XUM** за мостом
-   **ITE IT6112**, драйвер — `refs/it6112/panel-it6112-boe-tv110xum-lb2.c`.
-3. **GPU**: panfrost для Mali-G72 MP3; `&gpu`/`&mfg` пока `disabled`
-   (нужны `mali-supply` + `sram-supply` и рабочие PD).
-4. **KDE**: `plasma-desktop` можно доставить в rootfs на хосте
-   (`qemu-aarch64` + chroot, `Acquire::ForceIPv4=true`), как ставили systemd.
+| LK принимает наш DTB | `tools/lk/verify-dtb.sh` 10/10 + фактическая загрузка; DTB `e11c39df…`/`f8d935da…`/`481905ed…` в разных образах |
+| Ядро 6.12 → userspace | `systemctl is-system-running` = `running`, `Startup finished in 3.5s + 2.3s` |
+| eMMC HS400 | `mmcblk0 57.6 GiB`, 56 разделов |
+| USB-RNDIS + SSH | гаджет `1d6b:0104`, `usb0 = 10.42.66.66`, `ssh root@10.42.66.66` по ключу |
+| **Зарядка** | `mt6370-charger`: `online=1 status=Charging charge_type=Fast`, `vbus 4940 мВ`, `vbat 3645 мВ`, `ibus 400 мА` |
+| **Выключение** | `systemctl poweroff` → USB-гаджет исчезает через ~3 с, `/sys/fs/pstore` после включения **пуст** (DRAM обесточена) |
+| KMS: компоненты/режим | `mediatek-drm` bound (ovl×3, rdma×2, color/ccorr/aal/gamma, dsi), CRTC `active=1`, режим `1600x2176@60, 248356 кГц` |
+| DSI стартует | трасса `T1100DSI: started, start=0x1, mode=0x1, ps=0x312c0, txrx=0x3c` |
+| Мост IT6112 | id `0x6112`, настройка совпадает с вендором побайтно (RX 17 + TX 24 записи проверены через `i2cpeek`), RX видит video (`0x5e 0x21 bit3=1`) |
+| **Экран** | **чёрный** — единственная незакрытая проблема |
 
 ## Артефакты
 
-- Ядро: `/home/l/projects/linux-t1100` (6.12.114), патчи `patches/0001…0019`
-  (применяются `git am` на baseline `728cd6e`).
-- Образы: `build/boot_ubuntu3.img` (Ubuntu, `root=/dev/mmcblk0p54`,
-  initramfs со `switch_root`), `build/boot_pmic3/4.img` (bring-up),
-  `build/boot_full_net*.img`.
-- Rootfs: `build/rootfs/rootfs-t1100.tar.gz` (Ubuntu 24.04 + systemd + ssh),
-  на планшете — `p54` (ext4, метка `ubuntu`).
-- Инструменты: `scripts/{repack_boot,bootimg_extract,make_test_boot,make_initramfs,
-  patch_image_header}.py|sh`, `tools/payload`, `tools/shim`,
-  `tools/initramfs/{net-init.sh,root-init.sh,build-net.sh}`,
-  `refs/pennyos-lk`, `refs/affenull-mt6771`, `refs/mt6771-next`, `refs/it6112`.
+- Ядро: `/home/l/projects/linux-t1100` (6.12.114 + коммиты), патчи
+  `patches/0001…0034` (0035 отключён, лежит как `wip-0035-*.disabled`).
+- Образы: `build/boot_ubuntu14.img` (md5 `38fe9c1f…`, зарядка+выключение, экран
+  чёрный), `build/boot_ubuntu17.img` (md5 `36397256…`, + трасса DSI).
+- Rootfs: `build/rootfs/rootfs-t1100.tar.gz`, на планшете — `p54` (ext4, метка
+  `ubuntu`, Ubuntu 24.04 + systemd + sshd + root authorized_keys этого хоста).
+- Инструменты: `tools/host/{recovery.py,flash-ssh.sh,usb-net.sh,check-power.sh,
+  diag-drm.sh,watch-usb.sh,vendor-it6112.sh}`, `tools/lk/{extract-boot-dtb.py,
+  verify-dtb.sh}`, `tools/i2cpeek`, `tools/mempeek`, `tools/fbtest`.
+- Логи: `refs/device/dmesg-ubuntu4-boot.txt.gz`, `journal-ubuntu4-first-boot.txt.gz`,
+  `dmesg-ubuntu6-ssh.txt.gz`; `refs/device/last_kmsg-*`.
 
-## Как продолжить
+## Что не работает и почему (главное)
 
-1. Планшет в **recovery** (`telnet 10.42.66.66`, меню `3` → `y`), RNDIS
-   `10.42.66.67`, root-шелл без пароля.
-2. Прошить нужный образ: `nc -l -p NNNN < img` на хосте,
-   `nc 10.42.66.67 NNNN | dd of=/dev/mmcblk0p29 bs=1M conv=fsync` на устройстве.
-3. Загрузиться, затем снова в recovery и прочитать лог:
-   `cat /proc/last_kmsg | nc 10.42.66.67 NNNN`.
-4. Вернуть Aurora: прошить `../t1100/backup_5.1.6.110/boot_a_imaoff_nodiehard_nosig.img`
-   (md5 `73417c46…`). Rootfs Aurora (LVM `sailfish`) **уже снесён** — данные
-   `/home` потеряны, владелец это разрешил.
+**Экран.** Доказано, что SoC гонит поток: CRTC активен, `DSI_START=1`, режим
+sync-pulse, 4 линии, `ps=0x312c0`; мост видит видео и настроен как у вендора;
+питание (DVDD/DSV 5500 мВ) и подсветка (100 %) включены — но панель чёрная.
+Публичного референса нет: в порту **этой же** платы (`refs/mt6771-next`) узел
+панели `status = "disabled"`, то есть он никогда не работал; PennyOS — другая
+панель без моста. Вендор инициализирует панель **в LK** (`lcm_init`,
+per-panel конфиг по смещению `0x90ea8`), а вендорское ядро потом только
+дописывает 9 регистров и стримит.
+
+Проверенные и отвергнутые гипотезы:
+- клоки/гейты MT6771 ≠ MT8183 — **неверно**, совпадают побитно;
+- IPPC/`IP version 0x0` — вторично, на картинку не влияет;
+- T-PHY не выходит в device-сессию — **верно для USB** (патч 0020), к дисплею не относится;
+- неверные тайминги/порядок питания панели — исправлено (0030), не помогло;
+- неверная формула TX-PLL моста — исправлено (0029), не помогло;
+- полный побайтный повтор вендорской последовательности на живом мосте — **не помогло**;
+- порядок `mipi_dsi_attach` → `drm_panel_add` (панель видна DRM раньше attach) —
+  правка **ломает загрузку**, откачена.
+
+## Как продолжить (следующая сессия)
+
+1. **Доступ.** Подключить планшет кабелем к ноутбуку:
+   - наша Ubuntu → интерфейс `t1100usb`, `10.42.66.67/29` настраивается сам
+     (udev по `1d6b:0104` + профиль NetworkManager), затем `ssh root@10.42.66.66`;
+   - recovery → `telnet 10.42.66.66`, меню `3` → `y` (root-шелл без пароля);
+     в recovery зарядка работает всегда.
+   Прошивка: `tools/host/flash-ssh.sh <img> /dev/mmcblk0p29 [--reboot]` (по SSH)
+   или `tools/host/recovery.py put <img> /dev/mmcblk0p29` (в recovery).
+   **Без кабеля к ноутбуку доступа нет** — Wi-Fi в mainline не поддержан.
+2. **Дисплей — по порядку:**
+   a. снять **безопасный** дамп: только DSI/PHY (`0x14014000…`, `0x11e50000…`),
+      без `mmsys/ovl/rdma` (их чтение при выключенных PD вешает interconnect —
+      так погиб 0035); проверить, что `start`, `mode`, `ps`, `txrx`, тайминги и
+      `PLL_CON0/1`, `CK_CKMODE_EN` соответствуют ожидаемым;
+   b. `grep 14014000.dsi /proc/interrupts` — в video-режиме IRQ может быть
+      выключен, поэтому «0» ничего не доказывает (уже проверено);
+   c. если SoC-сторона в порядке — единственный оставшийся путь **RE инициализации
+      панели в LK** (`rtc_power_off`/`lcm_init`, `0x5601ef24`, конфиг `0x90ea8`):
+      что именно LK пишет в мост/DSI и в каком порядке, и чем это отличается от
+      нашего драйвера;
+   d. альтернатива: проверить гипотезу «LK инициализирует панель при любой
+      загрузке» — образ, где наш драйвер **не трогает** мост в `prepare()`
+      (только DSI + DCS), и посмотреть, появится ли картинка.
+3. **Дальше по плану:** GPU (panfrost, `&gpu`/`&mfg` сейчас disabled, нужны
+   `mali-supply`/`sram-supply` и рабочие PD) → KDE Plasma/Wayland.
+4. **Мелочи:** в `mt6370-charger` поднять `constant_charge_current` до 2 А
+   (по умолчанию 900 мА, вендор ставил 2 А); вернуть `tcpc`, когда понадобится
+   OTG/host (сейчас отключён, `tcpci` не находит узел `connector`); топливомера
+   (проценты заряда) в mainline нет — только `status`/`current`.
 
 ## Грабли (не наступать снова)
 
-- `reserved-memory` в нашем DTB должен существовать, но **без статических
-  детей**; иначе LK висит. Своя зона ramoops — единственное исключение и только
-  по адресу, не пересекающемуся с `mblock-*` (проверять валидатором).
-- `regulator-coupled-with` mainline не поддерживает (generic coupler требует
-  `always-on`) — не добавлять.
-- Без `always-on` на VDRAM2/VBIF28 `regulator_late_cleanup()` выключает питание
-  DRAM → system hangs до первого printk.
-- В ubuntu-base нет systemd — проверять `/usr/lib/systemd/systemd` после распаковки.
-- Пустой ramdisk LK не грузит: нужен хотя бы минимальный initramfs.
+- `reserved-memory` в нашем DTB должен существовать, но без статических детей
+  (кроме своей `ramoops@70000000`, не пересекающейся с `mblock-*`).
+- `regulator-coupled-with` mainline не поддерживает; без `always-on` на
+  VDRAM2/VBIF28 `regulator_late_cleanup()` гасит DRAM → зависание до printk.
+- **Чтение MM-регистров** (`mmsys/ovl/rdma`) при выключенных power-domain вешает
+  плату (проверено: 0035). Только DSI/PHY или при гарантированно включённых блоках.
+- `mipi_dsi_attach()` в I2C-probe до `drm_panel_add()` — дедлок/незагрузка.
+- В Ubuntu-rootfs не было пользователя `sshd` (из-за этого sshd не стартовал) и
+  `sshd_config` — теперь добавлены; при пересборке rootfs не потерять.
+- `TCG/NetworkManager`: статический адрес на USB-интерфейсе сбрасывается, если
+  NM управляет устройством — снимать с управления (`tools/host/usb-net.sh`).
+- RNDIS рвётся при уходе в suspend — sleep-таргеты замаскированы на планшете.
+- Зарядка от USB-порта ноутбука = 500 мА; при работе Ubuntu этого мало —
+  заряжать выключенным/в recovery или от 2 А зарядника.
+
+## Прочее по инфраструктуре
+
+- MCP `web-search` починен (Brave через `curl`, фильтр релевантности, fallback
+  Bing→Marginalia) и включён в `opencode.json`; встроенный `websearch` в этой
+  сети отдаёт 403, Google/Яндекс/DDG — блок/капча.
+- Публичного mainline-порта дисплея для MT6771/MT8788 нет (подтверждено поиском).
