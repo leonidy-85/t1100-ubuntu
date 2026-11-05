@@ -833,3 +833,44 @@ MFD-ячейки (`MT6358_RTC_BASE 0x588`), поэтому DT менять не 
 `10.42.66.67/29` любому RNDIS-устройству (в том числе чужому планшету
 Byterg MVK-2020); теперь интерфейс T1100 переименовывается udev-правилом в
 `t1100usb` по USB ID `1d6b:0104`, и профиль матчится по этому имени.
+
+## 05.11: **зарядка работает**; выключение — патч 0034 (вендорская последовательность)
+
+Образ `build/boot_ubuntu13.img` (md5 `9d5aaca970beed301dd2a94812cc0927`), ядро
+`6.12.114-g…` с 0031–0033, DTB `…` (валидатор LK ok). Сразу после загрузки по SSH:
+
+```
+/sys/class/power_supply/mt6370-charger:
+  online=1  status=Charging  charge_type=Fast
+  usb_type=[Unknown] SDP DCP CDP
+  constant_charge_current=900000  constant_charge_voltage=4350000
+  input_current_limit=500000
+IIO: vbus=4940 мВ, vsys=3635 мВ, vbat=3645 мВ, ibus=400 мА
+```
+То есть mainline-зарядка MT6370 работает (от порта ноутбука — 500 мА).
+
+Что для этого понадобилось:
+- `CONFIG_CHARGER_MT6370`, **`CONFIG_MEDIATEK_MT6370_ADC`** (без него charger
+  навсегда в `-EPROBE_DEFER`: `probe … returned -517`, затем успешно после того,
+  как ADC поднялся), `CONFIG_TYPEC*` — всё `=y`;
+- узел `charger` с `interrupts`/`interrupt-names` `uvp_d_evt`/`attach_i`/`mivr`
+  и 7 IIO-каналами;
+- **`tcpc` пришлось выключить**: `tcpci_parse_config()` не находит дочерний
+  узел `connector` у MFD-платформенного устройства и probe падает с `-EINVAL`
+  (`mt6370-tcpc …: error -EINVAL: Failed to register tcpci port`). Для зарядки
+  TCPC не нужен; вернёмся к нему, когда будем делать OTG/host.
+
+**Выключение.** Патч 0033 (рецепт MT6323: `BBPU=KEY` + `WRTGR` + poll) на
+MT6358 **не гасит рельсы**: ядро зависает в `poweroff`, USB-гаджет остаётся на
+шине, плата не перезагружается и не выключается. `reverse-engineer` вытащил из
+LK (`rtc_power_off()` @`0x5601c510`, `mt_power_off()` @`0x5601b214`) точную
+вендорскую последовательность: `BBPU |= KEY|BIT(5)`, промежуточная
+`BBPU=0x4303` c ожиданием self-clear bit1, `0x001e` bit1/bit3, `0x051a` bit2,
+`0x5a0`/`0x590` (сброс алярма), `0x5ac`/`0x5ae` (спары), `0x5bc` OSC32CON
+(`0x586a`→`0x9136`), и в конце **снятие `POWER_HOLD`** (`0x0a08` bit0) —
+именно этого нет в MT6323-рецепте.
+
+Патч **0034** (`rtc: mt6397: reproduce the vendor MT6358 RTC power-down
+sequence`, коммит `a6624bb1d`, файл `patches/0034-…`) реализует это с
+`regmap_read_poll_timeout_atomic` (sys-off идёт с выключенными прерываниями) и
+`dev_info` на каждом шаге, чтобы по pstore было видно, где оборвалось.
