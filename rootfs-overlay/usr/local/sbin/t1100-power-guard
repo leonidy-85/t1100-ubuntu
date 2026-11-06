@@ -10,7 +10,7 @@
 
 set -u
 
-CONF=/etc/default/t1100-power-guard
+CONF=${CONF:-/etc/default/t1100-power-guard}
 # shellcheck disable=SC1090
 [ -r "$CONF" ] && . "$CONF"
 
@@ -31,15 +31,13 @@ POWEROFF_CMD=${POWEROFF_CMD:-}
 STATE=${STATE:-/run/t1100-power-guard}
 VARDIR=${VARDIR:-/var/lib/t1100-power-guard}
 MARK=$VARDIR/low-battery-poweroff
-TAG=t1100-power-guard
 
 mkdir -p "$STATE" "$VARDIR" 2>/dev/null
 
+# stdout сервиса идёт в journal с тегом из Unit(SyslogIdentifier=t1100-power-guard),
+# поэтому отдельный logger не нужен (иначе каждая строка дублировалась).
 log() {
 	printf '%s\n' "$*"
-	if command -v logger >/dev/null 2>&1; then
-		logger -t "$TAG" -p daemon.notice "$*" 2>/dev/null
-	fi
 }
 
 # vbat в милливольтах: ищем IIO-канал с меткой vbat.

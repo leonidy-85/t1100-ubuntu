@@ -6,4 +6,5 @@ After=local-fs.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/t1100-power-guard
+SyslogIdentifier=t1100-power-guard
 Nice=5

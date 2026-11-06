@@ -1083,3 +1083,43 @@ CHG_EN = 1, CHG_STATUS = progress
 баланс отрицательный и нужен зарядник 2 А — чтобы это не выяснялось задним
 числом. Обновлённый скрипт (8132 Б) переустановлен в `p54` из recovery,
 `sh -n` на самой плате — `rc=0`.
+
+#### 06.11 (3): страховка проверена на железе end-to-end
+
+После зарядки (2 ч от 2 А адаптера: `vbat` 3.697 → 4.12 В, gauge 10 → 82 %;
+проценты явно нелинейны — ориентироваться на напряжение) — ребут из recovery в
+Ubuntu, ядро `6.12.114-gfd5357d80a08`, `systemd is-system-running = running`.
+
+```
+systemctl list-timers t1100-power-guard.timer   → тикает раз в 60 с, LAST = +1 мин
+systemctl show -p Result                        → success
+journalctl -t t1100-power-guard:
+  заряд: constant_charge_current 900000 -> 2000000 мкА
+  слабый порт: input_current_limit=500000 мкА (SDP) — при работе Ubuntu баланс
+  отрицательный, нужен зарядник 2 А
+IIO vbat: raw=812 scale=5 → 4060 мВ (вендорский gauge в тот же момент 4.12 В —
+          разница на падение под нагрузкой)
+```
+
+**Тест пути защиты.** Пороги подняты выше напряжения (`CONF=/dev/null
+VBAT_LOW_MV=4200 SAMPLES=1`; на зарядке `need = SAMPLES*3`, поэтому три запуска):
+
+```
+разряд: vbat=4050 мВ < 4200 мВ, отсчёт 2/3 (online=1)
+разряд: vbat=4050 мВ < 4200 мВ, отсчёт 3/3 (online=1)
+КРИТИЧНО: выключаю плату, чтобы не разрядить батарею в ноль
+Connection to 10.42.66.66 closed by remote host.
+```
+
+Признаки настоящего выключения, а не ребута: `uptime -p` = 0 минут, в журнале
+прошлой загрузки `systemd-logind: System is powering down`, `/sys/fs/pstore`
+**пуст**. Плата вернулась через ~15 с — это штатный MTK «boot on charger».
+Метка `/var/lib/t1100-power-guard/low-battery-poweroff` создалась и снялась
+автоматически на первом же запуске (vbat 4045 > 4000).
+
+**Попутно исправлено:**
+- каждая строка журнала дублировалась (stdout + `logger`) — `logger` убран, в
+  юните `SyslogIdentifier=t1100-power-guard`;
+- `CONF` в скрипте переопределяемый (`CONF=/dev/null` для тестов);
+- `tools/host/install-power-guard.sh` без аргументов ставит на `10.42.66.66`
+  (проверено — штатная установка по SSH работает).
