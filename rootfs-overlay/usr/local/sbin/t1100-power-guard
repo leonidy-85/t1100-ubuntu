@@ -86,6 +86,18 @@ if [ "$online" = 1 ] && [ -d "$PS" ]; then
 			fi
 		fi
 	fi
+	# Слабый порт (SDP 500 мА) при работающей системе = отрицательный баланс:
+	# ругаемся в journal, чтобы это не выяснялось по «планшет опять разрядился».
+	if [ -r "$PS/input_current_limit" ]; then
+		lim=$(cat "$PS/input_current_limit" 2>/dev/null || echo 0)
+		if [ "${lim:-0}" -le 600000 ] 2>/dev/null; then
+			last=$(cat "$STATE/sdp-warn-ts" 2>/dev/null || echo 0)
+			if [ $(( $(date +%s) - last )) -ge 900 ]; then
+				date +%s >"$STATE/sdp-warn-ts"
+				log "слабый порт: input_current_limit=${lim} мкА (SDP) — при работе Ubuntu баланс отрицательный, нужен зарядник 2 А"
+			fi
+		fi
+	fi
 	if [ -n "$IAICR_UA" ] && [ -w "$PS/input_current_limit" ]; then
 		cur=$(cat "$PS/input_current_limit" 2>/dev/null || echo 0)
 		if [ "${cur:-0}" -lt "$IAICR_UA" ] 2>/dev/null; then
