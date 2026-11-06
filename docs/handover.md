@@ -67,10 +67,13 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
    Прошивка: `tools/host/flash-ssh.sh <img> /dev/mmcblk0p29 [--reboot]` (по SSH)
    или `tools/host/recovery.py put <img> /dev/mmcblk0p29` (в recovery).
    **Без кабеля к ноутбуку доступа нет** — Wi-Fi в mainline не поддержан.
-1a. **Страховка от разряда** (сделана, на планшете не установлена):
-   `tools/host/install-power-guard.sh` — юнит `t1100-power-guard.timer` следит
-   за `vbat` и гасит плату ниже 3.5 В, `tools/host/watch-power.sh` показывает
-   баланс. Пороги/ток заряда — `/etc/default/t1100-power-guard`.
+1a. **Страховка от разряда** (юнит `t1100-power-guard.timer`) **уже лежит в
+   rootfs** (`p54`, установлена из recovery 06.11), но ещё не проверена в работе:
+   при первой загрузке Ubuntu — `systemctl list-timers t1100-power-guard.timer`
+   и `journalctl -t t1100-power-guard`. Гасит плату ниже 3.6 В (3 замера; на
+   зарядке 9), поднимает `constant_charge_current` до 2 А. Пороги — в
+   `/etc/default/t1100-power-guard`, баланс смотреть `tools/host/watch-power.sh`.
+   Переустановка — `tools/host/install-power-guard.sh [host|--rootfs DIR]`.
 2. **Дисплей — по порядку:**
    a. снять **безопасный** дамп: только DSI/PHY (`0x14014000…`, `0x11e50000…`),
       без `mmsys/ovl/rdma` (их чтение при выключенных PD вешает interconnect —
@@ -110,6 +113,9 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
   отрицательный баланс. Больше не разряжается в ноль только благодаря
   `t1100-power-guard` (гасит ниже 3.5 В), но работать так нельзя — нужен 2 А
   зарядник, либо зарядка выключенным/в recovery.
+- Калибровка батареи (recovery, 06.11): 3.693 В = 10 %, т.е. ниже 3.6 В
+  остаётся мало; в recovery с порта ноутбука в батарею идёт ~50–90 мА —
+  заряжать только от 2 А зарядника.
 - **«boot on charger»**: после `poweroff` с воткнутым кабелем плата сама
   включается от VBUS. Выключать и выдёргивать кабель, иначе цикл «включилась →
   садится».
