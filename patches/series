@@ -33,3 +33,4 @@
 0033-rtc-mt6397-power-off-MT6358-MT6397-through-the-RTC-.patch
 0034-rtc-mt6397-reproduce-the-vendor-MT6358-RTC-power-dow.patch
 0036-drm-panel-it6112-add-a-switch-that-leaves-the-bridge.patch
+0037-drm-panel-it6112-follow-the-LK-init-release-HOLD_TX-.patch
