@@ -86,7 +86,7 @@ t1100-ubuntu/
 │   └── provenance.md          # версии/хеши сборки
 ├── patches/                   # изменения ядра (series + *.patch)
 ├── configs/t1100.fragment     # Kconfig-фрагмент (pstore, watchdog…)
-├── scripts/                   # сборка, перепаковка boot, initramfs, root
+├── scripts/                   # сборка (в т.ч. на build-хосте), перепаковка boot, initramfs
 ├── rootfs-overlay/            # файлы для rootfs (юнит-страховка от разряда…)
 ├── refs/                      # референсы: stock DTS, дампы, IT6112, mt6771-next
 └── .opencode/
@@ -124,8 +124,10 @@ curl -LO https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.114.tar.xz
 tar -xf linux-6.12.114.tar.xz && mv linux-6.12.114 ../linux-t1100
 cd ../linux-t1100 && git init && git add -A && git commit -m base
 git am ../t1100-ubuntu/patches/$(sed -n '/\.patch$/p' ../t1100-ubuntu/patches/series)
-# 2) сборка (тулчейн и фрагмент подхватываются автоматически)
-cd ../t1100-ubuntu && scripts/build_kernel.sh
+# 2) сборка — НА BUILD-ХОСТЕ (12 ядер): локальная машина делит CPU с другими
+#    проектами, полная сборка там занимала часы
+cd ../t1100-ubuntu && scripts/build-kernel-remote.sh
+#    (локальный вариант остаётся: scripts/build_kernel.sh -> build/t1100)
 # 3) регресс DTB
 sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 ```

@@ -42,6 +42,37 @@ DTS MT6771 собирается, `Image` собран, на плату не пр
    `git push origin master` (gitflic `py6on/t1100-ubuntu`). Не копить коммиты
    локально.
 
+## Сборка и тяжёлые вычисления — на build-хосте
+
+**Правило: компиляция ядра, Mesa и любые тяжёлые вычисления выполняются не на
+локальной машине.** Локальный ноутбук (4 ядра) постоянно занят другими
+проектами: полная сборка ядра там занимала ~4 часа и мешала всему остальному.
+
+| | |
+|---|---|
+| хост | `172.17.141.172` |
+| пользователь | `l` (пароль `0`, `sudo` — тот же пароль) |
+| ресурсы | 12 ядер, 15 ГБ RAM, Ubuntu 26.04 |
+| тулчейн | `aarch64-linux-gnu-gcc` (установлен), `rsync`, `bison`, `flex`, `libelf-dev`, `libssl-dev` |
+
+Рабочий процесс:
+
+```sh
+scripts/build-kernel-remote.sh              # rsync дерева -> defconfig+fragment -> Image dtbs -> build/remote/
+scripts/build-kernel-remote.sh --clean      # снести out/ на хосте
+scripts/build-kernel-remote.sh --config     # только конфиг
+```
+
+Дерево синхронизируется по rsync (без `.git`) в `/home/l/t1100-ubuntu-build/src`,
+выход — в `.../out`, артефакты затягиваются в `build/remote/`. Инкрементальные
+сборки после правки пары файлов — минуты.
+
+Если на хосте нет тулчейна: `sudo apt-get install -y --no-install-recommends
+gcc-aarch64-linux-gnu libssl-dev bison flex libelf-dev rsync`.
+
+Прочее (ssh к планшету, recovery, git, документация, перепаковка boot.img) —
+локально, это лёгкие операции.
+
 ## Оркестрация
 
 - **Входная точка — агент `lead`** (tech lead/архитектор): ведёт `docs/STATUS.md`,
