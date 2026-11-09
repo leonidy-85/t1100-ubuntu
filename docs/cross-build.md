@@ -48,12 +48,55 @@ tools/host/kms-test.sh --hold 30    # выставить режим DSI-1 и п�
 
 ## 3. arm64-sysroot (для Mesa и прочего линкующегося)
 
-`/home/l/t1100-sysroot` — Ubuntu **noble** (24.04, как на планшете), создан
-`debootstrap --arch=arm64 --variant=minbase` с `libc6-dev`, `libdrm-dev`,
-`libudev-dev`, `pkg-config`. Нужен, когда бинарник должен линковаться с
-библиотеками планшета, а не статически (например, Mesa/EGL).
+`/home/l/t1100-sysroot` — Ubuntu **noble** (24.04, как на планшете): `libc 2.39`,
+`libdrm 2.4.125` (noble-updates), `libudev 255.4`. Нужен, когда бинарник должен
+линковаться с библиотеками планшета, а не статически (Mesa/EGL в фазе 3).
 
-Использование (meson cross-file):
+Как он сделан (и на чём спотыкались):
+
+```sh
+# 1) база
+sudo debootstrap --arch=arm64 --variant=minbase noble /home/l/t1100-sysroot \
+     http://ports.ubuntu.com/ubuntu-ports
+
+# 2) arm64-пакеты на хосте: отдельный источник + чистый мультиарх
+sudo dpkg --add-architecture arm64
+# /etc/apt/sources.list.d/ubuntu-ports.sources
+#   Types: deb
+#   URIs: http://ports.ubuntu.com/ubuntu-ports
+#   Suites: noble noble-updates noble-security
+#   Components: main restricted universe multiverse
+#   Architectures: arm64
+#   Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+# в основном ubuntu.sources добавить "Architectures: amd64", иначе apt тянет
+# arm64 из хостового релиза (26.04) и в sysroot попадает libudev 259 вместо 255.
+
+# 3) dev-пакеты распаковкой (chroot не нужен, arm64-бинари не запускаем)
+cd /tmp && apt-get download libdrm-dev:arm64 libdrm2:arm64 libudev-dev:arm64 libudev1:arm64
+for f in /tmp/*.deb; do sudo dpkg -x "$f" /home/l/t1100-sysroot; done
+```
+
+Грабли:
+- второй этап `debootstrap` в chroot требует эмуляции — в apt пакет называется
+  **`qemu-user`** (не `qemu-user-static`), плюс `qemu-user-binfmt`; но даже с ним
+  second-stage падает на `/debootstrap/mirror` — проще не доводить его, а
+  распаковывать dev-пакеты (см. выше);
+- `printf ... | sudo -S tee file` **не работает** (sudo -S съедает stdin паролем):
+  писать временный файл и `sudo cp`;
+- .pc-файлы в sysroot указывают на `/usr/lib/aarch64-linux-gnu`, поэтому в meson
+  cross-file обязателен `sys_root` + `pkg_config_libdir` (см. ниже).
+
+Проверка, что sysroot линкуется (сделано 10.11):
+
+```sh
+aarch64-linux-gnu-gcc --sysroot=/home/l/t1100-sysroot \
+  -I/home/l/t1100-sysroot/usr/include/libdrm t.c -o t \
+  -L/home/l/t1100-sysroot/usr/lib/aarch64-linux-gnu -ldrm
+# file: ELF 64-bit LSB pie executable, ARM aarch64, dynamically linked
+# readelf -d: NEEDED libdrm.so.2, libc.so.6
+```
+
+Meson cross-file:
 
 ```
 [binaries]
@@ -74,15 +117,6 @@ cpu_family = 'aarch64'
 cpu = 'aarch64'
 endian = 'little'
 ```
-
-Добавить пакет в sysroot без apt-мультиарха:
-
-```sh
-cd /tmp && apt-get download <pkg>:arm64 && dpkg -x <pkg>_arm64.deb /home/l/t1100-sysroot
-```
-
-(Так же ставились dev-пакеты; `chroot` в sysroot не нужен, arm64-бинарники там
-не запускаются — только заголовки и .so для линковки.)
 
 ## 4. Что где лежит на хосте
 
