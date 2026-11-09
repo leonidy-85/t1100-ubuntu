@@ -200,8 +200,9 @@ panfrost 13040000.gpu: shader_present=0x7 l2_present=0x1     (MP3)
 ```
 
 `id 0x6001` и `shader_present=0x7` — G72 MP3 (id берётся из `GPU_ID >> 16`,
-таблица `gpu_models[]` в `panfrost_gpu.c`). Если вместо этого `mali-unknown`
-или `Failed to power on GPU`, см. §5 (#6/#8).
+таблица `gpu_models[]` в `panfrost_gpu.c`). Если вместо этого `mali-unknown`,
+`error powering up gpu shader/L2/tiler` или `Fatal error during GPU init`,
+см. §5 (#6/#8).
 
 Ошибок быть не должно; в частности **не** ожидается
 `failed to power on domain`, `Failed to get regulators`, `Can't get clock`.
@@ -222,7 +223,7 @@ ls -l /dev/dri                             # card0 (mediatek), renderD128 (panfr
 cat /sys/class/drm/card0-DSI-1/status      # connected  (дисплей не должен сломаться)
 ls /sys/kernel/debug/dri                   # 0 -> card0, 128 -> renderD128
 cat /sys/kernel/debug/dri/128/name         # panfrost
-cat /sys/kernel/debug/dri/128/engine       # идентификация GPU
+ls /sys/kernel/debug/dri/128              # name, clients, gem_names (своих файлов у panfrost нет)
 
 # 3) питание и клоки
 grep -iE "vgpu|vsram_gpu" /sys/kernel/debug/regulator/regulator_summary
