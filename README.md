@@ -82,6 +82,7 @@ t1100-ubuntu/
 │   ├── drm-port-plan.md       # инвентарь дисплейных блоков
 │   ├── boot-test.md           # протокол первой загрузки (pstore)
 │   ├── device-probe.md        # что снято с платы
+│   ├── cross-build.md         # кросс-сборка: build-хост, sysroot, статические утилиты
 │   ├── bringup-log.md         # журнал bring-up
 │   └── provenance.md          # версии/хеши сборки
 ├── patches/                   # изменения ядра (series + *.patch)

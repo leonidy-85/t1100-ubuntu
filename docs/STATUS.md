@@ -1327,3 +1327,37 @@ TX:    06=00 22=2f 24=01 26=01   ошибок I2C в dmesg — 0
 - на build-хосте включён `ccache` для сборок ядра (masquerade `~/.ccache-bin` +
   `CCACHE_DIR=~/.ccache-t1100`); вариант с префиксом `ccache` в переменной CC
   не работает — kbuild/ccache отвечают «unknown C compiler».
+
+### 10.11 (2): кросс-инфраструктура для фазы 3 и подготовленный panfrost-образ
+
+**Инфраструктура на build-хосте** (подробности — новый `docs/cross-build.md`):
+`meson`, `ninja`, `ccache`, `debootstrap`, `qemu-user`; для ядра включён кэш
+(`~/.ccache-bin` + `CCACHE_DIR=~/.ccache-t1100`) — на второй сборке 204 из 365
+кэшируемых вызовов, **58 % попаданий**. Планшет при этом не трогали.
+
+**arm64-sysroot** `/home/l/t1100-sysroot` (Ubuntu noble = 24.04, как на планшете):
+`debootstrap --arch=arm64 --variant=minbase` + dev-пакеты. Важный нюанс: второй
+этап debootstrap в chroot требует `qemu-user` (в apt он называется `qemu-user`,
+а не `qemu-user-static`), и даже с ним падает на `/debootstrap/mirror`; рабочий
+путь — `dpkg --add-architecture arm64` + источник `ports.ubuntu.com` с
+`Architectures: arm64`, затем `apt-get download <pkg>:arm64` и `dpkg -x` в
+sysroot. Sysroot нужен для Mesa/EGL в фазе 3 (заголовки и `.so`), запускать
+arm64-бинари в нём не требуется.
+
+**Фаза 3 подготовлена, но НЕ прошита** (`gpu-mesa`, патч **0039**, коммит
+`eed4580b9`): `&gpu status = "okay"`, узлы `mfg`/`mfg_async` не нужны (в mainline
+их нет — MFG это 5 power-domain'ов в `spm`), `sram-supply` убран по биндингу
+`mt8183b-mali`, а **DVFS выключен намеренно**: OPP-таблица уронила бы VGPU до
+625 мВ при VSRAM 1000 мВ, тогда как вендор держит пару с разницей ровно 100 мВ.
+Образ `build/boot_ubuntu28.img` (sha256 `0ae1c4b5…12f8`), `verify-dtb` passed,
+`docs/panfrost-plan.md` — разбор узлов, рисков и проверок.
+
+**Единственный опасный сценарий** (из плана): если гейт `mfg_bg3d` на MT6771
+просыпается не тем битом, обращение к `0x13040000` даст зависание AXI без лога;
+всё остальное — чистый отказ probe (`-517`/`-110`), дисплей не затрагивается
+(MFG и DISP — разные домены, у GPU нет larb/SMI). Откат: recovery → `dd`
+`boot_ubuntu27.img` (sha256 `a89b264d…8283`) в `mmcblk0p29`.
+
+**Порядок работ:** сначала закрыть фазу 2 (`tools/host/kms-test.sh` + `modetest`
+на планшете), потом прошивать `boot_ubuntu28` — чтобы не менять два фактора
+одновременно.

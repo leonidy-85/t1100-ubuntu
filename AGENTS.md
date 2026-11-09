@@ -76,6 +76,9 @@ scripts/build-tools-aarch64.sh            # modetest (libdrm 2.4.131, static)
 tools/host/kms-test.sh [--dump|--hold N]  # залить на планшет и проверить KMS
 ```
 
+Подробности (каталоги на хосте, meson cross-file для arm64-sysroot, как добавить
+пакет в sysroot без apt-мультиарха) — `docs/cross-build.md`.
+
 Если на хосте нет тулчейна: `sudo apt-get install -y --no-install-recommends
 gcc-aarch64-linux-gnu libssl-dev bison flex libelf-dev rsync`.
 
