@@ -87,8 +87,19 @@ if [ "${CLEAN}" -eq 1 ]; then
 	"${SSH[@]}" "rm -rf '${REMOTE_DIR}/out'"
 fi
 
+# .git не синхронизируется, поэтому версия ядра иначе была бы просто 6.12.114.
+# Передаём LOCALVERSION как в локальной сборке: -g<sha>[-dirty].
+LOCALVERSION=""
+if git -C "${KERNEL_SRC}" rev-parse --git-dir >/dev/null 2>&1; then
+	LOCALVERSION="-g$(git -C "${KERNEL_SRC}" rev-parse --short=10 HEAD)"
+	if ! git -C "${KERNEL_SRC}" diff --quiet || ! git -C "${KERNEL_SRC}" diff --cached --quiet; then
+		LOCALVERSION="${LOCALVERSION}-dirty"
+	fi
+fi
+echo "localversion: ${LOCALVERSION:-<нет>}"
+
 MAKE=(make -C "${REMOTE_DIR}/src" O="${REMOTE_DIR}/out" ARCH="${ARCH}"
-	CROSS_COMPILE=aarch64-linux-gnu-)
+	CROSS_COMPILE=aarch64-linux-gnu- LOCALVERSION="${LOCALVERSION}")
 
 echo
 echo "== defconfig + fragment + olddefconfig =="
