@@ -1,0 +1,158 @@
+From 136880fe55c41dfcf23c8f579e588b006078732f Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Mon, 9 Nov 2026 20:58:32 +0300
+Subject: [PATCH] drm/panel: it6112: never write TX 0x06, and do not report the
+ 0x05 bit0 NAK
+
+With the LK-faithful init from the previous commit the panel still stayed black
+because ->enable() copied the set_bits(0x06, 0x04, 0x04) step from the LK's
+"TX on" routine.  On this hardware that bit blanks the panel while the video
+stream keeps running: writing it by hand on a working bridge turns the picture
+off, clearing it brings the picture back.
+
+That routine (0x5601f124 in build/lk/lk_a.bin) is not on the boot path: a
+linear sweep of the whole 8 MiB image finds no bl/blx to it and no 32-bit
+pointer to its entry, and every dump of the bridge in its working state - taken
+before this driver touches anything and live on the running panel - reads
+TX 0x06 = 0x00.  So LK never sets that bit here and the driver must not either;
+it now leaves 0x06 alone (keeping the 0x05 = 0xfe / 0x00 pulse).
+
+Also stop reporting the TX 0x05 bit0 write as an error: the chip NAKs that data
+byte every time and 0x05 keeps reading 0x00, reproducible from userspace on a
+working bridge while 0xfe/0x00 to the same register succeed.  The write is kept
+for fidelity with LK (0x5601edb4) but issued quietly, and the write helper
+retries transient -ENXIO/-EIO up to three times for everything else.
+
+Hardware: boot_ubuntu27.img shows the console on the panel through the normal
+driver path (no t1100.it6112_skip_init), card0-DSI-1 connected/enabled
+1600x2176, backlight on, no I2C errors in dmesg, TX 0x06 = 0x00.
+
+Signed-off-by: bringup <bringup@t1100.local>
+---
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 82 +++++++++++++++----
+ 1 file changed, 66 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index ac854f42d..62a39ae98 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -222,14 +222,51 @@ static int it6112_mipi_tx_read(struct it6112_ctx *ctx, u8 reg)
+ 	return i2c_smbus_read_byte_data(ctx->i2c_mipi_tx, reg);
+ }
+ 
++/*
++ * The bridge NAKs a transfer now and then right after the TX 0x05 pulse or a
++ * reset (observed as "I2C write 0x05=0x01 failed: -6" in every boot so far).
++ * -ENXIO means the address was not acknowledged, i.e. no byte was written, so
++ * retrying a couple of times is safe even for the DCS packet register and
++ * keeps transient NAKs out of the log.
++ */
++static int it6112_i2c_write(struct i2c_client *client, u8 reg, u8 val,
++			    bool quiet)
++{
++	int ret, attempt;
++
++	for (attempt = 1; attempt <= 3; attempt++) {
++		ret = i2c_smbus_write_byte_data(client, reg, val);
++		if (!ret)
++			return 0;
++		if (quiet || (ret != -ENXIO && ret != -EIO))
++			break;
++		usleep_range(1000, 2000);
++	}
++
++	if (!quiet)
++		dev_err(&client->dev, "I2C write 0x%02x=0x%02x failed: %d\n",
++			reg, val, ret);
++	return ret;
++}
++
+ static void it6112_mipi_tx_write(struct it6112_ctx *ctx, u8 reg, u8 val)
+ {
+-	int ret;
++	it6112_i2c_write(ctx->i2c_mipi_tx, reg, val, false);
++}
+ 
+-	ret = i2c_smbus_write_byte_data(ctx->i2c_mipi_tx, reg, val);
+-	if (ret)
+-		dev_err(&ctx->i2c_mipi_tx->dev,
+-			"I2C write 0x%02x=0x%02x failed: %d\n", reg, val, ret);
++/*
++ * TX 0x05 bit0 cannot be written: the chip NAKs the data byte and 0x05 keeps
++ * reading 0x00.  Reproduced from userspace on a running, working bridge -
++ *	/root/i2cpeek -w 3 0x56 0x05 0xfe   -> ok
++ *	/root/i2cpeek -w 3 0x56 0x05 0x00   -> ok
++ *	/root/i2cpeek -w 3 0x56 0x05 0x01   -> "No such device or address"
++ * - so it is a property of the chip (bit0 looks like an I2C-visible reset
++ * handshake), not a bus or timing problem, and not something to warn about.
++ * LK issues the same write (0x5601edb4) and its I2C helper ignores the status.
++ */
++static void it6112_mipi_tx_write_quiet(struct it6112_ctx *ctx, u8 reg, u8 val)
++{
++	it6112_i2c_write(ctx->i2c_mipi_tx, reg, val, true);
+ }
+ 
+ static void it6112_mipi_tx_set_bits(struct it6112_ctx *ctx, u8 reg,
+@@ -251,12 +288,7 @@ static int it6112_mipi_rx_read(struct it6112_ctx *ctx, u8 reg)
+ 
+ static void it6112_mipi_rx_write(struct it6112_ctx *ctx, u8 reg, u8 val)
+ {
+-	int ret;
+-
+-	ret = i2c_smbus_write_byte_data(ctx->i2c_mipi_rx, reg, val);
+-	if (ret)
+-		dev_err(&ctx->i2c_mipi_rx->dev,
+-			"I2C write 0x%02x=0x%02x failed: %d\n", reg, val, ret);
++	it6112_i2c_write(ctx->i2c_mipi_rx, reg, val, false);
+ }
+ 
+ static void it6112_mipi_rx_set_bits(struct it6112_ctx *ctx, u8 reg,
+@@ -352,8 +384,9 @@ static void it6112_tv110xum_lb2_init_tx(struct it6112_ctx *ctx)
+ 	 */
+ 	it6112_mipi_tx_write(ctx, 0x05, 0xfe);
+ 	it6112_mipi_tx_write(ctx, 0x05, 0x00);
++	usleep_range(1000, 2000);
+ 
+-	it6112_mipi_tx_set_bits(ctx, 0x05, 0x01, 0x01);
++	it6112_mipi_tx_write_quiet(ctx, 0x05, 0x01);
+ 	it6112_mipi_tx_set_bits(ctx, 0x05, IT6112_HOLD_TX, IT6112_HOLD_TX);
+ 
+ 	/* TX PLL reference divider (LK: mask 0x04, value cfg[0x14] << 2) */
+@@ -721,13 +754,30 @@ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ 	 * asserted, and the panel never leaves sleep.  This driver used to
+ 	 * clear the hold only *after* the DCS (as the 6.16 WIP did), which is
+ 	 * why the SoC stream ran, the bridge saw it, and the panel stayed
+-	 * black.  LK's own "TX on" step (0x5601f17c) is exactly this pulse
+-	 * followed by 0x06 bit2:
++	 * black.  LK's pulse is just
++	 *
++	 *	write(0x05, 0xfe); write(0x05, 0x00)
++	 *
++	 * NOTE on TX 0x06 bit2: the routine at 0x5601f124 in the LK dump does
++	 * insert a set_bits(0x06, 0x04, 0x04) between those two writes, and the
++	 * first version of this fix copied it.  It must not be copied:
++	 *
++	 *  - nothing in this LK image calls that routine: a linear sweep of the
++	 *    whole 8 MiB finds no bl/blx to it, and no 32-bit pointer to its
++	 *    entry (0x5601f125) exists either, i.e. it is not on the boot path
++	 *    this panel takes (LK's own "find chip"/lcm messages do come from
++	 *    other routines);
++	 *  - every dump of the bridge in its working state - taken before this
++	 *    driver touches anything (refs/device/dmesg-expA2-gpio-asis.txt.gz)
++	 *    and live on the running panel - reads TX 0x06 = 0x00, so the state
++	 *    LK actually leaves has bit2 clear;
++	 *  - on the live bridge, writing bit2 by hand blanks the panel while the
++	 *    backlight stays on, and clearing it brings the picture back
++	 *    (2026-11-09, i2cpeek on the running system).
+ 	 *
+-	 *	write(0x05, 0xfe); set_bits(0x06, 0x04, 0x04); write(0x05, 0x00)
++	 * So bit2 is left alone: this driver never writes 0x06 at all.
+ 	 */
+ 	it6112_mipi_tx_write(ctx, 0x05, 0xfe);
+-	it6112_mipi_tx_set_bits(ctx, 0x06, 0x04, 0x04);
+ 	it6112_mipi_tx_write(ctx, 0x05, 0x00);
+ 	msleep(10);
+ 
+-- 
+2.53.0
+

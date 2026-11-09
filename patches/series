@@ -34,3 +34,4 @@
 0034-rtc-mt6397-reproduce-the-vendor-MT6358-RTC-power-dow.patch
 0036-drm-panel-it6112-add-a-switch-that-leaves-the-bridge.patch
 0037-drm-panel-it6112-follow-the-LK-init-release-HOLD_TX-.patch
+0038-drm-panel-it6112-never-write-TX-0x06-and-do-not-repo.patch
