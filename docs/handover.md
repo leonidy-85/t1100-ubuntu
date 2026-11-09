@@ -139,6 +139,12 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
 
 ## Прочее по инфраструктуре
 
+- **Build-хост**: `172.17.141.172`, `l` / `0` (sudo тот же пароль), 12 ядер,
+  15 ГБ RAM, Ubuntu 26.04, кросс-тулчейн `aarch64-linux-gnu-gcc` установлен.
+  Сборка ядра — только там: `scripts/build-kernel-remote.sh`
+  (rsync в `/home/l/t1100-ubuntu-build/{src,out}`, артефакты в `build/remote/`).
+  Локальная сборка (`scripts/build_kernel.sh`) осталась как резерв.
+
 - MCP `web-search` починен (Brave через `curl`, фильтр релевантности, fallback
   Bing→Marginalia) и включён в `opencode.json`; встроенный `websearch` в этой
   сети отдаёт 403, Google/Яндекс/DDG — блок/капча.
