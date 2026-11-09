@@ -98,12 +98,24 @@ if git -C "${KERNEL_SRC}" rev-parse --git-dir >/dev/null 2>&1; then
 fi
 echo "localversion: ${LOCALVERSION:-<нет>}"
 
+# ccache на хосте: при правке пары файлов пересборка становится секундами.
+# Меняется командная строка компилятора, поэтому первый прогон всё равно полный.
+# ccache через маскировку: в ~/.ccache-bin лежит симлинк с именем кросс-gcc на
+# ccache, каталог ставится первым в PATH. Форма CC="ccache <gcc>" не работает —
+# kbuild/ccache ругаются "unknown C compiler".
+if "${SSH[@]}" "command -v ccache >/dev/null 2>&1"; then
+	"${SSH[@]}" 'mkdir -p ~/.ccache-bin && ln -sf "$(command -v ccache)" ~/.ccache-bin/aarch64-linux-gnu-gcc'
+	echo "ccache : включён (masquerade ~/.ccache-bin, CCACHE_DIR=~/.ccache-t1100)"
+else
+	echo "ccache : не найден на хосте, собираю без него"
+fi
+
 MAKE=(make -C "${REMOTE_DIR}/src" O="${REMOTE_DIR}/out" ARCH="${ARCH}"
 	CROSS_COMPILE=aarch64-linux-gnu- LOCALVERSION="${LOCALVERSION}")
 
 echo
 echo "== defconfig + fragment + olddefconfig =="
-"${SSH[@]}" "set -e
+"${SSH[@]}" "export CCACHE_DIR=\$HOME/.ccache-t1100 PATH=\$HOME/.ccache-bin:\$PATH; set -e
 	cd '${REMOTE_DIR}'
 	${MAKE[*]} defconfig
 	if [ -f fragment.config ]; then
@@ -120,7 +132,7 @@ fi
 
 echo
 echo "== make Image dtbs (-j${JOBS}) =="
-"${SSH[@]}" "set -e
+"${SSH[@]}" "export CCACHE_DIR=\$HOME/.ccache-t1100 PATH=\$HOME/.ccache-bin:\$PATH; set -e
 	cd '${REMOTE_DIR}'
 	${MAKE[*]} -j${JOBS} Image dtbs" 2>&1 | tee -a "${LOG}"
 

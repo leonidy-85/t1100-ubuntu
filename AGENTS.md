@@ -65,7 +65,16 @@ scripts/build-kernel-remote.sh --config     # только конфиг
 
 Дерево синхронизируется по rsync (без `.git`) в `/home/l/t1100-ubuntu-build/src`,
 выход — в `.../out`, артефакты затягиваются в `build/remote/`. Инкрементальные
-сборки после правки пары файлов — минуты.
+сборки после правки пары файлов — минуты, `ccache` на хосте включён
+(masquerade `~/.ccache-bin`, `CCACHE_DIR=~/.ccache-t1100`).
+
+Userspace-утилиты для планшета (в его rootfs нет ни apt, ни libdrm) собираются
+там же статически:
+
+```sh
+scripts/build-tools-aarch64.sh            # modetest (libdrm 2.4.131, static)
+tools/host/kms-test.sh [--dump|--hold N]  # залить на планшет и проверить KMS
+```
 
 Если на хосте нет тулчейна: `sudo apt-get install -y --no-install-recommends
 gcc-aarch64-linux-gnu libssl-dev bison flex libelf-dev rsync`.

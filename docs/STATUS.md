@@ -1309,3 +1309,21 @@ TX:    06=00 22=2f 24=01 26=01   ошибок I2C в dmesg — 0
 **Мелочь на будущее:** `0x22 = 0x2f` (наша частота 188 МГц) против `0x30` у LK
 (197 МГц) — оба варианта дают картинку; если появятся артефакты, есть маска
 `keep=tx22` для сравнения.
+
+### 10.11: userspace-инструменты под aarch64 на build-хосте
+
+На планшете нет ни apt-сети, ни `libdrm`, поэтому KMS-утилиты собираются
+кросс-компилятором на build-хосте и заливаются по SSH:
+
+- `scripts/build-tools-aarch64.sh` — libdrm `2.4.131` через meson cross-file,
+  `-Ddefault_library=static -Dc_args=-static`, цель `modetest`;
+  результат — `build/tools-aarch64/modetest` (ELF aarch64, **статический**,
+  1 080 384 Б, sha256 `ca1f1787…8d0330`);
+- `tools/host/kms-test.sh` — заливает бинарник, снимает `modetest -c/-p/-e`,
+  находит connector `DSI-1` и выставляет его режим (`--dump` — только отчёт,
+  `--hold N` — держать режим N секунд);
+- `kmscube` **не собирается**: нужен GBM/EGL/GLESv2, то есть Mesa под aarch64 и
+  работающий panfrost — это фаза 3 (в скрипте оставлено место под неё);
+- на build-хосте включён `ccache` для сборок ядра (masquerade `~/.ccache-bin` +
+  `CCACHE_DIR=~/.ccache-t1100`); вариант с префиксом `ccache` в переменной CC
+  не работает — kbuild/ccache отвечают «unknown C compiler».
