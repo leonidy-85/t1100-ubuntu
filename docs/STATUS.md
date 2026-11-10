@@ -1400,3 +1400,31 @@ VGPU 900 мВ / VSRAM 1000 мВ — как у вендора.
 **Следующий шаг — фаза 3, userspace:** собрать Mesa (GBM/EGL/GLESv2) под aarch64
 на build-хосте через `docs/cross-build.md` (sysroot `/home/l/t1100-sysroot`),
 положить в rootfs планшета и прогнать `kmscube`/`es2gears`/`glmark2-es2`.
+
+## 10.11 (4): **GLES через panfrost работает; `kmscube` на панели**
+
+Mesa собрана на build-хосте под aarch64 через noble-sysroot (детали и грабли —
+`docs/mesa-cross.md`, скрипты `scripts/build-mesa-aarch64.sh` +
+`scripts/remote/build-mesa-aarch64.sh`, деплой/тесты `tools/host/mesa-test.sh`):
+
+- **Mesa 25.0.7** (25.1+ требует LLVM ради panfrost-CLC — не годится для кросс-сборки),
+  gallium `panfrost`, `Platforms: surfaceless drm`, GBM/EGL/GLES2 — да;
+- `kmsro` в `-Dgallium-drivers` не передаётся (это winsys, включается сам);
+  в Mesa 25 нет `*_dri.so`: `libEGL`/`libGLESv2` линкуются с `libgallium-25.0.7.so`,
+  GBM грузит `gbm/dri_gbm.so` → нужен `GBM_BACKENDS_PATH`;
+- залито в `/usr/local` (rootfs не тронут), обёртка `/usr/local/bin/mesa-env.sh`.
+
+Проверено на железе (ядро `6.12.114-geed4580b9b`), лид перепроверил лично:
+
+```
+egl-probe /dev/dri/renderD128:
+  GL_RENDERER: Mali-G72 (Panfrost)      GL_VERSION: OpenGL ES 3.1 Mesa 25.0.7
+  RESULT: render OK
+kmscube -D /dev/dri/card1:  Rendered 226 frames in 4.005 sec (56.4 fps)
+dmesg: 0 совпадений "mmu fault|job timeout|gpu fault"
+панель: куб виден (подтверждено владельцем), после прогона консоль вернулась
+```
+
+**Значит критерий фазы 2 («`modetest` + `kmscube` на панели») выполнен полностью**,
+а фаза 3 закрыта по функциональности GLES (осталось: числовой бенчмарк
+`glmark2-es2-drm`, решение по DVFS GPU и Wayland-композитор).
