@@ -1496,3 +1496,32 @@ wayland-платформы EGL. Пересборка Mesa с `-Dplatforms=waylan
 **Попутно исправлено в `tools/host/weston-test.sh`:** `pkill -f
 '/usr/local/bin/weston '` убивал сам remote-shell (его командная строка содержит
 эту строку) → `pkill -x weston`; клиенту не передавался `WAYLAND_DISPLAY`.
+
+### 10.11 (7): Wayland-платформа EGL работает — треугольник 56.4 fps
+
+Mesa 25.0.7 пересобрана с `-Dplatforms=wayland` (в этой опции meson допустимы
+только `auto|wayland|x11|…`; `drm`/`surfaceless` добавляются сами при наличии
+libdrm — поэтому прежняя попытка `-Dplatforms=` их и оставила, но убила
+wayland). В `libEGL` появились `dri2_initialize_wayland`, `wayland_drm`,
+`EGL_EXT_platform_wayland`; у `kmscube`/`glmark2` SONAME не изменились.
+
+После заливки (`libEGL` sha256 `d22d05d3…`, старый бандл сохранён в
+`build/mesa-aarch64-noplatforms/`):
+
+```
+egl-probe /dev/dri/renderD128 → Mali-G72 (Panfrost), GLES 3.1, render OK
+weston (kiosk, card1, atomic) + weston-simple-egl:
+  has EGL_EXT_buffer_age and EGL_EXT_swap_buffers_with_damage
+  282 frames in 5 seconds: 56.40 fps
+  283 frames in 5 seconds: 56.60 fps
+```
+
+Владелец подтвердил: **вращающийся треугольник на панели**. dmesg чистый
+(0 × `mmu fault|job timeout|gpu fault`), `vbat` 4.16 В.
+
+Мелочи из лога Weston (не критично): `Failed to obtain a high priority context`,
+`/usr/share/libinput` data files отсутствуют (в bundle нет `libinput-data` —
+учесть при настройке тача).
+
+**Фаза 4 по композитору закрыта:** Weston 13 + EGL/GLES через panfrost, kmsro,
+atomic KMS. Дальше — ввод (тач), десктоп (KDE Plasma/GNOME) и DVFS GPU.
