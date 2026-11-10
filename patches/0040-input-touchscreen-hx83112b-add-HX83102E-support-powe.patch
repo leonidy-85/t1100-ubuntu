@@ -1,0 +1,272 @@
+From 77b948c59f3ea14cf63dd418085be76e26bb665f Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Tue, 10 Nov 2026 20:18:57 +0300
+Subject: [PATCH] input: touchscreen: hx83112b: add HX83102E support, power the
+ rail first
+
+The Fplus T1100 (MT6771) carries a Himax HX83102E digitizer on i2c0 0x48.
+Read over the AHB window the driver already uses for the ICID:
+
+    reg 0x00 = 0x900000d0, reg 0x0c = 0x00, read reg 0x08 -> 0x83102e00
+
+i.e. ID 0x83102e, the same identification register and the same 56-byte
+"protocol type B" frame size as the hx83112b (the vendor driver logs
+"touch_info_size:56"), so it only needs its own chip description - not the
+AHB-indirect event path of the hx83100a (that window answers 0xbb, i.e. no
+such address, on this part).  Cross-checked with the vendor port
+(refs/mt6771-next, patch "input: touchscreen: hx83112b: Add support for
+HX83102E") and with the live controller.
+
+Two board facts that the driver has to respect:
+
+ - the rail (VLDO28 through the GPIO163 load switch) had no consumer at all:
+   the binding allows vdd-supply but the driver ignored it.  Claim it with
+   devm_regulator_get_enable_optional().
+
+ - the supply must be up *before* the reset pulse.  With the analog rail off
+   the chip still answers I2C and its ICID still reads back, but the reset
+   leaves the firmware down: 0x900000a8 never reports the vendor's "FW
+   reload done" value (0x05) and the event stack only returns 0xec filler
+   (56 * 0xec = the sum 0x33a0 the driver was rejecting).  With the rail
+   powered first the same pulse brings the FW up (0xa8 reads 0x05 right
+   after), which is the order the stock kernel uses.
+
+Diagnostics (all off by default) are kept because the frame the controller
+returns still does not parse; see the bring-up report:
+
+  dump_frames=1   hexdump every frame before the checksum test
+  read_path=1     take the frame from the AHB window instead of reg 0x30
+  poll_ms=N       read the stack every N ms independent of the interrupt
+
+Measured with them: reg 0x30 returns all-zero frames when idle and 56 * 0xec
+when the (1 Hz, not touch-driven) interrupt fires, while the register block
+at 0x32..0x3f does change on real touches - so the chip senses, but the
+mainline hx83112b stack layout does not apply to this part as-is.
+---
+ .../input/touchscreen/himax,hx83112b.yaml     |   5 +-
+ drivers/input/touchscreen/himax_hx83112b.c    | 106 +++++++++++++++++-
+ 2 files changed, 107 insertions(+), 4 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml b/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
+index f5cfacb5e..fd64a4c74 100644
+--- a/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
++++ b/Documentation/devicetree/bindings/input/touchscreen/himax,hx83112b.yaml
+@@ -4,7 +4,7 @@
+ $id: http://devicetree.org/schemas/input/touchscreen/himax,hx83112b.yaml#
+ $schema: http://devicetree.org/meta-schemas/core.yaml#
+ 
+-title: Himax hx83112b touchscreen controller
++title: Himax hx83102e/hx83112b touchscreen controller
+ 
+ maintainers:
+   - Job Noorman <job@noorman.info>
+@@ -16,6 +16,7 @@ properties:
+   compatible:
+     enum:
+       - himax,hx83100a
++      - himax,hx83102e
+       - himax,hx83112b
+ 
+   reg:
+@@ -27,6 +28,8 @@ properties:
+   reset-gpios:
+     maxItems: 1
+ 
++  vdd-supply: true
++
+   touchscreen-inverted-x: true
+   touchscreen-inverted-y: true
+   touchscreen-size-x: true
+diff --git a/drivers/input/touchscreen/himax_hx83112b.c b/drivers/input/touchscreen/himax_hx83112b.c
+index 896a145dd..aef70f5cf 100644
+--- a/drivers/input/touchscreen/himax_hx83112b.c
++++ b/drivers/input/touchscreen/himax_hx83112b.c
+@@ -21,7 +21,9 @@
+ #include <linux/input/touchscreen.h>
+ #include <linux/interrupt.h>
+ #include <linux/kernel.h>
++#include <linux/mutex.h>
+ #include <linux/regmap.h>
++#include <linux/regulator/consumer.h>
+ 
+ #define HIMAX_MAX_POINTS		10
+ 
+@@ -73,8 +75,28 @@ struct himax_ts_data {
+ 	struct i2c_client *client;
+ 	struct regmap *regmap;
+ 	struct touchscreen_properties props;
++	struct mutex io_lock;			/* serialises event-stack reads */
++	struct delayed_work poll_work;
+ };
+ 
++/*
++ * Bring-up diagnostics for the Fplus T1100 digitizer: the controller answers
++ * I2C and its ICID reads back, but the frame the driver gets from the event
++ * stack does not pass the checksum, so the parser has to be calibrated
++ * against the real bytes.  All of these default to "off".
++ */
++static bool dump_frames;
++module_param(dump_frames, bool, 0644);
++MODULE_PARM_DESC(dump_frames, "hexdump every event frame that is read");
++
++static int read_path;
++module_param(read_path, int, 0644);
++MODULE_PARM_DESC(read_path, "0 = event stack at reg 0x30, 1 = AHB 0x90060000");
++
++static uint poll_ms;
++module_param(poll_ms, uint, 0644);
++MODULE_PARM_DESC(poll_ms, "also read the event stack every N ms, 0 = off");
++
+ static const struct regmap_config himax_regmap_config = {
+ 	.reg_bits = 8,
+ 	.val_bits = 32,
+@@ -268,8 +290,8 @@ static bool himax_verify_checksum(struct himax_ts_data *ts,
+ 		checksum += data[i];
+ 
+ 	if ((checksum & 0x00ff) != 0) {
+-		dev_err(&ts->client->dev, "Wrong event checksum: %04x\n",
+-			checksum);
++		dev_err_ratelimited(&ts->client->dev,
++				    "Wrong event checksum: %04x\n", checksum);
+ 		return false;
+ 	}
+ 
+@@ -293,14 +315,30 @@ static int himax_handle_input(struct himax_ts_data *ts)
+ {
+ 	int error;
+ 	struct himax_event event;
++	size_t i, sum = 0;
+ 
+-	error = ts->chip->read_events(ts, &event, sizeof(event));
++	mutex_lock(&ts->io_lock);
++	if (read_path)
++		error = hx83100a_read_events(ts, &event, sizeof(event));
++	else
++		error = ts->chip->read_events(ts, &event, sizeof(event));
++	mutex_unlock(&ts->io_lock);
+ 	if (error) {
+ 		dev_err(&ts->client->dev, "Failed to read input event: %d\n",
+ 			error);
+ 		return error;
+ 	}
+ 
++	if (dump_frames) {
++		for (i = 0; i < sizeof(event); i++)
++			sum += ((u8 *)&event)[i];
++		dev_info(&ts->client->dev,
++			 "frame path=%d len=%zu sum=0x%02zx\n",
++			 read_path, sizeof(event), sum & 0xff);
++		print_hex_dump(KERN_INFO, "hx: ", DUMP_PREFIX_OFFSET, 16, 1,
++			       &event, sizeof(event), true);
++	}
++
+ 	/*
+ 	 * Only process the current event when it has a valid checksum but
+ 	 * don't consider it a fatal error when it doesn't.
+@@ -311,6 +349,23 @@ static int himax_handle_input(struct himax_ts_data *ts)
+ 	return 0;
+ }
+ 
++/*
++ * Read the event stack on a timer as well: the level IRQ fires about once a
++ * second even without a finger, so the bytes of a real touch can only be
++ * captured by sampling the stack independently of the interrupt.
++ */
++static void himax_poll_work(struct work_struct *work)
++{
++	struct himax_ts_data *ts =
++		container_of(work, struct himax_ts_data, poll_work.work);
++
++	if (poll_ms)
++		himax_handle_input(ts);
++
++	schedule_delayed_work(&ts->poll_work,
++			      msecs_to_jiffies(poll_ms ? poll_ms : 1000));
++}
++
+ static irqreturn_t himax_irq_handler(int irq, void *dev_id)
+ {
+ 	int error;
+@@ -349,6 +404,18 @@ static int himax_probe(struct i2c_client *client)
+ 		return error;
+ 	}
+ 
++	/*
++	 * The controller sits behind its own rail (VLDO28 through the GPIO163
++	 * load switch on the Fplus T1100).  It has to be up before the reset
++	 * pulse: resetting the chip with its analog rail off leaves the
++	 * firmware down (ICID still answers, but 0x900000a8 never reports
++	 * "FW reload done" and the event stack only returns filler), which is
++	 * exactly what the vendor's power-on-then-reset order avoids.
++	 */
++	error = devm_regulator_get_enable_optional(dev, "vdd");
++	if (error)
++		return dev_err_probe(dev, error, "Failed to enable vdd\n");
++
+ 	ts->gpiod_rst = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
+ 	error = PTR_ERR_OR_ZERO(ts->gpiod_rst);
+ 	if (error) {
+@@ -368,6 +435,26 @@ static int himax_probe(struct i2c_client *client)
+ 	if (error)
+ 		return error;
+ 
++	mutex_init(&ts->io_lock);
++	INIT_DELAYED_WORK(&ts->poll_work, himax_poll_work);
++	schedule_delayed_work(&ts->poll_work, msecs_to_jiffies(1000));
++
++	/*
++	 * Bring-up aid: print what the controller says about its own firmware.
++	 * 0x900000a8 is the "FW reload done" flag the vendor driver polls,
++	 * 0x900000e8/0x900000e4 are the version/status words it logs.
++	 */
++	{
++		u32 v;
++
++		if (!himax_bus_read(ts, 0x900000a8, &v, sizeof(v)))
++			dev_info(dev, "reg 0x900000a8 = 0x%08x\n", v);
++		if (!himax_bus_read(ts, 0x900000e8, &v, sizeof(v)))
++			dev_info(dev, "reg 0x900000e8 = 0x%08x\n", v);
++		if (!himax_bus_read(ts, 0x900000e4, &v, sizeof(v)))
++			dev_info(dev, "reg 0x900000e4 = 0x%08x\n", v);
++	}
++
+ 	error = devm_request_threaded_irq(dev, client->irq, NULL,
+ 					  himax_irq_handler, IRQF_ONESHOT,
+ 					  client->name, ts);
+@@ -399,6 +486,17 @@ static const struct himax_chip hx83100a_chip = {
+ 	.read_events = hx83100a_read_events,
+ };
+ 
++/*
++ * HX83102E (in-cell digitizer of the BOE TV110XUM panel): same register
++ * interface as the HX83112B, the ICID is 0x83102e and the touch event stack
++ * is mapped at register 0x30, so himax_read_events() applies unchanged.
++ */
++static const struct himax_chip hx83102e_chip = {
++	.id = 0x83102e,
++	.check_id = himax_check_product_id,
++	.read_events = himax_read_events,
++};
++
+ static const struct himax_chip hx83112b_chip = {
+ 	.id = 0x83112b,
+ 	.check_id = himax_check_product_id,
+@@ -407,6 +505,7 @@ static const struct himax_chip hx83112b_chip = {
+ 
+ static const struct i2c_device_id himax_ts_id[] = {
+ 	{ "hx83100a", (kernel_ulong_t)&hx83100a_chip },
++	{ "hx83102e", (kernel_ulong_t)&hx83102e_chip },
+ 	{ "hx83112b", (kernel_ulong_t)&hx83112b_chip },
+ 	{ /* sentinel */ }
+ };
+@@ -415,6 +514,7 @@ MODULE_DEVICE_TABLE(i2c, himax_ts_id);
+ #ifdef CONFIG_OF
+ static const struct of_device_id himax_of_match[] = {
+ 	{ .compatible = "himax,hx83100a", .data = &hx83100a_chip },
++	{ .compatible = "himax,hx83102e", .data = &hx83102e_chip },
+ 	{ .compatible = "himax,hx83112b", .data = &hx83112b_chip },
+ 	{ /* sentinel */ }
+ };
+-- 
+2.53.0
+

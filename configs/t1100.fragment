@@ -145,3 +145,9 @@ CONFIG_TYPEC=y
 CONFIG_TYPEC_TCPM=y
 CONFIG_TYPEC_TCPCI=y
 CONFIG_TYPEC_TCPCI_MT6370=y
+
+# --- input: Himax HX83102E in-cell touch controller (i2c0 0x48) --------------
+# The panel's digitizer is a Himax HX83102E (ICID 0x83102e read over the AHB
+# window at 0x900000d0), which is register-compatible with the hx83112b
+# driver. Without the driver the i2c client 0-0048 exists but nothing binds.
+CONFIG_TOUCHSCREEN_HIMAX_HX83112B=y

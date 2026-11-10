@@ -1,0 +1,66 @@
+From 3442148772f3a1c746e8b3fce0a79f9bd07b3fd1 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Tue, 10 Nov 2026 20:19:08 +0300
+Subject: [PATCH] arm64: dts: t1100: power the touch AVDD switch (GPIO163)
+
+The stock ODM overlay lists ts-avdd-gpios = <&pio 163> next to the touch
+reset, but nothing in mainline drove it, so the digitizer's analog rail
+stayed behind an open load switch: the controller still answered I2C (its
+digital side comes straight from VLDO28) and enumerated, but never reported
+a touch and its firmware never reached the vendor's "FW reload done" state.
+
+Model it as a fixed regulator fed by VLDO28 and use it as the touch's vdd,
+so the driver enables the switch before it pulses the reset - the order the
+stock kernel uses.
+
+Verified on the board: pin 163 is driven high after probe
+(pinconf-pins: "pin output (1 level)"), regulator_summary shows
+vreg_touch_avdd 2800 mV enabled, and with the rail up a reset pulse puts
+0x900000a8 at 0x05 (the value the vendor driver polls for) instead of 0.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 22 ++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 0399b3016..d259c2a17 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -154,6 +154,25 @@ reg_vsys: regulator-vsys {
+ 		regulator-boot-on;
+ 	};
+ 
++	/*
++	 * Touch AVDD switch, GPIO163 (stock odm/lcm: ts-avdd-gpios = <&pio 163>).
++	 * The digitizer's digital side is fed straight from VLDO28 and answers
++	 * I2C even when this switch is open, which is why the controller
++	 * enumerated but never reported: pin 163 is only pulled down after
++	 * reset and nothing in mainline drove it, while the vendor LCM driver
++	 * raises it together with the panel power-up.
++	 */
++	touch_avdd: regulator-touch-avdd {
++		compatible = "regulator-fixed";
++		regulator-name = "vreg_touch_avdd";
++		regulator-min-microvolt = <2800000>;
++		regulator-max-microvolt = <2800000>;
++		vin-supply = <&mt6358_vldo28_reg>;
++		gpio = <&pio 163 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		regulator-enable-ramp-delay = <5000>;
++	};
++
+ 	/*
+ 	 * Stock ODM overlay nodes, kept verbatim for traceability. Nothing binds
+ 	 * to them in mainline: the LCM is sequenced by the IT6112 panel driver.
+@@ -213,7 +232,8 @@ touchscreen@48 {
+ 		touchscreen-size-x = <1600>;
+ 		touchscreen-size-y = <2176>;
+ 
+-		vdd-supply = <&mt6358_vldo28_reg>;
++		/* VLDO28 -> GPIO163 load switch; the driver enables "vdd". */
++		vdd-supply = <&touch_avdd>;
+ 	};
+ };
+ 
+-- 
+2.53.0
+
