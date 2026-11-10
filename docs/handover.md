@@ -1,4 +1,4 @@
-# Передача проекта (состояние на 05.11.2026, конец сессии)
+# Передача проекта (состояние на 05.11.2026; обновлено 10.11.2026)
 
 Кратко: **mainline 6.12 грузится на T1100 до Ubuntu 24.04 (systemd), eMMC и
 USB-сеть работают, SSH доступен, батарея заряжается, `poweroff` плату гасит.
@@ -22,14 +22,17 @@ USB-сеть работают, SSH доступен, батарея заряжа
 
 ## Артефакты
 
-- Ядро: `/home/l/projects/linux-t1100` (6.12.114 + коммиты), патчи
-  `patches/0001…0034` (0035 отключён, лежит как `wip-0035-*.disabled`).
+- Ядро: дерево на build-хосте `/home/l/t1100-ubuntu-build/src` (6.12.114 +
+  коммиты), локально — только патчи `patches/0001…0039` (0035 отключён, лежит
+  как `wip-0035-*.disabled`); сборка — `scripts/build-kernel-remote.sh`.
 - Образы: `build/boot_ubuntu14.img` (md5 `38fe9c1f…`, зарядка+выключение, экран
   чёрный), `build/boot_ubuntu17.img` (md5 `36397256…`, + трасса DSI).
 - Rootfs-оверлей: `rootfs-overlay/` (страховка от разряда `t1100-power-guard`),
   ставится `tools/host/install-power-guard.sh [host|--rootfs DIR]`.
-- Rootfs: `build/rootfs/rootfs-t1100.tar.gz`, на планшете — `p54` (ext4, метка
-  `ubuntu`, Ubuntu 24.04 + systemd + sshd + root authorized_keys этого хоста).
+- Rootfs: на планшете — `p54` (ext4, метка `ubuntu`, Ubuntu 24.04.3 + systemd +
+  sshd + root authorized_keys этого хоста + `t1100-power-guard`). Исторические
+  архивы `build/rootfs/*.tar.gz` в локальном дереве сейчас отсутствуют
+  (`build/` нет); живая копия на p54 — единственная, при пересборке не потерять.
 - Инструменты: `tools/host/{recovery.py,flash-ssh.sh,usb-net.sh,check-power.sh,
   diag-drm.sh,watch-usb.sh,vendor-it6112.sh}`, `tools/lk/{extract-boot-dtb.py,
   verify-dtb.sh}`, `tools/i2cpeek`, `tools/mempeek`, `tools/fbtest`.
@@ -40,7 +43,8 @@ USB-сеть работают, SSH доступен, батарея заряжа
 
 **Экран: РАБОТАЕТ на дефолтном пути драйвера** (`boot_ubuntu27`, 10.11):
 причина чёрного экрана — запись `TX 0x06` bit2 в «TX on» (в LK эта ветка не
-вызывается). Осталось `modetest` (libdrm), `kmscube` — в фазе 3 вместе с GPU.
+вызывается). Фаза 2 закрыта: `modetest` выставляет `1600x2176` на `DSI-1`,
+`kmscube` (фаза 3, panfrost) — 56.4 fps, `glmark2` — Score 452.
 Ниже — история до этого открытия (эксперимент A с `skip_init`).
 
 Доказано, что SoC гонит поток: CRTC активен, `DSI_START=1`, режим
@@ -97,12 +101,24 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
    d. альтернатива: проверить гипотезу «LK инициализирует панель при любой
       загрузке» — образ, где наш драйвер **не трогает** мост в `prepare()`
       (только DSI + DCS), и посмотреть, появится ли картинка.
-3. **Дальше по плану:** GPU (panfrost, `&gpu`/`&mfg` сейчас disabled, нужны
-   `mali-supply`/`sram-supply` и рабочие PD) → KDE Plasma/Wayland.
+3. **Сделано:** GPU (panfrost; патч 0039 включает `&gpu`, DVFS выключен
+   намеренно, `mfg`-узлы не нужны — см. `docs/panfrost-plan.md`) **прошит**
+   (`boot_ubuntu28`): panfrost 1.2.0, Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps,
+   `glmark2` Score 452; Weston 13 (DRM/atomic) и EGL-клиенты 56.4 fps на панели.
+   Mesa/kmscube/glmark2/Weston лежат в `/usr/local`, rootfs не тронут.
+   **Дальше:** тач Himax (evdev/libinput), KDE Plasma/GNOME, решение по DVFS GPU.
 4. **Мелочи:** `constant_charge_current` = 2 А теперь поднимает
    `t1100-power-guard` (драйвер сам ставит 900 мА); вернуть `tcpc`, когда
    понадобится OTG/host (сейчас отключён, `tcpci` не находит узел `connector`);
    топливомера (проценты заряда) в mainline нет — только `status`/`current`.
+
+## Wi-Fi / BT (не начато, фаза 5)
+
+В mainline 6.12 поддержки нет: ни драйвера, ни DTS-узлов. Combo CONSYS_6771
+(MT6630/MT6631), Wi-Fi — вендорский `wlan_drv_gen3` через WMT/CONNSYS, BT —
+HCI UART H4 через тот же WMT; прошивки — в `/vendor/firmware`, в rootfs их нет.
+`mt76` этот чип не покрывает, USB-донгл требует host/OTG (сейчас нет).
+Подробности — `docs/hardware.md`. Сеть пока только RNDIS.
 
 ## Грабли (не наступать снова)
 
@@ -128,7 +144,7 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
 - RNDIS рвётся при уходе в suspend — sleep-таргеты замаскированы на планшете.
 - Зарядка от USB-порта ноутбука = 500 мА (SDP): при работе Ubuntu это
   отрицательный баланс. Больше не разряжается в ноль только благодаря
-  `t1100-power-guard` (гасит ниже 3.5 В), но работать так нельзя — нужен 2 А
+  `t1100-power-guard` (гасит ниже 3.6 В), но работать так нельзя — нужен 2 А
   зарядник, либо зарядка выключенным/в recovery.
 - Калибровка батареи (06.11): 3.693 В ≈ 10 % на вендорском gauge, 4.12 В ≈ 82 %;
   проценты нелинейны, а от порта ноутбука в recovery в батарею идёт 0 мА

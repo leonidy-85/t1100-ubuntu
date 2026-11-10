@@ -141,21 +141,36 @@
 | `vbmeta_a` | p16 | 8 МБ |
 | `seccfg` | p11 | 8 МБ |
 | `super` | p49 | 6 ГБ (Android system/vendor для hybris) |
-| `userdata` | p54 | ~52 ГБ (LVM `sailfish`: root 9 ГБ + home 41 ГБ) |
+| `userdata` | p54 | ~52 ГБ (сток — LVM `sailfish`; сейчас ext4, метка `ubuntu`) |
 | `recovery` | p50 | 32 МБ |
 | `md1img_a` | p19 | 64 МБ (модем) |
 | `tee_a` | p32 | 8 МБ |
 | `preloader`/`lk` | boot1 / p28 | — |
 
-`userdata` (p54) — это LVM VG `sailfish` с `sailfish-root` (`/`, 9 ГБ) и
-`sailfish-home` (`/home`, 41 ГБ).
+`userdata` (p54) в стоке — LVM VG `sailfish` с `sailfish-root` (`/`, 9 ГБ) и
+`sailfish-home` (`/home`, 41 ГБ). 31.10.2026 LVM снесён (с подтверждения
+владельца), p54 переформатирован в **ext4 с меткой `ubuntu`** под Ubuntu
+24.04; сейчас это единственный rootfs проекта.
 
 ## Wi-Fi / BT / USB
 
-- Wi-Fi/BT: **MT6630/MT6631** (combo), драйвер `wlan_drv_gen3` (+ `wmt_drv`).
+- Combo: **CONSYS_6771 = MT6630/MT6631** (сток: `CONFIG_MTK_COMBO_CHIP_CONSYS_6771`,
+  `CONFIG_MTK_COMBO_WIFI`, `CONFIG_MTK_COMBO_BT`).
+- В стоковом DTS — узел `wifi@180f0000` (`compatible = "mediatek,wifi"`,
+  регистры `0x180f0000`, `0x10212180`, `0x10001000`, `0x180e0000`; IRQ 290 и 118;
+  клок `wifi-dma`). Это **не SDIO**: у `msdc0` стоит `no-sdio`, `msdc1` — карта
+  памяти, `wifi-pwrseq` в стоке `disabled`.
+- Питание: LDO MT6358 **`vcn33_wifi`** и **`vcn33_bt`** (3.3 В).
+- Wi-Fi — через WMT/CONNSYS, вендорский `wlan_drv_gen3`; BT — HCI UART H4 через
+  тот же WMT (сток: `CONFIG_BT_HCIUART_H4=y`).
 - Прошивка: **`/vendor/firmware/`** (`WIFI_RAM_CODE_6759`, `WMT_SOC.cfg`,
-  `soc3_0_ram_*.bin`, `mt6631_fm_*` и т.п.). `/lib/firmware` отсутствует.
-- USB: MUSB-HDRC + XHCI (база `0x11200000`), OTG.
+  `soc3_0_ram_*.bin`, `mt6631_fm_*` и т.п.). В Ubuntu-rootfs `/lib/firmware` нет.
+- **Mainline 6.12: поддержки нет** — ни драйвера, ни узлов в DTS; `mt76` этот
+  чип не покрывает, для BT готового CONNSYS/WMT-пути тоже нет. Сейчас Wi-Fi и
+  BT не работают, сеть — только RNDIS по USB. Порт вендорского стека — фаза 5.
+- USB: MUSB-HDRC + XHCI (база `0x11200000`), OTG. В mainline
+  `dr_mode = "peripheral"`, host/OTG не поднят (`tcpc` отключён, `tcpci` не
+  находит `connector`), поэтому USB-донгл Wi-Fi/BT — не быстрый обход.
 
 ## Отладка / консоль
 
@@ -196,7 +211,7 @@
   devicelock `12345`). **Внимание:** recovery T1100 и NS220 оба на `10.42.66.66`
   — перед записью сверять `/proc/partitions` (T1100: p29=32768, p54≈52 ГБ).
 
-## Текущее состояние (после security-off)
+## Стоковое состояние (после security-off)
 
 - `ima_appraise=off`, diehard убран из LSM (`capability,yama`).
 - `/home` — plain ext4 на `/dev/mapper/sailfish-home` (не LUKS).

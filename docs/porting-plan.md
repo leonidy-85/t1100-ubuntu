@@ -60,22 +60,27 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
 - `CONFIG_DRM_PANFROST`, GPU-node (`mediatek,mt6771-mali` → `arm,mali-bifrost`),
   MFG power-domain (`spm`), `mfgcfg`-клок.
 - Mesa panfrost; проверка `glmark2`/`es2gears`.
-- **Готово:** GLES-рендер на экране.
+- **Готово:** Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps, `glmark2` Score 452
+  (всё в `/usr/local`, rootfs не тронут).
 
-## Фаза 4 — в работе (Weston на панели, 10.11)
+## Фаза 4 — в работе: Weston на панели (10.11)
 
-(было: ## Фаза 4 — Ubuntu userspace
-
-- Ubuntu-base arm64 rootfs (systemd), root на ext4 (p54 или LV).
-- Wayland + GNOME (или Weston для первых тестов).
+- Ubuntu-base arm64 rootfs (systemd), root на ext4 — **сделано**: p54, метка
+  `ubuntu` (Ubuntu 24.04.3).
+- Wayland: **Weston 13** с DRM/atomic-бэкендом работает на панели; EGL/GLES
+  через panfrost, `weston-simple-egl` 56.4 fps (kiosk-shell, `card1`).
+- **Осталось:** ввод с тача (Himax, evdev/libinput), десктоп KDE Plasma/GNOME.
 - **Готово:** рабочий стол на дисплее, ввод с тача.
 
 ## Фаза 5 — периферия
 
-- Wi-Fi: вендорный `wlan_drv_gen3` + `/vendor/firmware`, либо mainline `mt76`
-  (MT6631 в mainline не поддержан — вероятно, только вендорный модуль).
+- Wi-Fi/BT (CONSYS_6771 = MT6630/MT6631): в mainline не поддержано — ни
+  драйвера, ни DTS-узлов; `mt76` этот чип не покрывает. Реалистичный путь —
+  порт вендорского стека `wlan_drv_gen3` + `wmt_drv` (+ conninfra) и прошивок
+  из `/vendor/firmware`; BT идёт через тот же WMT (HCI UART H4). Это отдельный
+  крупный проект. USB-донгл требует host/OTG, которого сейчас нет.
 - Тач Himax (`i2c@11007000`, 0x48), evdev/libinput.
-- **Готово:** сеть и ввод стабильны.
+- **Готово:** сеть (RNDIS или Wi-Fi/BT после порта) и ввод стабильны.
 
 ## Фаза 6 — прошивка/откат
 

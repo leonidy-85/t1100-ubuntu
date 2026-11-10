@@ -405,8 +405,9 @@ chroot-способом), KMS-панель, panfrost.
 - Дисплей: нет TRM, только исходники; объём `mediatek-drm` снижен благодаря
   MT8183-совпадению и готовому IT6112-драйверу.
 - Тач Himax — отдельный драйвер (`himax,hx83102e` в adomerle DTS).
-- Wi-Fi: MT6631 в mainline не поддержан; вероятно вендорный `wlan_drv_gen3` +
-  `/vendor/firmware`.
+- Wi-Fi/BT: CONSYS_6771 (MT6630/MT6631) в mainline не поддержан; вендорский
+  стек `wlan_drv_gen3` + `wmt_drv` + `/vendor/firmware` — отдельный крупный
+  порт; сейчас Wi-Fi/BT не работают, сеть только RNDIS (см. 10.11 ниже).
 - Прошивка: только через recovery/`dd` с бэкапом `boot_a`/`vbmeta`/`seccfg`.
 - Отладочные MTK-узлы опасны: запись в `/proc/dispsys`/`/proc/clkdbg` валит
   стоковое ядро (проверено 28.10.2026).
@@ -990,8 +991,9 @@ MT6370 DSV + подсветка), 0027–0030 (STBY/EXT_PWR, замеры, TX-PL
 страховка, чтобы плата больше никогда не уходила в ноль:
 
 - `rootfs-overlay/usr/local/sbin/t1100-power-guard` — раз в минуту читает `vbat`
-  из IIO (канал с меткой `vbat`), пишет предупреждение ниже **3.65 В** и гасит
-  систему ниже **3.5 В** после 3 замеров подряд (на зарядке — после 9: если
+  из IIO (канал с меткой `vbat`), пишет предупреждение ниже **3.65 В** (позже,
+  06.11, поднято до 3.72 В) и гасит систему ниже **3.5 В** (позже — 3.6 В)
+  после 3 замеров подряд (на зарядке — после 9: если
   напряжение не растёт при VBUS, значит зарядка не тянет). Выключение идёт
   штатным путём (патч 0034), в `/var/lib/t1100-power-guard/low-battery-poweroff`
   остаётся метка, и следующая загрузка объясняет в journal, почему плата погасла;
@@ -1525,3 +1527,38 @@ weston (kiosk, card1, atomic) + weston-simple-egl:
 
 **Фаза 4 по композитору закрыта:** Weston 13 + EGL/GLES через panfrost, kmsro,
 atomic KMS. Дальше — ввод (тач), десктоп (KDE Plasma/GNOME) и DVFS GPU.
+## 10.11 (8): Wi-Fi/BT — статус; аудит rootfs и userspace
+
+**Wi-Fi/BT не начаты** (фаза 5). Факты, собранные при разборе:
+
+- combo **CONSYS_6771 = MT6630/MT6631**; в стоковом DTS — `wifi@180f0000`
+  (`mediatek,wifi`, IRQ 290/118, клок `wifi-dma`), питание — LDO MT6358
+  `vcn33_wifi`/`vcn33_bt`; это не SDIO (у `msdc0` `no-sdio`, `msdc1` — карта);
+- Wi-Fi — вендорский `wlan_drv_gen3` через WMT/CONNSYS, BT — HCI UART H4 через
+  тот же WMT; прошивки — `/vendor/firmware` (`WIFI_RAM_CODE_6759`,
+  `WMT_SOC.cfg`, `soc3_0_ram_*.bin`), в Ubuntu-rootfs их нет;
+- в mainline 6.12 **нет ни драйвера, ни DTS-узлов**; `mt76` MT6631 не
+  покрывает; USB-донгл требует host/OTG, которого сейчас нет (`dr_mode =
+  "peripheral"`, `tcpc` отключён). Сеть — только RNDIS;
+- в конфиге ядра `CONFIG_BT=m`, `CONFIG_CFG80211=m`, `CONFIG_MAC80211=m`, а
+  модули в образ не ставятся — беспроводного стека нет и теоретически.
+
+**Аудит rootfs** (по докам и последним загрузкам): p54 — ext4, метка `ubuntu`,
+Ubuntu 24.04.3 LTS + systemd + sshd (root по ключу) + `t1100-power-guard`;
+~587 МБ занято (03.11), LVM `sailfish` снесён 31.10. В rootfs нет `libdrm`/
+`modetest` (modetest заливается статически с build-хоста), `/lib/firmware` и
+модулей ядра. Локального `build/rootfs/*.tar.gz` сейчас нет — живая копия на
+p54 единственная.
+
+**Userspace сверх rootfs, всё в `/usr/local`** (rootfs, `boot_a`, ядро/DTB не
+трогались): Mesa 25.0.7 (GBM/EGL/GLES2/GLES3 + wayland-платформа),
+`mesa-env.sh`, `kmscube`, `glmark2`, Weston 13 с бэкендом DRM/atomic. Это
+закрыло фазы 2 (KMS) и 3 (GLES): `kmscube` 56.4 fps, `glmark2` Score 452,
+Weston + `weston-simple-egl` 56.4 fps на панели (см. 10.11 (3)–(7)).
+
+Документация синхронизирована: `hardware.md` (p54/ext4, Wi-Fi/BT),
+`handover.md` (0039 прошит, порог 3.6 В, rootfs-артефакт), `porting-plan.md`,
+`ubuntu-rootfs-plan.md`, `README.md`, `AGENTS.md`, `provenance.md`.
+
+**Дальше:** ввод (тач Himax, evdev/libinput), десктоп KDE Plasma/GNOME, решение
+по DVFS GPU; Wi-Fi/BT — отдельная фаза 5, v1 не блокирует.

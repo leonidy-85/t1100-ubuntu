@@ -2,14 +2,19 @@
 
 Цель: загруженная Ubuntu 24.04 с KDE Plasma (Wayland) на T1100.
 
+> **Статус (10.11.2026):** шаги 1–4 выполнены 31.10–03.11; rootfs живёт на
+> `p54`, загружается до systemd, SSH по RNDIS работает. Ниже — исходный план;
+> актуальные уточнения — в разделе «Что уже есть».
+
 ## Что уже есть
 
-- `build/rootfs/rootfs-t1100-base.tar.gz` — Ubuntu-base **24.04.3 arm64**:
-  hostname `t1100`, `systemd-networkd` (usb0 → `10.42.66.66/29`), `ssh`,
-  root/`12345`.
-- Разметка (GPT): `p54 userdata` ≈ 52 ГБ — сейчас LVM `sailfish`
-  (`sailfish-root` 9 ГБ + `sailfish-home` 41 ГБ). Под Ubuntu её и используем.
-- Канал в ядро (когда USB починим): RNDIS `usb0` + `telnetd`/sshd.
+- На планшете: `p54` — **ext4, метка `ubuntu`**, Ubuntu **24.04.3 arm64**,
+  systemd, `systemd-networkd` (usb0 → `10.42.66.66/29`), `sshd` (root по ключу
+  этого хоста), `t1100-power-guard`; LVM `sailfish` снесён 31.10.2026.
+- Базовый архив `build/rootfs/rootfs-t1100-base.tar.gz` (hostname `t1100`,
+  root/`12345`) и пересобранный `rootfs-t1100.tar.gz` в локальном дереве
+  **сейчас отсутствуют** (`build/` нет); живая копия — на p54.
+- Канал в ядро: RNDIS `usb0` + `sshd` (проверено).
 
 ## Шаги
 
@@ -17,7 +22,7 @@
    `bringup`. Критерий: `mmcblk0` в `/proc/partitions`, `udc` в sysfs.
 2. **Разложить rootfs** из рекавери (там есть `dd`, `mkfs`? проверить; иначе
    через USB/`nc`):
-   - `vgchange -ay` не нужен: LVM сносим;
+   - `vgchange -ay` не нужен: LVM снесён 31.10.2026;
    - `wipefs -a /dev/mmcblk0p54`, `mkfs.ext4 -L ubuntu /dev/mmcblk0p54`;
    - монтировать, распаковать `rootfs-t1100-base.tar.gz`.
 3. **cmdline**: `root=/dev/mmcblk0p54 rootwait rw console=tty0
@@ -34,7 +39,7 @@
 
 ## Риски
 
-- LVM `sailfish` содержит текущую Aurora-home: снос необратим (Aurora при этом
-  остаётся загрузочной, но данные `/home` пропадут) → делать только после
-  явного подтверждения владельца.
+- LVM `sailfish` содержал Aurora-home: снос был необратим (Aurora осталась
+  загрузочной, но данные `/home` пропали). Выполнено 31.10.2026 с явного
+  подтверждения владельца.
 - KDE на 4 ГБ RAM и Mali-G72 — ок для Plasma Wayland, но нужен рабочий KMS.

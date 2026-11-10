@@ -4,17 +4,17 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус (05.11.2026): фаза 1 закрыта, KMS-стек поднят; блокер — нет картинки
-> на панели.**
-> mainline 6.12.114 + патчи 0001–0034: ядро доходит до `systemd running`,
+> **Статус (10.11.2026): фазы 1–3 закрыты; на панели работает Wayland (Weston).**
+> mainline 6.12.114 + патчи 0001–0039: ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, USB-RNDIS (`1d6b:0104`) и
 > `ssh root@10.42.66.66` по ключу, **батарея заряжается** (`mt6370-charger`:
 > `online=1`, `Charging`, `vbus 4940 мВ`), **`poweroff` плату гасит** (0034).
-> Дисплей: `mediatek-drm` собран, CRTC активен в вендорском режиме
-> `1600x2176@60`, DSI стартует (`DSI_START=1`), мост IT6112 настроен побайтно
-> как в стоковом LK — но **экран чёрный**; публичного референса для этой панели
-> нет (в порту той же платы узел панели `disabled`). Дальше: RE инициализации
-> панели в LK → GPU panfrost → KDE. Состояние и план — `docs/STATUS.md`,
+> Дисплей: `card0-DSI-1` `connected/enabled`, режим `1600x2176@60`, на панели
+> консоль и `t1100 login:` (патч 0038 — убрана запись `TX 0x06` bit2).
+> GPU: panfrost (патч 0039) — **Mesa 25.0.7, GLES 3.1**, `kmscube` 56.4 fps,
+> `glmark2` Score 452. Weston 13 (DRM/atomic) показывает панель, EGL-клиенты
+> 56.4 fps. Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Дальше:
+> тач, KDE Plasma/GNOME, DVFS GPU. Состояние и план — `docs/STATUS.md`,
 > `docs/handover.md`.
 >
 > ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
@@ -61,7 +61,7 @@
 |---|---|
 | SoC-прошивки MTK: `preloader`, `lk`, `tee`, `md1img`, `nvram`, `nvdata`, `protect*` | Aurora userspace (lipstick/systemd) |
 | DTB / описание панели | initramfs Авроры |
-| `/vendor/firmware` (Wi-Fi/BT), если нужны | rootfs (`sailfish-root`/`sailfish-home` LVM) |
+| `/vendor/firmware` (Wi-Fi/BT), если портировать стек | Aurora rootfs: LVM `sailfish` снесён, `p54` = ext4 под Ubuntu |
 | — | Android-HAL в `super` (fimage/vendor) |
 
 «Оставить только ядро от Авроры» на практике = оставить ядро **и** DTB **и**
@@ -103,8 +103,10 @@ t1100-ubuntu/
             └── SKILL.md       # рабочий флоу порта
 ```
 
-Ядро живёт отдельно: `../linux-t1100` (6.12.114 + `git am patches/series`),
-сборка — out-of-tree в `build/t1100` (в `.gitignore`).
+Ядро живёт отдельно: локальное дерево `../linux-t1100` (если есть) или
+`/home/l/t1100-ubuntu-build/src` на build-хосте (rsync из
+`scripts/build-kernel-remote.sh`, 6.12.114 + `git am patches/series`); сборка —
+out-of-tree, артефакты забираются в `build/remote/` (в `.gitignore`).
 
 ## Инструменты и соседние проекты
 
@@ -133,21 +135,23 @@ cd ../t1100-ubuntu && scripts/build-kernel-remote.sh
 sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 ```
 
-## Где проект сейчас (31.10.2026)
+## Где проект сейчас (10.11.2026)
 
 | Блок | Состояние |
 |---|---|
 | LK / образ boot.img | ✅ LK принимает наш DTB (4 правила, `docs/lk-dtb-rules.md`), перепаковка `scripts/repack_boot.py` |
-| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0019` |
+| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0039` (0035 отключён) |
 | Память/PSCI/GIC | ✅ |
-| PMIC MT6358 / power domains | ✅ рельсы и домены поднимаются |
+| PMIC MT6358 / power domains | ✅ рельсы и домены поднимаются; зарядка и `poweroff` работают (0031–0034) |
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
 | Логи без UART/экрана | ✅ своя зона `ramoops@70000000` + чтение из рекавери (`/proc/last_kmsg`) |
-| USB (mtu3/UDC) | ❌ контроллер пробуется, `/sys/class/udc` нет → нет сети/SSH |
-| Ubuntu rootfs | ✅ Ubuntu 24.04 arm64 с systemd на `p54`, грузится |
-| DRM/KMS + панель BOE TV110XUM (IT6112) | ⏳ не начато (DSI0/DPI0 выключены) |
-| GPU panfrost (Mali-G72) | ⏳ не начато |
-| KDE Plasma | ⏳ после KMS |
+| USB (mtu3/UDC) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH по ключу; host/OTG — нет |
+| Ubuntu rootfs | ✅ Ubuntu 24.04.3 arm64 + systemd на `p54` (ext4, метка `ubuntu`), грузится |
+| DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ панель работает (0038), `modetest` выставляет режим; фаза 2 закрыта |
+| GPU panfrost (Mali-G72) | ✅ 0039 прошит: Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps, `glmark2` Score 452 |
+| Wayland (Weston 13) | ✅ DRM/atomic на панели, EGL-клиенты 56.4 fps; фаза 4 — ввод и десктоп |
+| Wi-Fi / BT | ❌ в mainline не поддержаны (CONNSYS_6771/MT6631); сеть только RNDIS |
+| KDE Plasma / GNOME | ⏳ после тача |
 
 ## С чего начать
 

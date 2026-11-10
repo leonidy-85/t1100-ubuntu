@@ -6,9 +6,12 @@
 
 Проект порта Linux (mainline или near-mainline) на планшет **Fplus T1100**
 (SoC **MT6771 / MT8788 = Helio P60/P70**, GPU **Mali-G72 MP3 Bifrost**) с целью
-**Ubuntu + Wayland/GNOME + DRM/KMS + panfrost**. Сейчас — фаза 1 (bring-up):
-DTS MT6771 собирается, `Image` собран, на плату не прошивался
-(`docs/STATUS.md`, `docs/provenance.md`).
+**Ubuntu + Wayland/GNOME + DRM/KMS + panfrost**. Сейчас — фазы 1–3 закрыты:
+mainline 6.12 грузится до Ubuntu 24.04 (systemd), панель работает, KMS закрыт
+`modetest`, panfrost даёт GLES 3.1 (`kmscube` 56.4 fps, `glmark2` Score 452);
+фаза 4 в работе — Weston 13 уже выводит панель, остались тач и десктоп.
+Wi-Fi/BT в mainline не поддержаны (фаза 5). Актуальное состояние —
+`docs/STATUS.md`.
 
 ## Обязательный контекст
 
