@@ -1624,3 +1624,17 @@ wait-FW-reload, `int_enable(1)`), INT — **falling edge**, `mt-eint 1` в ст�
 тикает сам (не признак касаний) — нужно проверить bias пина.
 
 Реализация вендорского пути чтения кадра — в работе у `bringup` (образ 0042).
+
+### 10.11: итог сессии (планшет ушёл на зарядку в recovery)
+
+Закрыто за сессию: **фаза 2** (панель + `modetest` + `kmscube`), **фаза 3**
+(panfrost, GLES 3.1, `glmark2` Score 452), **startup фазы 4** (Mesa с
+wayland-платформой, Weston 13 → kiosk + SHM/EGL-клиенты, 56.4 fps), плюс
+инфраструктура (build-хост 12 ядер, ccache, arm64-sysroot, статические
+`modetest`/`glmark2`, `egl-probe`) и `t1100-power-guard`.
+
+Осталось: **тач HX83102E** (причина найдена RE, реализация вендорского пути
+чтения кадра — в работе, `docs/touch-hx83102e.md` §7), затем libinput/десктоп,
+DVFS GPU, Wi-Fi/BT (фаза 5).
+
+Состояние платы и порядок работ — `docs/handover.md`, раздел «Где остановились».
