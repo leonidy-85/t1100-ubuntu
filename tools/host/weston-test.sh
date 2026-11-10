@@ -108,7 +108,7 @@ smoke)
 	S=${2:-10}
 	"${SSH[@]}" "mkdir -p /run/user/0 && chmod 700 /run/user/0
 		rm -f /tmp/weston-smoke.log /tmp/weston-smoke.out
-		pkill -f '/usr/local/bin/weston ' 2>/dev/null || true
+		pkill -x weston 2>/dev/null || true
 		sleep 1
 		setsid $RUNENV /usr/local/bin/weston $WESTON_OPTS \
 			--socket=wayland-t1100 --log=/tmp/weston-smoke.log \
@@ -122,16 +122,16 @@ smoke)
 	done
 	[ "$ok" = 1 ] && echo "сокет есть" || echo "СОКЕТА НЕТ"
 	echo "== weston-simple-egl (${S} с) =="
-	"${SSH[@]}" "$RUNENV timeout $S /usr/local/bin/weston-simple-egl 2>&1 | tail -4; echo client_exit=\$?" || true
+	"${SSH[@]}" "$RUNENV WAYLAND_DISPLAY=wayland-t1100 timeout $S /usr/local/bin/weston-simple-egl 2>&1 | tail -4; echo client_exit=\$?" || true
 	echo "== лог weston (ошибки/repaint) =="
 	"${SSH[@]}" "grep -ciE 'error|fail|fatal' /tmp/weston-smoke.log; \
 		grep -m3 -iE 'Output |repaint|kms|gbm' /tmp/weston-smoke.log; \
 		echo ---; tail -15 /tmp/weston-smoke.log; \
-		pkill -f '/usr/local/bin/weston ' 2>/dev/null; echo stopped"
+		pkill -x weston 2>/dev/null; echo stopped"
 	;;
 run)
 	"${SSH[@]}" "mkdir -p /run/user/0 && chmod 700 /run/user/0
-		pkill -f '/usr/local/bin/weston ' 2>/dev/null || true
+		pkill -x weston 2>/dev/null || true
 		rm -f /tmp/weston.log
 		setsid $RUNENV /usr/local/bin/weston $WESTON_OPTS \
 			--socket=wayland-0 --log=/tmp/weston.log </dev/null &
@@ -140,7 +140,7 @@ run)
 	echo "остановить: tools/host/weston-test.sh stop"
 	;;
 stop)
-	"${SSH[@]}" "pkill -f '/usr/local/bin/weston ' && echo stopped || echo 'не запущен'; sleep 1; pgrep -af '/usr/local/bin/weston ' || true"
+	"${SSH[@]}" "pkill -x weston && echo stopped || echo 'не запущен'; sleep 1; pgrep -ax weston || true"
 	;;
 log)
 	"${SSH[@]}" "tail -${2:-40} /tmp/weston-smoke.log /tmp/weston.log 2>/dev/null"

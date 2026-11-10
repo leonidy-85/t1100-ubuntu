@@ -4,8 +4,13 @@
 # Env: MESA_VER (25.0.7), SYSROOT (/home/l/t1100-sysroot),
 #      TOOLS_DIR (/home/l/t1100-tools), DEST (<tools>/mesa-install), CLEAN (0/1)
 #
-# Собирает Mesa (panfrost, EGL+GLES2+GBM, без X11/Wayland/GLX/Vulkan/LLVM),
-# kmscube и egl-probe (tools/egl-probe/egl-probe.c, копируется рядом).
+# Собирает Mesa (panfrost, EGL+GLES2+GBM) для трёх платформ: surfaceless, drm
+# (GBM/kmsro, нужны kmscube/glmark2) и wayland (нужен EGL-клиентам Weston —
+# weston-simple-egl, KWin). Без X11/GLX/Vulkan/LLVM.
+#
+# `-Dplatforms=wayland` — именно так: в meson у `platforms` нет значений
+# 'drm'/'surfaceless', эти две платформы включаются сами при наличии libdrm
+# (см. docs/mesa-cross.md).
 set -euo pipefail
 
 MESA_VER=${MESA_VER:-25.0.7}
@@ -24,30 +29,46 @@ for p in python3-mako g++-aarch64-linux-gnu; do
 done
 
 # --- arm64 dev-пакеты в sysroot (noble 24.04) ---
-sysroot_pkg() { # $1 = file inside sysroot, $2 = pkg:arch
+sysroot_pkg() { # $1 = file inside sysroot, $2 = pkg[:arch]
 	[ -f "$SYSROOT$1" ] && return 0
-	( cd /tmp && apt-get download "$2" >/dev/null 2>&1 \
-	  && echo 0 | sudo -S dpkg -x "${2%%:*}_"*.deb "$SYSROOT" )
+	local deb
+	( cd /tmp && apt-get download "$2" >/dev/null 2>&1 )
+	deb=$(ls -t "/tmp/${2%%:*}_"*.deb 2>/dev/null | head -1)
+	[ -n "$deb" ] && echo 0 | sudo -S dpkg -x "$deb" "$SYSROOT"
 	echo "sysroot: $2 -> $1"
 }
 sysroot_pkg /usr/include/stdlib.h      libc6-dev:arm64
 sysroot_pkg /usr/include/linux/input.h linux-libc-dev:arm64
 sysroot_pkg /usr/include/zlib.h        zlib1g-dev:arm64
+# wayland platform (EGL-клиенты Weston): клиент/сервер + backend-заголовок
+# libwayland-egl (mesa его требует как dependency('wayland-egl-backend', >=3))
+sysroot_pkg /usr/include/wayland-client.h                       libwayland-dev:arm64
+sysroot_pkg /usr/lib/aarch64-linux-gnu/libwayland-client.so.0   libwayland-client0:arm64
+sysroot_pkg /usr/lib/aarch64-linux-gnu/libwayland-server.so.0   libwayland-server0:arm64
+sysroot_pkg /usr/lib/aarch64-linux-gnu/pkgconfig/wayland-egl-backend.pc libwayland-egl-backend-dev:arm64
+sysroot_pkg /usr/share/wayland-protocols/xdg-shell/xdg-shell.xml wayland-protocols
+sysroot_pkg /usr/include/ffi.h                                  libffi-dev:arm64
+sysroot_pkg /usr/lib/aarch64-linux-gnu/libffi.so.8              libffi8:arm64
 
 # --- Mesa: исходники из tarball (git clone с freedesktop слишком медленный) ---
 if [ ! -f "/tmp/mesa-$MESA_VER.tar.xz" ]; then
 	curl -sSL -o "/tmp/mesa-$MESA_VER.tar.xz" \
 		"https://archive.mesa3d.org/mesa-$MESA_VER.tar.xz"
 fi
-rm -rf mesa-src
-tar xf "/tmp/mesa-$MESA_VER.tar.xz"
-mv "mesa-$MESA_VER" mesa-src
+# исходники: распаковываем только если их нет/другая версия — иначе
+# распаковка заново ломает существующий каталог сборки meson
+if [ "$(cat mesa-src/VERSION 2>/dev/null)" != "$MESA_VER" ]; then
+	rm -rf mesa-src
+	tar xf "/tmp/mesa-$MESA_VER.tar.xz"
+	mv "mesa-$MESA_VER" mesa-src
+fi
 echo "mesa $(cat mesa-src/VERSION)"
 
 [ "$CLEAN" = 1 ] && rm -rf build-mesa
-if [ ! -d build-mesa ]; then
+if [ ! -f build-mesa/build.ninja ]; then
+	rm -rf build-mesa
 	meson setup build-mesa mesa-src --cross-file "$CROSS" --wrap-mode=nodownload \
-		-Dbuildtype=release -Dprefix=/usr -Dplatforms= \
+		-Dbuildtype=release -Dprefix=/usr -Dplatforms=wayland \
 		-Dgallium-drivers=panfrost -Dvulkan-drivers= \
 		-Dglx=disabled -Degl=enabled -Dgles1=disabled -Dgles2=enabled \
 		-Dgbm=enabled -Dglvnd=disabled -Dllvm=disabled -Dvideo-codecs=

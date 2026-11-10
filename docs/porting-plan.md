@@ -62,7 +62,9 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
 - Mesa panfrost; проверка `glmark2`/`es2gears`.
 - **Готово:** GLES-рендер на экране.
 
-## Фаза 4 — Ubuntu userspace
+## Фаза 4 — в работе (Weston на панели, 10.11)
+
+(было: ## Фаза 4 — Ubuntu userspace
 
 - Ubuntu-base arm64 rootfs (systemd), root на ext4 (p54 или LV).
 - Wayland + GNOME (или Weston для первых тестов).

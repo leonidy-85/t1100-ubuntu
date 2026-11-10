@@ -1457,3 +1457,42 @@ sysroot, `-lm` из хоста вместо sysroot, `pkg_config_libdir` с `$pr
 одном планшете конфликтуют за DRM master — прогон `glmark2` сначала получил
 `Failed to become DRM master`, а висевший `kmscube` был снят агентом. Устройство —
 эксклюзивный ресурс: один прогон в единицу времени.
+
+## 10.11 (6): фаза 4 начата — **Weston работает на панели**
+
+Первый Wayland-композитор на этой плате. Собран на build-хосте кроссом и залит в
+`/usr/local` (rootfs, `boot_a`, ядро/DTB не тронуты):
+
+- Weston **13.0.0**, `--backend=drm --drm-device=card1 --shell=kiosk`,
+  `LIBSEAT_BACKEND=builtin` (в Weston 13 нет `--tty`; seat открывается libseat'ом
+  напрямую, logind/seatd/VT не нужны), `--drm-device=card1` обязателен — иначе
+  drm-backend по udev берёт `card0` (panfrost), который не умеет modeset;
+- стек: wayland 1.22.0, wayland-protocols 1.45, libxkbcommon 1.6.0, libinput
+  1.25.0 (+libevdev/libmtdev/libwacom), pixman 0.42.2, libseat 0.8.0,
+  libdisplay-info 0.1.1, Mesa 25.0.7 из фазы 3;
+- сборка: `scripts/build-weston-aarch64.sh` (+ `scripts/remote/…`, cross-file
+  `tools/cross-aarch64-weston.txt`), деплой/тесты `tools/host/weston-test.sh`
+  (`verify|deploy|check|smoke|run|stop|log|undeploy`), план — `docs/wayland-plan.md`.
+
+**Факты с железа** (`/tmp/weston-live.log`):
+
+```
+DRM: supports atomic modesetting
+DRM: head 'DSI-1' found, connector 33 is connected
+Output 'DSI-1' … 1600x2176@60.0, preferred, current, 248.4 MHz
+Output 'DSI-1' enabled with head(s) DSI-1; волокно kiosk-shell.so загружено
+EGL client APIs: OpenGL, OpenGL_ES; surfaceless context: yes
+```
+
+Клиент `weston-simple-shm` подключён, **владелец видит движущийся квадрат на
+панели** — композирование и KMS работают end-to-end.
+
+**Ограничение, найденное сразу:** EGL-клиенты Wayland не работают —
+`weston-simple-egl` падает на `init_egl: Assertion 'ret && n >= 1' failed`,
+потому что Mesa собрана с `-Dplatforms=` (только surfaceless+drm), без
+wayland-платформы EGL. Пересборка Mesa с `-Dplatforms=wayland` запущена
+(`gpu-mesa`); до неё любой EGL/Wayland (KWin, GTK4, Qt) заблокирован.
+
+**Попутно исправлено в `tools/host/weston-test.sh`:** `pkill -f
+'/usr/local/bin/weston '` убивал сам remote-shell (его командная строка содержит
+эту строку) → `pkill -x weston`; клиенту не передавался `WAYLAND_DISPLAY`.
