@@ -1361,3 +1361,42 @@ arm64-бинари в нём не требуется.
 **Порядок работ:** сначала закрыть фазу 2 (`tools/host/kms-test.sh` + `modetest`
 на планшете), потом прошивать `boot_ubuntu28` — чтобы не менять два фактора
 одновременно.
+
+## 10.11 (3): **фаза 2 закрыта по KMS**, GPU (panfrost) поднялся
+
+**`modetest` на панели** (`build/tools-aarch64/modetest`, статический):
+
+```
+Connectors:
+id  encoder status     name   size (mm) modes encoders
+33  32      connected  DSI-1  166x226   1     32
+  #0 1600x2176 60.00 … 248356 kHz flags: preferred, driver
+setting mode 1600x2176-60.00Hz on connectors 33, crtc 64
+rc=0;  /sys/class/drm/card0-DSI-1 = connected/enabled
+```
+
+**Решение по критерию фазы 2.** «`modetest` + `kmscube`» разделён: `modetest`
+(чистый KMS, libdrm) — **выполнен**; `kmscube` требует GBM/EGL/GLESv2, то есть
+Mesa под aarch64, и физически относится к GPU-фазе. Перенесён в фазу 3
+(зафиксировано в `docs/porting-plan.md`).
+
+**GPU включён** (патч 0039, образ `build/boot_ubuntu28.img`,
+sha256 `0ae1c4b5…12f8`, бэкап предыдущего `boot_a` —
+`build/recovery/boot_a_ubuntu27.img`, sha256 `a89b264d…8283`). Ядро
+`6.12.114-geed4580b9b`, загрузилось без зависаний:
+
+```
+panfrost 13040000.gpu: clock rate = 511999970
+panfrost 13040000.gpu: mali-g72 id 0x6221 major 0x0 minor 0x3 status 0x0
+panfrost 13040000.gpu: shader_present=0x7 l2_present=0x1
+[drm] Initialized panfrost 1.2.0 for 13040000.gpu on minor 0
+/dev/dri/: card0 (panfrost), card1 (mediatek-drm), renderD128
+```
+
+Ошибок MMU/`job timeout` нет, дисплей не пострадал (`card1-DSI-1` connected,
+`fb0` 3216 Б), `vbat` 4.26 В. DVFS по-прежнему выключен: 512 МГц от LK,
+VGPU 900 мВ / VSRAM 1000 мВ — как у вендора.
+
+**Следующий шаг — фаза 3, userspace:** собрать Mesa (GBM/EGL/GLESv2) под aarch64
+на build-хосте через `docs/cross-build.md` (sysroot `/home/l/t1100-sysroot`),
+положить в rootfs планшета и прогнать `kmscube`/`es2gears`/`glmark2-es2`.
