@@ -182,19 +182,89 @@ Rendered 904 frames in 16.021118 sec (56.425525 fps)
 (`poll(STDIN_FILENO)`). Поэтому в скрипте прогон идёт как `( sleep N ) | kmscube`.
 Для `-c N` это тоже важно: без открытого stdin он завершится после первого кадра.
 
+## Бенчмарк: glmark2 (flavor `drm-glesv2`)
+
+Собрано `glmark2 2023.01` (`scripts/build-glmark2-aarch64.sh`), один flavor —
+`drm-glesv2`: KMS через DRM + GLES2, то есть тот же путь, что у kmscube
+(card1 mediatek-drm, kmsro → panfrost).
+
+```
+glmark2 2023.01
+GL_VENDOR:      Mesa
+GL_RENDERER:    Mali-G72 (Panfrost)
+GL_VERSION:     OpenGL ES 3.1 Mesa 25.0.7
+Surface Config: buf=32 r=8 g=8 b=8 a=8 depth=24 stencil=0 samples=0
+Surface Size:   1600x2176 fullscreen
+[build]    FPS: 534 FrameTime: 1.876 ms
+[texture]  FPS: 437 FrameTime: 2.291 ms
+[shading]  FPS: 430 FrameTime: 2.331 ms
+[effect2d] FPS: 414 FrameTime: 2.420 ms
+glmark2 Score: 452
+```
+
+Прогон: 4 сцены по 10 с (`-b :drm-device=/dev/dri/card1:duration=10 -b build
+-b texture -b shading -b effect2d`), полный вывод —
+`refs/device/glmark2-run-20261110.txt.gz`. После прогона: `card1-DSI-1`
+connected, `fb0` 3216 ненулевых байт (консоль вернулась), `0` совпадений
+`mmu fault|job timeout|gpu fault`, vbat 4.21 В (charging).
+
+Важно при сравнении чисел:
+
+- glmark2 в DRM-flavor рендерит с `SwapInterval(0)` и **не** ограничен
+  частотой панели: `DRM_CAP_ASYNC_PAGE_FLIP not supported, falling back to
+  'mailbox' mode`. Поэтому 400–530 fps — это не «панель 534 Гц», а скорость
+  отрисовки без vsync; у kmscube (он ждёт flip) было 56 fps.
+- Score сильно зависит от разрешения (1600x2176 = 3.5 Мпикс) и от выбранных
+  сцен; сравнивать можно только с такими же параметрами.
+- Кадр идёт через линейные dumb-буферы kmsro (`modifier=0`, без AFBC): часть
+  пропускной способности теряется на копировании/composition по сравнению с
+  «родным» GPU-KMS.
+
+### Грабли сборки glmark2 (в дополнение к §sysroot)
+
+1. Городские пакеты: `libjpeg-turbo8-dev` + `libjpeg-turbo8` (soname
+   `libjpeg.so.8`), `libpng-dev` + **`libpng16-16t64`** (в noble пакет
+   переименован в t64; `libpng16-16` из старого индекса даёт «no candidate»).
+   Без runtime-пакетов линкер молча берёт `.a` и падает на `adler32/crc32`.
+2. `glmark2` — **C++**: `-isystem` на C-заголовки sysroot ломает сборку.
+   `<cmath>` из кросс-g++ тянет `<math.h>` через `#include_next`, который
+   продолжает поиск *после* каталога cmath — то есть в `/usr/aarch64-linux-
+   gnu/include`; в итоге glibc-заголовки хоста смешиваются с `bits/*` из
+   sysroot (`__intmax_t does not name a type`). Поэтому у glmark2 свой
+   cross-file — `tools/cross-aarch64-glmark2.txt`: **без** `-isystem`, только
+   `--sysroot` (C/C++-заголовки берутся комплектом от тулчейна, а libc
+   планшета — на линковке).
+3. Линковка: `--sysroot` сам по себе не гарантирует, что `-lm` возьмётся из
+   sysroot — линкер находил хостовую libm и требовал `GLIBC_2.43` на
+   планшете (2.39). Лечится явными `-L<sysroot>/usr/lib/aarch64-linux-gnu`
+   и `-L<sysroot>/lib/aarch64-linux-gnu` в `*_link_args`; после этого
+   максимум — `GLIBC_2.38`.
+4. Mesa staging должна лежать **в sysroot** (`cp -a mesa-install/usr/. $SYSROOT/usr/`),
+   иначе pkg-config не находит `egl.pc/glesv2.pc/gbm.pc`: Mesa 25 ставит их в
+   `$prefix/lib/pkgconfig`, а не в multiarch-каталог — этот путь добавлен в
+   `pkg_config_libdir` обоих cross-файлов.
+5. `glmark2` берёт данные из скомпилированного `GLMARK_DATA_PATH`
+   (`/usr/share/glmark2`); на планшете они в `/usr/local/share/glmark2`,
+   поэтому в запуске нужен `--data-path /usr/local/share/glmark2`.
+6. Запуск по SSH: как и kmscube, glmark2 ждёт stdin — держим его открытым
+   (`( sleep N ) | glmark2 ...`). И он **не сможет стать DRM master**, если
+   на card1 висит чужой клиент (у нас так остался висеть kmscube от ручной
+   проверки): тогда в логе `Failed to become DRM master`, рендер идёт
+   offscreen с нереальным FPS. Проверять `cat /sys/kernel/debug/dri/1/clients`
+   до прогона.
+
 ## Что осталось / следующий шаг
 
-1. **glmark2** (`-Dflavors=drm-glesv2`, требует libdrm+gbm из sysroot и той же
-   Mesa) — даст цифры производительности; сейчас есть только счётчик kmscube.
-2. **DVFS**: GPU работает на 512 МГц при VGPU 900 мВ / VSRAM 1000 мВ (см.
-   `docs/panfrost-plan.md` §3). Для скорости нужно вернуть OPP, но только
-   вместе с управлением VSRAM (coupler или OPP на оба рельса).
-3. **Wayland/KDE**: композитору нужен тот же split-путь (KMS на card1, рендер
+1. **DVFS**: GPU работает на 512 МГц при VGPU 900 мВ / VSRAM 1000 мВ (см.
+   `docs/panfrost-plan.md` §3). Это главный оставшийся резерв скорости: сейчас
+   нагрузка ограничена клоком, а не шиной. Включать только вместе с
+   управлением VSRAM (coupler или OPP на оба рельса).
+2. **Wayland/KDE**: композитору нужен тот же split-путь (KMS на card1, рендер
    на renderD128). kmsro его закрывает, но KWin/Weston надо запускать с
    `GBM_BACKENDS_PATH`/`LD_LIBRARY_PATH` из `mesa-env.sh`; проверять на
    `kwin_wayland --drm` или `weston --drm`.
-4. `glxinfo`/`eglinfo` не применимы/не собраны: GLX отключён осознанно (нет
+3. `glxinfo`/`eglinfo` не применимы/не собраны: GLX отключён осознанно (нет
    X11), `eglinfo` тянет лишние зависимости — его роль выполняет `egl-probe`.
-5. Ограничение скорости kmsro: кадр — линейный dumb-буфер (`modifier=0`),
+4. Ограничение скорости kmsro: кадр — линейный dumb-буфер (`modifier=0`),
    композиция без AFBC/tiling. Для десктопа это может стать узким местом —
    проверить на Weston/KWin, а не на кубе.

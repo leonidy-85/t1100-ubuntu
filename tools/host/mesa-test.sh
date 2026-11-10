@@ -2,11 +2,12 @@
 # Залить Mesa (panfrost) / kmscube / egl-probe на планшет и прогнать GL-тест.
 # Ничего не прошивает и не меняет системные пути: всё в /usr/local.
 #
-#   tools/host/mesa-test.sh deploy          # разложить библиотеки и утилиты
+#   tools/host/mesa-test.sh deploy[ -glmark2] # разложить библиотеки и утилиты (Mesa / glmark2)
 #   tools/host/mesa-test.sh probe [узел]    # egl-probe (по умолчанию renderD128, без KMS)
 #   tools/host/mesa-test.sh kmscube [сек]   # kmscube на card1 (mediatek-drm, kmsro -> panfrost)
-#   tools/host/mesa-test.sh kmscube-card0   # то же на card0 (panfrost; для сравнения)
+#   tools/host/mesa-test.sh glmark2 [аргументы glmark2...]  # по умолчанию короткий прогон
 #   tools/host/mesa-test.sh info            # версии, /dev/dri, dmesg-хвост
+#   tools/host/mesa-test.sh power           # vbat/vsys через mt6370-adc (iio)
 #   tools/host/mesa-test.sh clean           # снести /usr/local/lib/aarch64-linux-gnu
 #
 # Раскладка (libdir Mesa = /usr/lib, поэтому libgallium лежит рядом с libEGL):
@@ -73,8 +74,43 @@ kmscube-card0)
 	SECS=${2:-8}
 	"${SSH[@]}" "( sleep $((SECS + 5)) ) | timeout $((SECS + 2)) $RUN /usr/local/bin/kmscube -D /dev/dri/card0 2>&1 | grep -v extensions | tail -12; echo exit=\$?"
 	;;
+glmark2-deploy|deploy-glmark2)
+	GM=${GM_LOCAL:-$ROOT/build/glmark2-aarch64}
+	for f in bin/glmark2-es2-drm lib/libjpeg.so.8.2.2 lib/libpng16.so.16.43.0; do
+		[ -f "$GM/$f" ] || { echo "нет $GM/$f — сначала scripts/build-glmark2-aarch64.sh" >&2; exit 1; }
+	done
+	"${SSH[@]}" "mkdir -p $LIB /usr/local/bin /usr/local/share/glmark2"
+	for f in bin/glmark2-es2-drm lib/libjpeg.so.8.2.2 lib/libpng16.so.16.43.0; do
+		case "$f" in
+			bin/*) dst=/usr/local/bin/$(basename "$f") ;;
+			lib/*) dst=$LIB/$(basename "$f") ;;
+		esac
+		"${SSH[@]}" "cat > $dst.tmp && chmod 755 $dst.tmp && mv $dst.tmp $dst" < "$GM/$f"
+	done
+	"${SSH[@]}" "cd $LIB && ln -sf libjpeg.so.8.2.2 libjpeg.so.8 && ln -sf libpng16.so.16.43.0 libpng16.so.16"
+	tar -C "$GM/share/glmark2" -cf - . \
+		| "${SSH[@]}" "tar -C /usr/local/share/glmark2 -xf -"
+	echo "== glmark2 deployed =="
+	"${SSH[@]}" "ls -l /usr/local/bin/glmark2-es2-drm; du -sh /usr/local/share/glmark2; ls $LIB/libjpeg* $LIB/libpng16*"
+	;;
+glmark2)
+	shift || true
+	# Без аргументов — короткий прогон: 4 сцены по 10 с на card1 (KMS mediatek +
+	# kmsro -> panfrost). stdin держим открытым: glmark2, как и kmscube,
+	# трактует EOF как «пользователь нажал клавишу».
+	if [ $# -eq 0 ]; then
+		set -- --data-path /usr/local/share/glmark2 \
+			-b :drm-device=/dev/dri/card1:duration=10 \
+			-b build -b texture -b shading -b effect2d
+	fi
+	CMD=$(printf '%q ' "$@")
+	"${SSH[@]}" "( sleep 300 ) | $RUN timeout 240 /usr/local/bin/glmark2-es2-drm $CMD 2>&1 | grep -vE '^ *$' | tail -60; echo exit=\$?"
+	;;
 info)
 	"${SSH[@]}" "uname -r; ls -l /dev/dri/; for f in /sys/class/drm/card*-DSI-1/status; do printf '%s: ' \$f; cat \$f; done; dmesg | grep -iE 'panfrost|mali|MMU fault|job timeout|slab' | tail -8"
+	;;
+power)
+	"${SSH[@]}" 'D=/sys/bus/iio/devices/iio:device0; for i in 2 3; do printf "%-6s raw=%s scale=%s => %s mV\n" "$(cat $D/in_voltage${i}_label)" "$(cat $D/in_voltage${i}_raw)" "$(cat $D/in_voltage${i}_scale)" "$(( $(cat $D/in_voltage${i}_raw) * $(cat $D/in_voltage${i}_scale) ))"; done; grep POWER_SUPPLY_STATUS /sys/class/power_supply/mt6370-charger/uevent'
 	;;
 clean)
 	"${SSH[@]}" "rm -rf $LIB /usr/local/bin/kmscube /usr/local/bin/egl-probe /usr/local/bin/mesa-env.sh; echo cleaned"
