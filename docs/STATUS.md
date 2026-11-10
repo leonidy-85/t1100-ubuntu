@@ -1428,3 +1428,32 @@ dmesg: 0 совпадений "mmu fault|job timeout|gpu fault"
 **Значит критерий фазы 2 («`modetest` + `kmscube` на панели») выполнен полностью**,
 а фаза 3 закрыта по функциональности GLES (осталось: числовой бенчмарк
 `glmark2-es2-drm`, решение по DVFS GPU и Wayland-композитор).
+
+### 10.11 (5): `glmark2` на panfrost — критерий фазы 3 по бенчмарку выполнен
+
+`glmark2 2023.01`, flavor `drm-glesv2` (`-b :drm-device=/dev/dri/card1:duration=10`,
+4 сцены × 10 с), залит в `/usr/local` (rootfs не тронут):
+
+```
+GL_RENDERER : Mali-G72 (Panfrost)      GL_VERSION: OpenGL ES 3.1 Mesa 25.0.7
+[build]   FPS 534   [texture] FPS 437   [shading] FPS 430   [effect2d] FPS 414
+glmark2 Score: 452
+dmesg: 0 × "mmu fault|job timeout|gpu fault";  панель вернулась к консоли;
+vbat 4.21 В
+```
+
+Оговорка к числам: в DRM-flavor `SwapInterval(0)`, `DRM_CAP_ASYNC_PAGE_FLIP` не
+поддерживается → 400–530 fps это скорость отрисовки без vsync; `kmscube` даёт
+56.4 fps именно потому, что ждёт flip. Сравнивать score только с теми же
+параметрами и разрешением (3.5 Мпикс).
+
+Сборка: `scripts/build-glmark2-aarch64.sh` + `scripts/remote/build-glmark2-aarch64.sh`,
+cross-file `tools/cross-aarch64-glmark2.txt`; грабли (C++ и `-isystem` на C-заголовки
+sysroot, `-lm` из хоста вместо sysroot, `pkg_config_libdir` с `$prefix/lib/pkgconfig`
+для `egl.pc`/`gbm.pc` Mesa 25) — в `docs/mesa-cross.md`.
+Артефакты: `build/glmark2-aarch64/`, лог `refs/device/glmark2-run-20261110.txt.gz`.
+
+**Организационная грабля (записана в `AGENTS.md`):** параллельные исполнители на
+одном планшете конфликтуют за DRM master — прогон `glmark2` сначала получил
+`Failed to become DRM master`, а висевший `kmscube` был снят агентом. Устройство —
+эксклюзивный ресурс: один прогон в единицу времени.

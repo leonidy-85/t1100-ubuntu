@@ -1,0 +1,43 @@
+# Meson cross-file для сборки Weston под aarch64 Fplus T1100 (noble, glibc 2.39).
+# Копируется на build-хост скриптом scripts/build-weston-aarch64.sh.
+#
+# Отличия от tools/cross-aarch64-mesa.txt:
+#  * кроме sysroot в pkg-config путь добавлен mesa-install (EGL/GLESv2/gbm —
+#    собраны нами в фазе 3, в sysroot их нет);
+#  * -I на mesa-install/usr/include и -L на mesa-install/usr/lib: .pc-файлы
+#    Mesa имеют prefix=/usr, и под --sysroot эти -I/-L уходят в sysroot, где
+#    заголовков EGL нет;
+#  * wayland-scanner берётся нативный (Weston просит его с native: true) —
+#    нужен пакет libwayland-bin на хосте, в sysroot он не нужен.
+#
+# Грабли, которые уже были в Mesa (docs/cross-build.md, docs/mesa-cross.md):
+#  * одного sys_root мало — нужен --sysroot в [built-in options];
+#  * --sysroot не вытесняет /usr/aarch64-linux-gnu/include у ubuntu-кросс-gcc,
+#    поэтому -isystem на каталоги sysroot обязательны.
+[binaries]
+c = 'aarch64-linux-gnu-gcc'
+cpp = 'aarch64-linux-gnu-g++'
+ar = 'aarch64-linux-gnu-ar'
+strip = 'aarch64-linux-gnu-strip'
+pkg-config = 'pkg-config'
+
+[properties]
+sys_root = '/home/l/t1100-sysroot'
+pkg_config_libdir = ['/home/l/t1100-tools/mesa-install/usr/lib/pkgconfig',
+                     '/home/l/t1100-sysroot/usr/lib/aarch64-linux-gnu/pkgconfig',
+                     '/home/l/t1100-sysroot/usr/lib/pkgconfig',
+                     '/home/l/t1100-sysroot/usr/share/pkgconfig']
+
+[built-in options]
+c_args = ['--sysroot=/home/l/t1100-sysroot',
+          '-isystem', '/home/l/t1100-sysroot/usr/include/aarch64-linux-gnu',
+          '-isystem', '/home/l/t1100-sysroot/usr/include',
+          '-I/home/l/t1100-tools/mesa-install/usr/include']
+c_link_args = ['--sysroot=/home/l/t1100-sysroot',
+               '-L/home/l/t1100-tools/mesa-install/usr/lib']
+
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
