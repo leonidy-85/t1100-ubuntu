@@ -14,3 +14,6 @@ __pycache__/
 # local
 .venv/
 *.log
+
+# vendor reference blobs (Aurora RPM payloads: firmware, 4.14 modules)
+/vendor/
