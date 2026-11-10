@@ -1,0 +1,40 @@
+# Meson cross-file для сборки Mesa под aarch64 Fplus T1100 (noble, glibc 2.39).
+# Копируется на build-хост скриптом scripts/build-mesa-aarch64.sh.
+#
+# Грабли (проверено 10.11.2026):
+#  * одного `sys_root` мало: он нужен только pkg-config'у;
+#  * `--sysroot` в [built-in options] обязателен, иначе компилятор берёт
+#    заголовки хостового кросс-glibc (Ubuntu 26.04);
+#  * но и `--sysroot` не вытесняет `/usr/aarch64-linux-gnu/include`
+#    (у ubuntu'шного кросс-gcc это абсолютный каталог, и он идёт ПЕРВЫМ в
+#    списке поиска) — поэтому нужны -isystem на каталоги sysroot;
+#  * без libc6-dev:arm64 в sysroot сборка вообще не видит stdlib.h;
+#  * Mesa 25.0 libdir = /usr/lib (не multiarch), поэтому libgallium-25.0.7.so
+#    ставится рядом с libEGL.so.
+[binaries]
+c = 'aarch64-linux-gnu-gcc'
+cpp = 'aarch64-linux-gnu-g++'
+ar = 'aarch64-linux-gnu-ar'
+strip = 'aarch64-linux-gnu-strip'
+pkg-config = 'pkg-config'
+
+[properties]
+sys_root = '/home/l/t1100-sysroot'
+pkg_config_libdir = ['/home/l/t1100-sysroot/usr/lib/aarch64-linux-gnu/pkgconfig',
+                     '/home/l/t1100-sysroot/usr/share/pkgconfig']
+
+[built-in options]
+c_args = ['--sysroot=/home/l/t1100-sysroot',
+          '-isystem', '/home/l/t1100-sysroot/usr/include/aarch64-linux-gnu',
+          '-isystem', '/home/l/t1100-sysroot/usr/include']
+cpp_args = ['--sysroot=/home/l/t1100-sysroot',
+            '-isystem', '/home/l/t1100-sysroot/usr/include/aarch64-linux-gnu',
+            '-isystem', '/home/l/t1100-sysroot/usr/include']
+c_link_args = ['--sysroot=/home/l/t1100-sysroot']
+cpp_link_args = ['--sysroot=/home/l/t1100-sysroot']
+
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'aarch64'
+endian = 'little'
