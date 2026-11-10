@@ -9,6 +9,10 @@
 #
 # Env: BUILD_HOST, BUILD_PASS, MESA_VER (25.0.7), SYSROOT, JOBS
 #
+# Платформы EGL: wayland + surfaceless + drm (`-Dplatforms=wayland`; drm и
+# surfaceless включаются сами). Wayland нужен клиентам Weston (weston-simple-egl),
+# drm/surfaceless — kmscube/glmark2/egl-probe. См. docs/mesa-cross.md.
+#
 # Сама сборка — scripts/remote/build-mesa-aarch64.sh (копируется на хост).
 # Результат — build/mesa-aarch64/{lib,lib/gbm,bin}; на планшет это кладёт
 # tools/host/mesa-test.sh deploy (в /usr/local, rootfs не трогается).

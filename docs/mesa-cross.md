@@ -36,7 +36,7 @@ panfrost поднят (см. `docs/panfrost-plan.md`). Здесь — как с�
 ```sh
 meson setup build-mesa mesa-src --cross-file cross-aarch64-mesa.txt \
   --wrap-mode=nodownload -Dbuildtype=release -Dprefix=/usr \
-  -Dplatforms= -Dgallium-drivers=panfrost -Dvulkan-drivers= \
+  -Dplatforms=wayland -Dgallium-drivers=panfrost -Dvulkan-drivers= \
   -Dglx=disabled -Degl=enabled -Dgles1=disabled -Dgles2=enabled \
   -Dgbm=enabled -Dglvnd=disabled -Dllvm=disabled -Dvideo-codecs=
 ```
@@ -47,11 +47,63 @@ meson setup build-mesa mesa-src --cross-file cross-aarch64-mesa.txt \
   и fallback в `pipe_loader_drm.c` («kmsro supports lots of drivers, try as a
   fallback»), который на площадочных устройствах ищет render-узел с именем
   драйвера из списка (`panfrost` есть).
-- `-Dplatforms=` пустой: нужны только surfaceless + drm/gbm, X11/Wayland не
-  требуются (`libwayland` не нужен вообще).
+- `-Dplatforms=wayland` — и **только** `wayland`: в meson у опции `platforms`
+  нет значений `drm`/`surfaceless` (choices: `auto, x11, wayland, haiku,
+  android, windows, macos`), эти две платформы включаются сами, если есть
+  libdrm (`-Dplatforms=wayland,drm,surfaceless` — ошибка конфигурации).
+  Итог: `Platforms: wayland surfaceless drm` — kmscube/glmark2 (GBM/kmsro) не
+  страдают, а EGL-клиенты Wayland (weston-simple-egl, KWin) получают конфиги.
 - Итог конфигурации meson: `Gallium drivers: panfrost`, `Platforms:
-  surfaceless drm`, `GBM: YES`, `EGL: YES`, `GLES2: YES`, `GLES1: NO`,
-  `LLVM: NO`, `Vulkan: NO`.
+  wayland surfaceless drm`, `GBM: YES`, `EGL: YES`, `GLES2: YES`,
+  `GLES1: NO`, `LLVM: NO`, `Vulkan: NO`.
+
+### Почему пустой `-Dplatforms=` ломал EGL-клиентов Wayland (10.11)
+
+Первая сборка была с `-Dplatforms=` (только surfaceless + drm). Weston при этом
+работает целиком (DRM-бэкенд, atomic modesetting, `DSI-1` 1600x2176,
+kiosk-shell, SHM-клиент рисует), потому что сам Weston рисует через GLES/EGL
+на GBM-устройстве своего DRM-бэкенда, а не через wayland-платформу EGL.
+
+А клиент `weston-simple-egl` падал сразу:
+
+```
+init_egl: Assertion 'ret && n >= 1' failed
+```
+
+Это `eglGetConfigs()` для EGL-дисплея, созданного из `wl_display`, вернул 0
+конфигураций: в `libEGL` не было `dri2_initialize_wayland()` — платформа
+Wayland не скомпилирована, поэтому `eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR,
+wl_display)` отдавал «пустой» драйвер без конфигов.
+
+Офлайн-признак (сравнение двух сборок, `strings libEGL.so.1.0.0`):
+
+| строка | `-Dplatforms=` | `-Dplatforms=wayland` |
+|---|---|---|
+| `dri2_initialize_wayland` | 0 | 2 |
+| `wayland_drm` | 0 | 3 |
+| `EGL_EXT_platform_wayland` | 0 | 1 |
+| `dri2_initialize_drm` | 1 | 1 (drm сохранён) |
+
+Плюс в NEEDED добавились `libwayland-client.so.0` и `libwayland-server.so.0`
+(SONAME самого `libEGL.so.1` и всех остальных библиотек не изменился), а также
+`libexpat.so.1` (EGL/wayland-путь Mesa использует expat).
+
+Зависимости для сборки wayland-платформы (sysroot, noble):
+
+```sh
+libwayland-dev:arm64            # wayland-client.pc, wayland-server.pc, 1.22.0
+libwayland-client0:arm64 libwayland-server0:arm64
+libwayland-egl-backend-dev:arm64   # wayland-egl-backend.pc (Version: 3)
+wayland-protocols               # arch:all, Mesa требует >= 1.38 (у нас 1.47)
+libffi-dev:arm64 libffi8:arm64
+# + ХОСТОВЫЙ wayland-scanner (libwayland-bin, 1.24.0) — mesa просит его как
+#   native dependency
+```
+
+Всё это зашито в `scripts/remote/build-mesa-aarch64.sh` (функция
+`sysroot_pkg`), проверка «файл уже есть» для `wayland-egl-backend` смотрит на
+`.pc`, а не на заголовок: заголовок в sysroot может быть от другой версии, а
+без `.pc` meson падает на `Dependency "wayland-egl-backend" not found`.
 
 ### Архитектура Mesa 25.0.7 (важно для раскладки)
 
@@ -93,31 +145,40 @@ meson setup build-mesa mesa-src --cross-file cross-aarch64-mesa.txt \
 
 ```
 /usr/local/lib/aarch64-linux-gnu/
-    libEGL.so.1 -> libEGL.so.1.0.0            (473 128 Б)
+    libEGL.so.1 -> libEGL.so.1.0.0            (461 560 Б)
     libGLESv2.so.2 -> libGLESv2.so.2.0.0      ( 93 424 Б)
     libgbm.so.1 -> libgbm.so.1.0.0            ( 75 576 Б)
-    libgallium-25.0.7.so                      (20 204 520 Б)
+    libgallium-25.0.7.so                      (20 112 280 Б)
     libdrm.so.2 -> libdrm.so.2.125.0          (133 616 Б)  ← в rootfs libdrm нет
-    gbm/dri_gbm.so                            (240 504 Б)
+    gbm/dri_gbm.so                            ( 83 480 Б)
 /usr/local/bin/
     kmscube (1 590 616 Б), egl-probe (72 008 Б), mesa-env.sh
 ```
 
-sha256 (то, что реально залито):
+sha256 бандла с wayland-платформой (`build/mesa-aarch64/`, **готов к деплою**):
 
 ```
-1b522f1e…a478614  libEGL.so.1.0.0
+d22d05d3…64ccc75  libEGL.so.1.0.0
 a4197efb…ff2e0c   libGLESv2.so.2.0.0
-afc1373c…951fcad  libgbm.so.1.0.0
-b0aaa783…0110b83  libgallium-25.0.7.so
-71f5b3cd…63380b8  gbm/dri_gbm.so
+090c7284…4aa0bb3  libgbm.so.1.0.0
+3ca197a5…a2a70e4e libgallium-25.0.7.so
+926f017c…722af61  gbm/dri_gbm.so
 efa8992c…35cadf3  libdrm.so.2.125.0
-5ac25df5…e4ac390  kmscube
+8dc0e310…18347986 kmscube
 3e15daa1…acceaaae egl-probe
 ```
 
-Все sha256 залитых файлов совпадают с `build/mesa-aarch64/` (сборка
-воспроизводима: `scripts/build-mesa-aarch64.sh` даёт те же байты).
+Предыдущий (без wayland-платформы) бандл сохранён в
+`build/mesa-aarch64-noplatforms/` (`libEGL.so.1.0.0` = `1b522f1e…`,
+`libgallium` = `b0aaa783…`) — это то, что сейчас на планшете; годится для
+отката.
+
+Зависимости на планшете: новые `libEGL`/`dri_gbm` требуют
+`libwayland-client.so.0`, `libwayland-server.so.0` (уже лежат в
+`/usr/local/lib/aarch64-linux-gnu` из weston-бандла) и `libexpat.so.1`
+(системный, `/usr/lib/aarch64-linux-gnu`). Проверено офлайн: все 38 `wl_*`
+символов, нужных `libEGL`, и 3 у `dri_gbm`, есть в этих библиотеках; `XML_*` —
+в системном expat.
 
 Окружение (`/usr/local/bin/mesa-env.sh`, переменные задаются только для
 запускаемых программ):
@@ -252,6 +313,34 @@ connected, `fb0` 3216 ненулевых байт (консоль вернула
    проверки): тогда в логе `Failed to become DRM master`, рендер идёт
    offscreen с нереальным FPS. Проверять `cat /sys/kernel/debug/dri/1/clients`
    до прогона.
+
+## Деплой обновлённого бандла (по команде `lead`, после остановки weston)
+
+Готовый бандл лежит в `build/mesa-aarch64/` (wayland + drm + surfaceless).
+Деплой — тот же скрипт, что и раньше (атомарная замена файлов + симлинки,
+rootfs не трогается):
+
+```sh
+# 1) проверить, что демонстрация остановлена и card1 свободен:
+ssh root@10.42.66.66 'cat /sys/kernel/debug/dri/1/clients'
+
+# 2) залить:
+tools/host/mesa-test.sh deploy
+
+# 3) проверить на месте:
+tools/host/mesa-test.sh info      # /dev/dri, DSI connected, dmesg
+tools/host/mesa-test.sh probe     # egl-probe на renderD128: Mali-G72 (Panfrost)
+
+# 4) поднять weston и клиента (пример из текущей демонстрации):
+ssh root@10.42.66.66 '. /usr/local/bin/mesa-env.sh; \
+  XDG_RUNTIME_DIR=/run/user/0 weston --backend=drm --drm-device=card1 \
+    --shell=kiosk --socket=wayland-t1100 &'
+ssh root@10.42.66.66 '. /usr/local/bin/mesa-env.sh; XDG_RUNTIME_DIR=/run/user/0 \
+  WAYLAND_DISPLAY=wayland-t1100 weston-simple-egl'   # ждём "frame N: X fps"
+```
+
+Откат: `LOCAL=build/mesa-aarch64-noplatforms tools/host/mesa-test.sh deploy`
+(бандл без wayland-платформы, ровно тот, что проверен на kmscube/glmark2).
 
 ## Что осталось / следующий шаг
 
