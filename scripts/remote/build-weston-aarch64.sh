@@ -54,11 +54,16 @@ PKGS="libwayland-dev libwayland-client0 libwayland-server0 libwayland-cursor0
       libxcb1-dev libxcb1 libxcb-render0-dev libxcb-render0 libxcb-shm0-dev
       libxcb-shm0 libxau-dev libxau6 libxdmcp-dev libxdmcp6 libbz2-dev
       libbz2-1.0 libbrotli-dev libbrotli1 libpng-dev libpng16-16t64
-      zlib1g-dev zlib1g libexpat1-dev libexpat1 libffi-dev libffi8"
+      zlib1g-dev zlib1g libexpat1-dev libexpat1 libffi-dev libffi8
+      libstdc++6 libgcc-s1 libglib2.0-0t64 libpcre2-8-0 libgudev-1.0-0
+      libbsd0 libmd0"
 # x11proto-dev — arch:all, но в apt кэше хоста висит версия 26.04 (2025.1),
 # а .pc-файлы протоколов (xproto.pc, xextproto.pc, renderproto.pc) нужны от
 # noble (2023.2), поэтому версия запинена.
-PKGS_ALL="wayland-protocols xkb-data"
+# arch:all пакеты тоже пинуются на noble: в кэше хоста (26.04) лежат их более
+# новые версии (wayland-protocols 1.47, xkb-data 2.46), а нам нужны те, что
+# соответствуют noble-стеку (wayland 1.22 / libxkbcommon 1.6).
+PKGS_ALL="wayland-protocols=1.45-1~ubuntu0.24.04.2 xkb-data=2.41-2ubuntu1.1"
 X11PROTO="x11proto-dev=2023.2-1"
 
 mkdir -p "$DEBS"
@@ -66,12 +71,22 @@ for p in $PKGS; do
 	( cd "$DEBS" && apt-get download "$p:arm64" >/dev/null 2>&1 ) \
 		|| echo "!! не скачался $p:arm64" >&2
 done
+# старые версии арх:all деба из прошлых прогонов иначе попадут в распаковку
+# вместе с новыми (dpkg -x упадёт на повторном создании симлинка X11/xkb)
+rm -f "$DEBS"/wayland-protocols_*.deb "$DEBS"/xkb-data_*.deb \
+	"$DEBS"/x11proto-dev_*.deb
 for p in $PKGS_ALL; do
 	( cd "$DEBS" && apt-get download "$p" >/dev/null 2>&1 ) \
 		|| echo "!! не скачался $p" >&2
 done
 ( cd "$DEBS" && apt-get download "$X11PROTO" >/dev/null 2>&1 ) \
 	|| echo "!! не скачался $X11PROTO" >&2
+# чистка arch:all данных от предыдущих (более новых) распаковок: в sysroot
+# /usr/share/X11/xkb — симлинк на ../xkeyboard-config-2, и dpkg -x падает,
+# если поверх симлинка распаковывается каталог
+echo 0 | sudo -S rm -rf "$SYSROOT/usr/share/X11/xkb"
+echo 0 | sudo -S rm -rf "$SYSROOT/usr/share/xkeyboard-config-2" \
+	"$SYSROOT/usr/share/wayland-protocols"
 for f in "$DEBS"/*.deb; do
 	echo 0 | sudo -S dpkg -x "$f" "$SYSROOT"
 done
@@ -98,8 +113,11 @@ if [ ! -d "$SRC" ]; then
 fi
 grep -m1 "version:" "$SRC/meson.build"
 
+# У Weston 13 нет опции -Dtests: тесты в tests/ помечены build_by_default:false
+# и в дефолтную цель не попадают.
 [ "$CLEAN" = 1 ] && rm -rf build-weston
-if [ ! -d build-weston ]; then
+if [ ! -f build-weston/build.ninja ]; then
+	rm -rf build-weston
 	meson setup build-weston "$SRC" --cross-file "$CROSS" --wrap-mode=nodownload \
 		--buildtype=release --prefix=/usr/local --libdir=lib/$ARCH \
 		-Dbackend-default=drm \
@@ -116,12 +134,13 @@ if [ ! -d build-weston ]; then
 		-Dimage-jpeg=false -Dimage-webp=false \
 		-Ddemo-clients=false -Dsimple-clients=egl,shm \
 		-Dresize-pool=false -Dwcap-decode=false -Dtools= \
-		-Dtests=false -Ddoc=false
+		-Dtest-junit-xml=false -Ddoc=false
 fi
-ninja -C build-weston -j "$JOBS"
-
+# Собираем и сразу ставим: `ninja install` тянет только install-цели, поэтому
+# тесты Weston (tests/, им нужен ещё libxml2/libbsd и весь X11-стек) не
+# собираются — проверять их под кроссом нечем.
 rm -rf "$DEST"
-DESTDIR="$DEST" ninja -C build-weston install
+DESTDIR="$DEST" ninja -C build-weston -j "$JOBS" install
 
 # --- bundle: дерево для /usr/local планшета + сторонние .so из sysroot ---
 rm -rf "$BUNDLE"
@@ -131,21 +150,36 @@ cp -a "$DEST/usr/local/." "$BUNDLE/"
 rm -rf "$BUNDLE/include" "$BUNDLE/lib/pkgconfig" "$BUNDLE/lib/$ARCH/pkgconfig" \
 	"$BUNDLE/share/man"
 
+# weston-screenshooter — клиент для desktop-shell, собран поверх toytoolkit+cairo;
+# с kiosk-shell он не запускается, а cairo тянет в bundle весь X11/fontconfig-стек.
+rm -f "$BUNDLE/bin/weston-screenshooter"
+
 # xkb-данные (нужны libxkbcommon; на планшете /usr/share/X11/xkb отсутствует)
 mkdir -p "$BUNDLE/share/X11"
-cp -a "$SYSROOT/usr/share/X11/xkb" "$BUNDLE/share/X11/xkb"
+# в Debian/Ubuntu /usr/share/X11/xkb — симлинк на ../xkeyboard-config-2,
+# поэтому копируем содержимое (-L) в реальный каталог
+cp -aL "$SYSROOT/usr/share/X11/xkb/." "$BUNDLE/share/X11/xkb/"
 
-# уже есть на планшете (rootfs noble) или всегда предоставляется glibc
+# уже есть на планшете (rootfs noble) или всегда предоставляется glibc;
+# Mesa-библиотеки (EGL/GLESv2/gbm/gallium/drm) лежат в /usr/local от фазы 3
+# (docs/mesa-cross.md) — в bundle не дублируем, tools/host/weston-test.sh
+# проверяет их наличие перед запуском
 ALLOW="libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libgcc_s.so.1
        libstdc++.so.6 ld-linux-aarch64.so.1 libudev.so.1 libexpat.so.1
        libffi.so.8 libz.so.1 libcap.so.2 libselinux.so.1 libsystemd.so.0
        liblzma.so.5 liblz4.so.1 libgcrypt.so.20 libcrypto.so.3 libbz2.so.1.0
-       libmount.so.1 libblkid.so.1"
+       libmount.so.1 libblkid.so.1
+       libEGL.so.1 libGLESv2.so.2 libgbm.so.1 libgallium-25.0.7.so libdrm.so.2"
 
 have_allow() { for a in $ALLOW; do [ "$a" = "$1" ] && return 0; done; return 1; }
 
-# где искать soname: наш bundle, sysroot, mesa-install
-SEARCH="$BUNDLE/lib/$ARCH $SYSROOT/usr/lib/$ARCH $SYSROOT/lib/$ARCH $MESA_INSTALL/usr/lib"
+# где искать soname: сначала свой bundle (там есть подкаталоги вроде
+# lib/aarch64-linux-gnu/weston/libexec_weston.so.0), потом sysroot и mesa-install
+SEARCH="$SYSROOT/usr/lib/$ARCH $SYSROOT/lib/$ARCH $MESA_INSTALL/usr/lib"
+# symlink с отсутствующим target'ом «есть в bundle» не считается: в sysroot
+# soname — это симлинк на файл с версией, и копировать надо именно target.
+bundle_path() { find "$BUNDLE" -name "$1" -print -quit; }
+in_bundle() { local p; p=$(bundle_path "$1"); [ -n "$p" ] && [ -e "$p" ]; }
 find_soname() {
 	local s=$1 d
 	for d in $SEARCH; do
@@ -155,24 +189,28 @@ find_soname() {
 }
 
 # итеративно до неподвижной точки: NEEDED всех ELF в bundle
+elf_files() {
+	find "$BUNDLE" -type f -exec sh -c 'head -c4 "$1" | grep -q ELF' _ {} \; -print
+}
 for _pass in 1 2 3 4 5 6 7 8 9 10; do
 	added=0
 	while read -r f; do
 		while read -r so; do
 			[ -z "$so" ] && continue
 			have_allow "$so" && continue
-			[ -e "$BUNDLE/lib/$ARCH/$so" ] && continue
+			in_bundle "$so" && continue
 			src=$(find_soname "$so") || { echo "!! нет $so (нужен $f)" >&2; exit 1; }
-			cp -a "$src" "$BUNDLE/lib/$ARCH/$so"
+			# -L: копируем содержимое (файл с версией), а не симлинк
+			cp -L "$src" "$BUNDLE/lib/$ARCH/$so"
 			added=$((added + 1))
 		done < <("$ARCH-readelf" -d "$f" 2>/dev/null | awk '/NEEDED/{gsub(/[\[\]]/,"",$5); print $5}')
-	done < <(find "$BUNDLE" -type f -exec sh -c 'head -c4 "$1" | grep -q ELF' _ {} \; -print)
+	done < <(elf_files)
 	[ "$added" = 0 ] && break
 	echo "pass $_pass: +$added библиотек"
 done
 
 echo "== weston install =="
-ls -l "$BUNDLE/bin" "$BUNDLE/lib/$ARCH"/weston 2>/dev/null
+ls -l "$BUNDLE/bin" "$BUNDLE/lib/$ARCH/weston"
 echo "== bundle size =="
 du -sh "$BUNDLE"
 find "$BUNDLE" -name '*.so*' -type f -printf '%10s  %P\n' | sort -k2
