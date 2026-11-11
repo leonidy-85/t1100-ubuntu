@@ -83,8 +83,18 @@ for m in $MODULES; do
 		[ -f "$WIFI_DIR/work/$dep/Module.symvers" ] && \
 			EXTRA="KBUILD_EXTRA_SYMBOLS=$WIFI_DIR/work/$dep/Module.symvers"
 	done
+	# Chip selection. In the vendor build glue this was
+	# CONFIG_MTK_COMBO_CHIP="CONSYS_6771" - and it *must* be quoted there:
+	# the vendor Makefile compares against "CONSYS_6771" with the quotes
+	# stripped, and an unquoted value silently selects a different chip
+	# configuration. Our Kbuild wrappers spell the same choice out in ccflags
+	# (-DMT6631 for the A-die 0x6771 -> firmware 6759 mapping in wlan,
+	# common_main/platform/mt6771.o in the WMT object list), so the variable
+	# is kept here only to make the architecture choice visible in the log.
+	echo "-- CONFIG_MTK_COMBO_CHIP=\"CONSYS_6771\""
 	make -C "$KB" M="$WIFI_DIR/work/$m" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-		$EXTRA -j"$JOBS" modules > "$LOG/build-$m.log" 2>&1
+		$EXTRA CONFIG_MTK_COMBO_CHIP='"CONSYS_6771"' -j"$JOBS" modules \
+		> "$LOG/build-$m.log" 2>&1
 	rc=$?
 	echo "$m rc=$rc errors=$(grep -c 'error:' "$LOG/build-$m.log") \
 warnings=$(grep -c 'warning:' "$LOG/build-$m.log") \

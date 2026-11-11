@@ -1,0 +1,147 @@
+--- a/common_main/platform/mt6771.c
++++ b/common_main/platform/mt6771.c
+@@ -359,11 +359,25 @@
+ 
+ static INT32 consys_clk_get_from_dts(struct platform_device *pdev)
+ {
+-	clk_scp_conn_main = devm_clk_get(&pdev->dev, "conn");
++	/*
++	 * T1100 port (mainline 6.12): the vendor DT took this clock from its own
++	 * "mediatek,scpsys" clock provider (consys: clocks = <&scpsys 2>). No
++	 * such provider exists in mainline, and CONSYS_PWR_ON_OFF_API_AVAILABLE
++	 * is 0 for MT6771, so consys_hw_power_ctrl() never calls
++	 * clk_prepare_enable() on this clock: it walks the CONN power domain
++	 * through the SPM registers instead (0x1000632c). The lookup is kept
++	 * for a future clk-mt6771, but it must not fail the probe - otherwise
++	 * wmt_drv cannot power the chip on at all.
++	 */
++	clk_scp_conn_main = devm_clk_get_optional(&pdev->dev, "conn");
+ 	if (IS_ERR(clk_scp_conn_main)) {
+-		WMT_PLAT_PR_ERR("[CCF]cannot get clk_scp_conn_main clock.\n");
+-		return PTR_ERR(clk_scp_conn_main);
++		WMT_PLAT_PR_ERR("[CCF]devm_clk_get_optional(conn) failed(%ld)\n",
++				(long)PTR_ERR(clk_scp_conn_main));
++		clk_scp_conn_main = NULL;
++		return 0;
+ 	}
++	if (!clk_scp_conn_main)
++		WMT_PLAT_PR_WARN("[CCF]no \"conn\" clock in DT, power-on uses the SPM sequence\n");
+ 	WMT_PLAT_PR_DBG("[CCF]clk_scp_conn_main=%p\n", clk_scp_conn_main);
+ 
+ 	return 0;
+@@ -372,18 +386,27 @@
+ static INT32 consys_pmic_get_from_dts(struct platform_device *pdev)
+ {
+ #if CONSYS_PMIC_CTRL_ENABLE
+-	reg_VCN18 = regulator_get(&pdev->dev, "vcn18");
+-	if (!reg_VCN18)
+-		WMT_PLAT_PR_ERR("Regulator_get VCN_1V8 fail\n");
+-	reg_VCN28 = regulator_get(&pdev->dev, "vcn28");
+-	if (!reg_VCN28)
+-		WMT_PLAT_PR_ERR("Regulator_get VCN_2V8 fail\n");
+-	reg_VCN33_BT = regulator_get(&pdev->dev, "vcn33_bt");
+-	if (!reg_VCN33_BT)
+-		WMT_PLAT_PR_ERR("Regulator_get VCN33_BT fail\n");
+-	reg_VCN33_WIFI = regulator_get(&pdev->dev, "vcn33_wifi");
+-	if (!reg_VCN33_WIFI)
+-		WMT_PLAT_PR_ERR("Regulator_get VCN33_WIFI fail\n");
++	/*
++	 * A missing/failed supply comes back as an ERR_PTR, not as NULL: the
++	 * vendor test `if (!reg)' misses it and the next regulator_enable()
++	 * would dereference an error pointer. Normalise to NULL so that the
++	 * (already existing) NULL checks in the power-on path skip the rail.
++	 */
++#define CONSYS_GET_SUPPLY(_reg, _name, _what)					\
++	do {									\
++		(_reg) = regulator_get(&pdev->dev, (_name));			\
++		if (IS_ERR(_reg)) {						\
++			WMT_PLAT_PR_ERR("Regulator_get %s fail(%ld)\n", (_what),	\
++					(long)PTR_ERR(_reg));			\
++			(_reg) = NULL;						\
++		}								\
++	} while (0)
++
++	CONSYS_GET_SUPPLY(reg_VCN18, "vcn18", "VCN_1V8");
++	CONSYS_GET_SUPPLY(reg_VCN28, "vcn28", "VCN_2V8");
++	CONSYS_GET_SUPPLY(reg_VCN33_BT, "vcn33_bt", "VCN33_BT");
++	CONSYS_GET_SUPPLY(reg_VCN33_WIFI, "vcn33_wifi", "VCN33_WIFI");
++#undef CONSYS_GET_SUPPLY
+ #endif
+ 	return 0;
+ }
+--- a/common_main/platform/mtk_wcn_consys_hw.c
++++ b/common_main/platform/mtk_wcn_consys_hw.c
+@@ -39,6 +39,7 @@
+ #include "osal_typedef.h"
+ #include "mtk_wcn_consys_hw.h"
+ #include "wmt_step.h"
++#include <linux/of_address.h>
+ #include <linux/of_reserved_mem.h>
+ #include <linux/pinctrl/consumer.h>
+ 
+@@ -152,6 +153,55 @@
+ 	return NULL;
+ }
+ 
++/*
++ * T1100 port (mainline 6.12): the physical base/size of the CONNSYS shared RAM
++ * are a *reserved-memory* region now, not a pair of globals filled in by
++ * mtk_wcn_consys_hw (the vendor kernel got them from
++ * drivers/misc/mediatek/connectivity/wmt_plat). The stock MT6771 tree gives
++ * the region a size and an alloc window instead of a fixed address, so the
++ * kernel picks the address; read it back through the phandle:
++ *
++ *	consys@18070000 { memory-region = <&consys_reserve_memory>; };
++ *	reserved-memory { consys-reserve-memory { size = <0 0x200000>; ... }; };
++ *
++ * of_reserved_mem_lookup() returns the region the early OF code actually
++ * reserved (works for both fixed `reg' and alloc-ranges regions);
++ * of_address_to_resource() is the fallback for a plain `reg' node.
++ */
++static VOID mtk_wmt_consys_emi_from_dt(struct platform_device *pdev)
++{
++	struct device_node *mem_node;
++	struct reserved_mem *rmem;
++	struct resource res = { 0 };
++
++	if (gConEmiPhyBase)
++		return;
++
++	mem_node = of_parse_phandle(pdev->dev.of_node, "memory-region", 0);
++	if (!mem_node) {
++		WMT_PLAT_PR_ERR("no memory-region phandle in the CONSYS node\n");
++		return;
++	}
++
++	rmem = of_reserved_mem_lookup(mem_node);
++	if (rmem && rmem->size) {
++		gConEmiPhyBase = rmem->base;
++		gConEmiSize = rmem->size;
++	} else if (of_address_to_resource(mem_node, 0, &res) == 0 && res.end > res.start) {
++		gConEmiPhyBase = res.start;
++		gConEmiSize = resource_size(&res);
++	}
++	of_node_put(mem_node);
++
++	if (!gConEmiPhyBase || !gConEmiSize) {
++		WMT_PLAT_PR_ERR("CONNSYS EMI region unusable, EMI remap/MPU/coredump stay off\n");
++		return;
++	}
++
++	WMT_PLAT_PR_INFO("CONNSYS EMI from DT: phys 0x%pa size 0x%pa\n",
++			 &gConEmiPhyBase, &gConEmiSize);
++}
++
+ static INT32 mtk_wmt_probe(struct platform_device *pdev)
+ {
+ 	INT32 iRet = -1;
+@@ -187,6 +237,9 @@
+ 	if (iRet)
+ 		return iRet;
+ 
++	/* T1100 port: gConEmiPhyBase/gConEmiSize come from reserved-memory. */
++	mtk_wmt_consys_emi_from_dt(pdev);
++
+ 	if (gConEmiPhyBase) {
+ 		pConnsysEmiStart = ioremap(gConEmiPhyBase, gConEmiSize);
+ 		WMT_PLAT_PR_INFO("Clearing Connsys EMI (virtual(0x%p) physical(0x%pa)) %llu bytes\n",

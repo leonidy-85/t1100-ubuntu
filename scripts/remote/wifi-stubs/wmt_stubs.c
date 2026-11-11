@@ -259,16 +259,22 @@ void wmt_step_print_version(void)
 /* ------------------------------------------- 2d. CONNSYS EMI base address ---
  * The vendor kernel defines this in
  * drivers/misc/mediatek/connectivity/wmt_plat/*; it is the physical base of
- * the 2 MiB CONNSYS reserved memory (stock DTB: consys-reserve-memory
- * @0xbfc00000, docs/wifi-plan.md §1.1).
+ * the 2 MiB CONNSYS shared RAM that the connectivity firmware uses
+ * (docs/wifi-plan.md §1.1).
  *
- * TODO(power-on): fill it from DT (reserved-memory node) instead of leaving 0.
- * With 0 the EMI remap / coredump / EMI-MPU paths are skipped, which is the
- * safe default for a bring-up build (CFG_ENABLE_EMI_MPU=0 as well).
+ * Filled at probe time from the device tree: mtk_wmt_consys_emi_from_dt()
+ * (patches/wifi/0002-common-consys-power-on-dt.patch) reads
+ * consys@18070000/memory-region -> reserved-memory/consys-reserve-memory and
+ * copies base/size here. Staying 0 means "no region described"; the EMI
+ * remap / coredump / EMI-MPU paths are then skipped, which is the safe
+ * default (CFG_ENABLE_EMI_MPU=0 as well).
+ *
+ * Kept global (and exported) because wlan_drv_gen3.ko reads the same value
+ * through hif.h for kalSetEmiMpuProtection().
  */
 phys_addr_t gConEmiPhyBase;
 EXPORT_SYMBOL(gConEmiPhyBase);
-phys_addr_t gConEmiSize;		/* 2 MiB in the stock DTB */
+phys_addr_t gConEmiSize;		/* 2 MiB in the DTS */
 EXPORT_SYMBOL(gConEmiSize);
 
 /* No MODULE_LICENSE()/MODULE_DESCRIPTION() here on purpose: the module-level
