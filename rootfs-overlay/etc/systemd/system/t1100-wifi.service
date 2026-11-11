@@ -1,0 +1,26 @@
+[Unit]
+Description=T1100 CONSYS (MT6631) Wi-Fi: vendor wmt_drv + wlan_drv_gen3
+Documentation=https://gitflic.ru/project/py6on/t1100-ubuntu
+# Vendor order (docs/wifi-plan.md §1.3): wmt_drv powers CONSYS on and downloads
+# the firmware, then wlan_drv_gen3 registers wlan0. cfg80211 is pulled in by
+# modprobe as a dependency of wlan_drv_gen3 (depends=cfg80211,wmt_drv).
+After=local-fs.target systemd-modules-load.service
+# Only fires when the modules are actually deployed. The kernel release is part
+# of the path, so a kernel change disables the unit instead of loading a module
+# whose vermagic no longer matches (insmod would refuse anyway).
+ConditionPathExistsGlob=/lib/modules/*/updates/wifi/wmt_drv.ko
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/modprobe -v wmt_drv
+# Power-on is asynchronous; the dmesg tail is the M3 acceptance evidence
+# ("wmt: power on ok", the WCIR read at 0x788).
+ExecStart=/bin/sh -c 'sleep 2; dmesg | grep -iE "wmt|consys" | tail -n 40 || true'
+ExecStart=/sbin/modprobe -v wlan_drv_gen3
+ExecStop=/sbin/modprobe -r wlan_drv_gen3
+ExecStop=/sbin/modprobe -r wmt_drv
+SyslogIdentifier=t1100-wifi
+
+[Install]
+WantedBy=multi-user.target
