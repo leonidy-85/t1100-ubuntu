@@ -43,7 +43,7 @@ EGL/Wayland. Фазы 1–3 закрыты, фаза 4 в работе — ос�
   холодной загрузкой (`FW did not report reload`, `-110` — гипотеза: нужен
   `sense_off` перед init).
 - **Wi-Fi (фаза 5, путь A):** M1/M2 закрыты (`wmt_drv.ko` `0b4a2bfa…`,
-  `wlan_drv_gen3.ko` `cfd182c5…`), M3 подготовлен (DT, `boot_ubuntu35`,
+  `wlan_drv_gen3.ko` `cfd182c5…`), M3 подготовлен (DT, `boot_ubuntu41`,
   `tools/host/wifi-deploy.sh`) — на железе **не проверялся**. Главный риск —
   STP-HIF для MT6631.
 - **Нельзя одновременно** прошивать образ тача и Wi-Fi: по одному шагу за раз,
