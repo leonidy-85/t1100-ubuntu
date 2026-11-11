@@ -1755,3 +1755,36 @@ mainline-аналог), прежде чем что-то писать в желе
 если загрузится, вернуться к сдвигу кадра (кандидаты: `vbp 220`, либо
 явная установка line rate вместо pixel clock).
 
+
+## 11.11 (2): тач снова у нас; Wi-Fi — план и выбор пути
+
+**Тач.** Второй разработчик переключился на другую задачу, работа возвращена в
+проект. Запущено два потока:
+1) на железе (`bringup`): добрать вендорскую инициализацию из
+   `docs/touch-hx83102e.md` §2.2 (`AHB 0x10007f04 = 0` (sorting mode),
+   `reload_disable`, `reg_re_init`/`func_re_init`), `touch_avdd` →
+   `regulator-always-on`, pull-up на GPIO1, затем повторная проверка кадра при
+   тапах/удержании/мультитаче;
+2) поиск публичного вендорского драйвера HX83102E на build-хосте (сеть там
+   есть) — нужны настоящие init-таблицы и раскладка 56-байтного кадра, а не
+   реконструкция по дизасму.
+
+**Wi-Fi (фаза 5).** Идентификация и план — `docs/wifi-plan.md` (`ea2cb94`):
+- combo **MT6631** (CONSYS_6771), Wi-Fi через **AHB/CONNSYS shared memory +
+  WFDMA/CQDMA** (не SDIO/USB); прошивки в `/vendor/firmware`
+  (`WIFI_RAM_CODE_6759` 480 752 Б, `mt6631_fm_v1_*`), `wifi-dma` = гейт
+  `CLK_INFRA_CQ_DMA` (уже есть в mainline);
+- важный факт: в стоковом dmesg Aurora **внутренний Wi-Fi не поднимался**
+  (`wmt_core_stp_init: no hif info`, `opfunc_wlan_probe: hifType 0x2 … NOT
+  IMPLEMENTED`), то есть «как в стоке» — не эталон;
+- **путь A (порт вендорского gen3)**: на build-хосте найден публичный GPL-стек
+  Motorola под MT6771 (`connectivity-common` `platform/mt6771.c`,
+  `wlan-core-gen3` ~190k строк, MT6631→6759). Оценка: 2–3 недели до
+  «собирается/power-on», 1.5–3 месяца до устойчивого `wlan0`, успех средний;
+- **путь B (USB host + mainline-донгл)**: 2–5 дней, риск низкий; нужны
+  role-switch T-PHY (готовый патч adomerle в `refs/mt6771-next/patches`),
+  `tcpc` с узлом `connector`, VBUS через OTG-регулятор MT6370, конфиг
+  `MT7601U`/`RTL8XXXU` + прошивки донгла; ограничение — один порт: в host-режиме
+  нет ни RNDIS, ни зарядки (откат через recovery/`boot_b`);
+- **DoD фазы 5**: после cold boot есть `wlan0` в `iw dev`, WPA2-PSK ассоциация,
+  DHCP, ping+DNS; конфиг в git, откат проверен.
