@@ -1,0 +1,93 @@
+From f926bb5625c856f179b40b37738996b697954010 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 11 Nov 2026 16:40:28 +0300
+Subject: [PATCH 1/2] drm/panel: it6112: report the panel orientation to the
+ connector
+
+The glass is portrait 1600x2176 while the tablet is used in landscape, so
+the whole desktop came up rotated by 90 degrees: with rotation normal the
+user had to rotate the output by hand in KWin, and the boot console still
+came out sideways.
+
+Implement the drm_panel .get_orientation() callback on top of the generic
+DT 'rotation' binding (same one panel-simple uses) and add rotation = <90>
+to the panel node.  drm_bridge_connector_init() passes it on to the
+connector as the DRM panel orientation property, which KWin and Weston
+use to rotate the output themselves.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  |  7 +++++++
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 20 +++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 029ff4264..b9f2adff7 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -257,6 +257,13 @@ panel: panel@56 {
+ 		width-mm = <166>;
+ 		height-mm = <226>;
+ 
++		/*
++		 * The glass is portrait 1600x2176 but the tablet is used in
++		 * landscape: the panel is mounted rotated 90 degrees counter
++		 * clockwise (see boe_tv110xum_lb2_get_orientation()).
++		 */
++		rotation = <90>;
++
+ 		reset-gpios = <&pio 45 GPIO_ACTIVE_HIGH>;
+ 		stby-gpios = <&pio 44 GPIO_ACTIVE_HIGH>;
+ 		ext-pwr-gpios = <&pio 175 GPIO_ACTIVE_HIGH>;
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index 62a39ae98..d3082865b 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -210,6 +210,7 @@ struct it6112_ctx {
+ 	struct gpio_desc *ext_pwr_gpio;
+ 	struct delayed_work dcs_retry;
+ 	unsigned int mclk_khz;
++	enum drm_panel_orientation orientation;
+ };
+ 
+ static struct it6112_ctx *panel_to_it6112(struct drm_panel *panel)
+@@ -927,12 +928,21 @@ static int boe_tv110xum_lb2_get_modes(struct drm_panel *panel,
+ 	return 1;
+ }
+ 
++static enum drm_panel_orientation
++boe_tv110xum_lb2_get_orientation(struct drm_panel *panel)
++{
++	struct it6112_ctx *ctx = panel_to_it6112(panel);
++
++	return ctx->orientation;
++}
++
+ static const struct drm_panel_funcs boe_tv110xum_lb2_funcs = {
+ 	.disable = boe_tv110xum_lb2_disable,
+ 	.enable = boe_tv110xum_lb2_enable,
+ 	.prepare = boe_tv110xum_lb2_prepare,
+ 	.unprepare = boe_tv110xum_lb2_unprepare,
+ 	.get_modes = boe_tv110xum_lb2_get_modes,
++	.get_orientation = boe_tv110xum_lb2_get_orientation,
+ };
+ 
+ static int it6112_bridge_probe(struct i2c_client *i2c)
+@@ -970,6 +980,16 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 	drm_panel_init(&ctx->base, dev, &boe_tv110xum_lb2_funcs,
+ 		       DRM_MODE_CONNECTOR_DSI);
+ 
++	/*
++	 * The panel is mounted rotated in the chassis: the device is used in
++	 * landscape, the DSI mode (and the glass) is portrait.  The DT
++	 * "rotation" property (degrees counter clockwise, same binding as
++	 * panel-simple) is exported to the connector as the DRM panel
++	 * orientation property, so KWin/Weston rotate the output themselves.
++	 */
++	ctx->orientation = DRM_MODE_PANEL_ORIENTATION_UNKNOWN;
++	of_drm_get_panel_orientation(dev->of_node, &ctx->orientation);
++
+ 	ctx->regulators[0].supply = "dvdd";
+ 	ctx->regulators[1].supply = "vpos";
+ 	ctx->regulators[2].supply = "vneg";
+-- 
+2.54.0
+
