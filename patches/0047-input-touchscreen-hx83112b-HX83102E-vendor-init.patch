@@ -1,0 +1,247 @@
+From 1cb90d3562da3ade828a0d98df31ac22f79b5c7c Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Wed, 11 Nov 2026 19:42:47 +0300
+Subject: [PATCH] input: touchscreen: hx83112b: HX83102E vendor init and 0x30
+ read path
+
+Two mistakes made the controller look "silent" even though it answered
+I2C and passed the ID check:
+
+ - the frame is read from the 8-bit sub-address 0x30 with a plain
+   write(1 byte) + read(56) transfer.  himax_bus_read() is the *AHB*
+   helper (it stores a 32-bit address in port 0x00), so using it - or
+   regmap_raw_read() - reads AHB 0x30 instead: that is exactly the
+   repeated "00 03 00 00" (a single 32-bit word read 14 times by
+   regmap_noinc_read) seen earlier.  Add himax_bus_read_reg() and use it.
+
+ - the vendor power-on sequence (refs/himax-v2) is:
+     AHB 0x100072EC = 0   addr_raw_out_sel - without it the report block
+                          does not carry coordinates
+     AHB 0x10007F04 = 0   sorting mode
+     AHB 0x9000005C = 0   sense on, 10 ms
+     reset GPIO158        5 ms low, 50 ms settle
+     AHB 0x90000048 = 0xEC, then read back until data[1] == 0x01 and
+                          data[0] == 0xEC (reload_to_active)
+     wait AHB 0x900000A8 == 0x05 (cold boot needs ~1 s, so poll 3 s)
+
+   Without reload_to_active and addr_raw_out_sel the chip keeps
+   answering with the constant frame.
+
+The checksum is the plain 56-byte sum, as in the vendor source; drop the
+speculative "16-bit sum up to the first zero byte" rule.
+
+Measured on the board after this: the report block carries real points,
+e.g. 03 81 04 3d ... with num_points = 1 and a valid sum, and event1
+starts producing ABS_MT events.
+---
+ drivers/input/touchscreen/himax_hx83112b.c | 135 +++++++++++++++------
+ 1 file changed, 96 insertions(+), 39 deletions(-)
+
+diff --git a/drivers/input/touchscreen/himax_hx83112b.c b/drivers/input/touchscreen/himax_hx83112b.c
+index e43c29b3b..8ebb437cf 100644
+--- a/drivers/input/touchscreen/himax_hx83112b.c
++++ b/drivers/input/touchscreen/himax_hx83112b.c
+@@ -291,25 +291,10 @@ static bool himax_verify_checksum(struct himax_ts_data *ts,
+ 	for (i = 0; i < sizeof(*event); i++)
+ 		checksum += data[i];
+ 
++	/* vendor: the 56 bytes sum to 0 mod 256 (refs/himax-v2) */
+ 	if ((checksum & 0x00ff) == 0)
+ 		return true;
+ 
+-	/*
+-	 * The vendor validation for this family is not the plain byte sum of
+-	 * all 56: it is a 16-bit sum over the bytes up to the first zero byte
+-	 * (the report block is zero-terminated).  Accept a frame that passes
+-	 * either rule; a frame that passes neither is only noise.
+-	 */
+-	{
+-		u16 sum16 = 0;
+-
+-		for (i = 0; i < sizeof(*event) && data[i] != 0x00; i++)
+-			sum16 += data[i];
+-
+-		if (sum16 == 0)
+-			return true;
+-	}
+-
+ 	dev_err_ratelimited(&ts->client->dev,
+ 			    "Wrong event checksum: %04x\n", checksum);
+ 	return false;
+@@ -322,23 +307,6 @@ static int himax_read_events(struct himax_ts_data *ts,
+ 			       length);
+ }
+ 
+-/*
+- * HX83102E (slot 0xA9A450 in the vendor driver): a plain register burst read
+- * of the 8-bit sub-address 0x30, no 0x11 pointer reset (that belongs to the
+- * generic callback used by the other ICs).
+- */
+-static int hx83102e_read_events(struct himax_ts_data *ts,
+-				struct himax_event *event, size_t length)
+-{
+-	return himax_bus_read(ts, 0x30, event, length);
+-}
+-
+-static int hx83100a_read_events(struct himax_ts_data *ts,
+-				struct himax_event *event, size_t length)
+-{
+-	return himax_bus_read(ts, HX83100A_REG_FW_EVENT_STACK, event, length);
+-};
+-
+ /*
+  * Single-byte write to an 8-bit sub-address (the vendor's himax_bus_write
+  * with a one-byte payload).  regmap cannot be used for this: with
+@@ -359,6 +327,36 @@ static int himax_bus_write_u8(struct himax_ts_data *ts, u8 sub, u8 val)
+ 	return 0;
+ }
+ 
++/*
++ * Read from an 8-bit sub-address: one byte of sub-address, then the data
++ * (the vendor's himax_bus_read(sub, buf, len)).  Note that himax_bus_read()
++ * above is the *AHB* helper: it stores a 32-bit address in port 0x00, which
++ * is a different address space.
++ */
++static int himax_bus_read_reg(struct himax_ts_data *ts, u8 sub, void *dst,
++			      size_t length)
++{
++	struct i2c_msg msgs[2] = {
++		{
++			.addr = ts->client->addr,
++			.flags = 0,
++			.len = 1,
++			.buf = &sub,
++		},
++		{
++			.addr = ts->client->addr,
++			.flags = I2C_M_RD,
++			.len = length,
++			.buf = dst,
++		},
++	};
++
++	if (i2c_transfer(ts->client->adapter, msgs, 2) != 2)
++		return -EIO;
++
++	return 0;
++}
++
+ /*
+  * AHB write: one i2c transaction, sub-address 0x00, then the 32-bit AHB
+  * address and the 32-bit value, both little-endian
+@@ -385,6 +383,33 @@ static int himax_ahb_write(struct himax_ts_data *ts, u32 addr, u32 val)
+ 	return 0;
+ }
+ 
++/*
++ * HX83102E (slot 0xA9A450 in the vendor driver): a plain register burst read
++ * of the 8-bit sub-address 0x30, no 0x11 pointer reset (that belongs to the
++ * generic callback used by the other ICs).
++ */
++static int hx83102e_read_events(struct himax_ts_data *ts,
++				struct himax_event *event, size_t length)
++{
++	int error;
++
++	/* himax_bus_read() enables burst for len > 4 before the read */
++	himax_bus_write_u8(ts, 0x13, 0x31);
++	himax_bus_write_u8(ts, 0x0d, 0x10);
++
++	error = himax_bus_read_reg(ts, 0x30, event, length);
++	if (error)
++		return error;
++
++	return 0;
++}
++
++static int hx83100a_read_events(struct himax_ts_data *ts,
++				struct himax_event *event, size_t length)
++{
++	return himax_bus_read(ts, HX83100A_REG_FW_EVENT_STACK, event, length);
++};
++
+ /*
+  * hx83102e_sense_on(): the controller spends its whole init in save mode and
+  * only starts reporting after "AHB 0x9000005c = 0", 10 ms, then a pin reset
+@@ -394,32 +419,64 @@ static int himax_ahb_write(struct himax_ts_data *ts, u32 addr, u32 val)
+ static int himax_sense_on(struct himax_ts_data *ts)
+ {
+ 	struct device *dev = &ts->client->dev;
+-	u32 st = 0;
++	u32 st = 0, ack = 0;
+ 	int i, error;
+ 
+-	/* himax_mcu_burst_enable() runs first in the vendor sequence */
++	/*
++	 * himax_mcu_power_on_init() from the vendor source (refs/himax-v2):
++	 * the controller answers I2C and reports "ok" long before it produces
++	 * usable coordinates, and the step that matters is addr_raw_out_sel -
++	 * with the default selection the 0x30 block does not carry x/y.
++	 */
+ 	himax_bus_write_u8(ts, 0x13, 0x31);
+ 	himax_bus_write_u8(ts, 0x0d, 0x10);
+ 
++	/* 1. addr_raw_out_sel = 0: report real coordinates, not raw data */
++	error = himax_ahb_write(ts, 0x100072ec, 0x00000000);
++	if (error)
++		return error;
++
++	/* 2. sorting mode */
++	error = himax_ahb_write(ts, 0x10007f04, 0x00000000);
++	if (error)
++		return error;
++
++	/* 3. sense on */
+ 	error = himax_ahb_write(ts, 0x9000005c, 0x00000000);
+ 	if (error)
+ 		return error;
+ 	msleep(10);
+ 
+-	/* himax_mcu_pin_reset(): 5 ms low, then wait for the FW */
++	/* 4. pin reset */
+ 	gpiod_set_value_cansleep(ts->gpiod_rst, 1);
+ 	usleep_range(5000, 5100);
+ 	gpiod_set_value_cansleep(ts->gpiod_rst, 0);
+ 	usleep_range(50000, 50100);
+ 
+-	for (i = 0; i < 50; i++) {
++	/* 5. reload_to_active: 0x90000048 = 0xec, ack reads back ec 01 */
++	for (i = 0; i < 20; i++) {
++		error = himax_ahb_write(ts, 0x90000048, 0x000000ec);
++		if (!error)
++			error = himax_bus_read(ts, 0x90000048, &ack, sizeof(ack));
++		if (!error && (ack & 0xff) == 0xec && ((ack >> 8) & 0xff) == 0x01)
++			break;
++		usleep_range(1000, 1100);
++	}
++	dev_dbg(dev, "reload_to_active: ack=0x%08x\n", ack);
++
++	/*
++	 * 6. FW reload done.  At a cold boot the controller needs well over a
++	 * second before it reports 0x05 (measured: still 0 after 500 ms,
++	 * 0x05 about a second later), so poll for up to 3 s.
++	 */
++	for (i = 0; i < 300; i++) {
+ 		if (!himax_bus_read(ts, 0x900000a8, &st, sizeof(st)) &&
+ 		    (st & 0xff) == 0x05)
+ 			return 0;
+ 		msleep(10);
+ 	}
+ 
+-	dev_warn(dev, "sense on: FW did not report reload (0x%08x)\n", st);
++	dev_warn(dev, "power on init: FW did not report reload (0x%08x)\n", st);
+ 	return -ETIMEDOUT;
+ }
+ 
+@@ -546,7 +603,7 @@ static int himax_probe(struct i2c_client *client)
+ 	if (ts->chip->sense_on) {
+ 		error = himax_sense_on(ts);
+ 		if (error)
+-			return error;
++			dev_warn(dev, "power on init failed: %d\n", error);
+ 	}
+ 
+ 	error = himax_input_register(ts);
+-- 
+2.53.0
+
