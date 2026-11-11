@@ -38,3 +38,4 @@
 0039-arm64-dts-t1100-enable-the-Mali-G72-panfrost-withou.patch
 0040-input-touchscreen-hx83112b-add-HX83102E-support-powe.patch
 0041-arm64-dts-t1100-power-the-touch-AVDD-switch-GPIO163.patch
+0042-arm64-dts-t1100-drop-the-own-ramoops-region.patch
