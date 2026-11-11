@@ -1,10 +1,12 @@
 # Фаза 5, путь A: build-only спайк вендорского стека (журнал)
 
-Статус: **майлстоун 1 (build-only) выполнен**. Собрано/клонировано, снят каталог
-API-долга 4.14 → 6.12, оценены «механическое» vs «переписывание», предложен
-порядок работ. **Устройство не трогали** (на планшете параллельно идёт работа по
-тачу), ничего не прошивали, дерево `../linux-t1100` не меняли, патчей не
-добавляли — вся работа на build-хосте `172.17.141.172` в отдельных каталогах.
+Статус: **майлстоун 2 (собираемые модули) выполнен** — `wmt_drv.ko` и
+`wlan_drv_gen3.ko` линкуются под 6.12.114 (см. §14). Майлстоун 1 (каталог
+API-долга) — §§1–13.
+
+**Устройство не трогали** (на планшете параллельно идёт работа по тачу), ничего
+не прошивали, дерево `../linux-t1100` не меняли — вся работа на build-хосте
+`172.17.141.172` в `/home/l/t1100-wifi-build` и в `patches/wifi/` этого репозитория.
 
 Основание: `docs/wifi-plan.md` §3 (путь A), решение лида от 11.11.
 
@@ -422,3 +424,191 @@ grep -c 'error:' logs/r9-*.log
 Чистые клоны: `/home/l/t1100-wifi-src/vendor/mediatek/kernel_modules/connectivity/{common,wlan}`
 (не модифицируются; правки применяются к `spike/work/`). Логи r1…r9 сохранены
 рядом.
+
+---
+
+# Майлстоун 2: собираемые модули (`wmt_drv.ko`, `wlan_drv_gen3.ko`)
+
+Итог: **оба модуля линкуются под 6.12.114** (rc=0, modpost без ошибок и без
+неразрешённых символов), воспроизводимо, без правок в `../linux-t1100`.
+Этот рубеж **build-only**: на железе ничего не проверялось (§7 шаг 3 — power-on
+CONSYS — впереди).
+
+## 14. Готовые артефакты
+
+| | `wmt_drv.ko` | `wlan_drv_gen3.ko` |
+|---|---|---|
+| sha256 | `0b4a2bfafc207a8b3639813215f02ad48110bbadbc718ab72da8efd9162924b4` | `cfd182c528133c3ea8d88f9510feae507816c491e19b4e10e7a0dd033b0638b8` |
+| размер | 1 109 408 Б | 2 895 080 Б (сток 4.14: 4 083 080 Б) |
+| `modinfo vermagic` | `6.12.114-g95e3b41b86-dirty SMP preempt mod_unload aarch64` | то же |
+| `modinfo depends` | — | `cfg80211,wmt_drv` |
+| `modinfo license` | GPL | GPL |
+| экспортов `mtk_wcn_*` | 154 | (потребляет 9) |
+| исходников | 39 объектов + наши stub'ы | 78 объектов + наши stub'ы |
+| предупреждений компилятора | 106 | 455 |
+| ошибок / неразрешённых символов | 0 / 0 | 0 / 0 |
+
+Хеши воспроизводимы (две сборки подряд дают тот же sha256): вендорский
+`DRIVER_BUILD_DATE` зафиксирован в Kbuild-обёртке (`?= 20261111`), иначе
+`__DATE__`-строка меняла бы `.ko` каждую минуту.
+
+Проверка:
+
+```sh
+modinfo build/wifi/wlan/wlan_drv_gen3.ko | grep -E 'vermagic|depends'
+nm --defined-only build/wifi/common/wmt_drv.ko | grep -c ' T mtk_wcn_'   # 154
+```
+
+## 15. Что добавлено в репозиторий
+
+| Путь | Что это |
+|---|---|
+| `scripts/build-wifi-remote.sh` | локальный драйвер: rsync порта на хост, при необходимости сборка ядра (за `Module.symvers`), сборка модулей, вытягивание `.ko` в `build/wifi/` |
+| `scripts/remote/build-wifi-remote.sh` | хост-часть: чистая копия вендорских клонов → `wifi-patches/*.patch` → `make M=… modules`, сводка rc/ошибок/хешей |
+| `scripts/remote/wifi-kbuild/{common,wlan}.Kbuild` | **свой Kbuild** вместо Android-Makefile: явные списки `obj-m`/`ccflags-y`, все `-D` (в т.ч. `MT6631`, `CONFIG_MTK_COMBO_CHIP` заменён на явные define'ы), `-include` compat-шимов, `KBUILD_EXTRA_SYMBOLS` для линковки wlan против wmt |
+| `scripts/remote/wifi-compat/` | 14 заголовков: 12 из майлстоуна 1 + новые `mtk_port_414.h` (time API, `struct timeval`, `rtc_time_to_tm`, 32k/RTC) и `sdio_ops.h` (стаб MTK SDIO glue) |
+| `scripts/remote/wifi-stubs/{wmt_stubs.c,wlan_stubs.c}` | заглушки с предупреждением в dmesg (см. §17) |
+| `patches/wifi/0001-{common,wlan}-port-6.12.patch` | весь порт исходников: 18 файлов (+89/−74) WMT, 27 файлов (+321/−265) wlan |
+| `configs/t1100-wifi.fragment` | опции ядра для сборки стека (`NL80211_TESTMODE`, `CFG80211_WEXT`, `IPW2200=m` — см. §16) |
+
+Пайплайн целиком:
+
+```sh
+scripts/build-wifi-remote.sh                # ядро (если нет Module.symvers) + оба модуля
+scripts/build-wifi-remote.sh --kernel       # принудительно пересобрать ядро
+scripts/build-wifi-remote.sh wlan           # только один модуль
+scripts/build-wifi-remote.sh --clean        # снести out/ и work/ на хосте
+```
+
+`../linux-t1100` не участвует: модули собираются out-of-tree против
+out-дерева `/home/l/t1100-wifi-build/out`, которое собирается из снапшота
+`/home/l/t1100-ubuntu-build/src` (тот же, что у `scripts/build-kernel-remote.sh`).
+
+## 16. Конфиг ядра: почему понадобился отдельный фрагмент
+
+`configs/t1100-wifi.fragment` (не влит в `configs/t1100.fragment`, потому что
+меняет ABI заголовков):
+
+| Опция | Зачем |
+|---|---|
+| `CONFIG_MODULES=y`, `CONFIG_CFG80211=m`, `CONFIG_MAC80211=m` | внешние модули; `depends: cfg80211` |
+| `CONFIG_CFG80211_WEXT=y` | `net_device.wireless_handlers` (иначе `wext_handler_def` некуда девать) |
+| `CONFIG_NL80211_TESTMODE=y` | `gl_cfg80211.h` содержит `#error` без него |
+| `CONFIG_IPW2200=m` | **хак**: `CONFIG_WEXT_PRIV`/`WEXT_SPY` — скрытые `bool` без prompt'а в `net/wireless/Kconfig`, включить их можно только `select`'ом из драйвера. Драйверу нужен `WEXT_PRIV` (`struct iw_handler_def.num_private/private/private_args` живут под `#ifdef CONFIG_WEXT_PRIV`, а `gl_wext.c` регистрирует ровно их). `ipw2200.ko` не загружается, он в сборке только ради `select`. Альтернатива — патчить `net/wireless/Kconfig`, отказались |
+
+Отдельное out-дерево (`/home/l/t1100-wifi-build/out`) — чтобы не менять
+`.config` общего `/home/l/t1100-ubuntu-build/out`: `build-kernel-remote.sh`
+перегенерирует его через `defconfig + fragment`, и наши опции оттуда исчезли бы
+вместе с ABI-совпадением для модулей.
+
+В дереве появился `Module.symvers` (`make Image modules`, ~17 мин на 12 ядрах
+через ccache) — без него modpost не линкует внешние модули (риск 5 из §11).
+
+## 17. Заглушки (stub'ы): что и почему
+
+Все — в `scripts/remote/wifi-stubs/`, каждая печатает `pr_warn_once`
+(`wmt_stub:`/`wlan_stub:`) при вызове: отказ на железе не должен выглядеть как
+загадка. Ни одна не вызывается на пути, который нужен для power-on.
+
+**`wmt_stubs.c`**
+
+| Заглушка | Почему |
+|---|---|
+| `aee_kernel_warning_api`, `aed_combo_exception(_api)`, `aee_kernel_dal_show` | AEE/AED — Android-«синий экран» MTK, в mainline отсутствует; вызывается только на error-path |
+| `sdio_detect_init/exit/do_autok`, `mtk_wcn_hif_sdio_*`, `mtk_wcn_stp_sdio_*`, `stp_sdio_rw_retry/retry_flag_get/wake_up_ctrl/txdbg_dump`, `g_stp_sdio_host_info`, `wifi_irq`, `mtk_wcn_cmb_sdio_pm_*` | SDIO-транспорт **не собирается**: у MT6631 на MT6771 HIF = AHB/WFDMA (`ahb_sdioLike`), объекты `hif_sdio.c`/`stp_sdio.c`/`sdio_detect.c` исключены из Kbuild; ядро WMT держит на них указатели |
+| `mtk_wcn_stp_uart_drv_init/exit` | STP-over-UART нужен только для BT через UART (`stp_uart.c` исключён) |
+| `wmt_step_init/deinit/print_version` | MTK factory step mode (`CFG_WMT_STEP` не включали) |
+| `wmt_export_platform_bridge_register/unregister`, `wmt_export_mtk_wcn_cmb_sdio_disable_eirq` | это built-in половина WMT (`wmt_build_in_adapter.c` в MTK-ядре), у нас её нет; регистрация no-op |
+| `connectivity_export_show_stack/dump_thread_state` | адаптерные обёртки из `connectivity_build_in_adapter.h` (haretic). `show_stack()` не экспортируется модулям → `sched_show_task()`/`dump_stack()` |
+| `gConEmiPhyBase`, `gConEmiSize` | в стоке определяются в `wmt_plat`; у нас `EXPORT_SYMBOL` и **0** (EMI remap/MPU/coredump пропускаются — безопасный дефолт). **TODO(power-on)**: заполнять из DT (`consys-reserve-memory`) |
+
+**`wlan_stubs.c`**: Android-хуки `register_set_p2p_mode_handler` (фреймворковый
+колбэк P2P), `update_driver_loaded_status` (sysfs-флаг), `wifi_reset_start/end`
+(HAL-хендшейк), `register_file_buf_handler` (NVRAM через Android-сервис),
+`connectivity_export_show_stack`.
+
+## 18. Правки исходников по темам
+
+Полный список — в `patches/wifi/`; здесь смысл. Формат: тема → файлы → что
+сделано.
+
+**Общее для обоих модулей**
+
+| Тема | Файлы | Правка |
+|---|---|---|
+| `proc_create()` берёт `struct proc_ops` (с 5.6) | `gl_proc.c` (10 структур), `gl_kal.c` (2), `wmt_dev.c`, `wmt_dbg.c` | `.owner` убран, `.read/.write` → `.proc_read/.proc_write`; сигнатуры обработчиков менять не пришлось — они совпадают у `file_operations`/`proc_ops` |
+| time API | `common/debug.c`, `mgmt/stats.c`, `mgmt/wmm.c`, `gl_proc.c`, `gl_kal.c`, `wmt_dev.c`, `psm_core.c`, `osal.c`, `stp_dbg.c`, `connsys_debug_utility.c` | в wlan: `struct timeval` → `timespec64`, `do_gettimeofday` → `ktime_get_real_ts64`, `get_monotonic_boottime` → `ktime_get_boottime_ts64`, `rtc_time_to_tm` → `rtc_time64_to_tm`. В WMT — через compat-шим `mtk_port_414.h` (тот же код, без правки 12 мест) |
+| `sched_clock()` | `common/debug.c`, `mgmt/stats.c`, `nic/nic_rx.c`, `ahb.c`, `gl_kal.c` | `#include <linux/sched/clock.h>` (переехал в 4.15) |
+| `ioremap_nocache` (удалён в 5.9) | 26 мест в common (`mt6771.c`, `wmt_lib.c`, `wmt_ic_soc.c`, `wmt_dbg.c`, `wmt_step.c`, `mtk_wcn_consys_hw.c`, `connsys_debug_utility.c`), `wlan_lib.c` | → `ioremap()` |
+| `platform_driver.remove` возвращает `void` (6.11) | `mtk_wcn_consys_hw.c`, `ahb.c` | `int foo()` → `void foo()`, `return 0` убран |
+| `class_create()` без `THIS_MODULE` (6.4) | `wmt_dev.c`, `wmt_detect.c`, `fw_log_wmt.c` | `class_create("name")` |
+| `timer_list` без `function`/`data` (4.15) | `osal.c`, `connsys_debug_utility.c`, `gl_kal.c` | `timer_setup()` + `from_timer()`; в wlan `kalTimeoutHandler(struct timer_list *)` |
+| `set_fs`/`get_fs` (удалены в 5.10) | `gl_kal.c` | `kalFirmwareOpen/Close`: `mm_segment_t`/`set_fs` убраны (файл открывается `filp_open`, читается `kernel_read`); `kalFileRead/Write` → `kernel_read/kernel_write` с `loff_t`. Учётки по-прежнему переключаются на root — **TODO**: `prepare_creds()/commit_creds()` |
+| `struct timeval` в uapi скрыт под `#ifndef __KERNEL__` | — | отсюда compat-шим (см. выше) |
+| `#include <linux/wakelock.h>` (удалён 4.15) | 6 файлов | include убран (API `osal_wake_lock` уже на `wakeup_source`) |
+| `wakeup_source_register(dev, name)` (5.4) | `osal.c` | добавлен `NULL` первым аргументом |
+| `netif_rx_ni` (удалён 5.18) | `gl_kal.c` | `netif_rx()` (контекст-безопасен) |
+| `access_ok(VERIFY_*, …)` без типа (5.0) | `gl_bow.c`, `gl_wext_priv.c` | `access_ok(addr, len)` |
+| IPv6 | `gl_kal.c` | `net_device.ip6_ptr` → `__in6_dev_get()` + `<net/addrconf.h>` |
+| `-Werror` вендора | `common/Makefile` | не нужен: вендорские Makefile в сборке не участвуют |
+
+**cfg80211 (главный семантический блок)** — под 6.12 поменялись сигнатуры ops и
+раскладка `wireless_dev`:
+
+| Что | Файлы | Правка |
+|---|---|---|
+| key-ops получили `int link_id` | `gl_cfg80211.c`, `gl_p2p_cfg80211.c`, `gl_cfg80211.h`, `gl_p2p_ioctl.h` | аргумент добавлен (не используется, single-link) |
+| `set_default_key` | там же | `+ int link_id` |
+| `mgmt_frame_register` → `update_mgmt_frame_registrations` | `gl_init.c`, `gl_p2p.c` (таблицы ops), `gl_cfg80211.c`, `gl_p2p_cfg80211.c` | p2p-версия переписана на битмап `struct mgmt_frame_regs.interface_stypes` (бит N = subtype N, как и было в `switch`), wlan-версия была no-op внутри `#if 0` — оставлена no-op с комментарием |
+| `change_beacon` | `gl_p2p_cfg80211.c` | `struct cfg80211_beacon_data *` → `struct cfg80211_ap_update *` (внутри `&info->beacon`) |
+| `stop_ap`, `set_bitrate_mask` | `gl_p2p_cfg80211.c` | добавлен `link_id` |
+| `tdls_mgmt` | `gl_cfg80211.c` | добавлен `int link_id` |
+| `wireless_dev.current_bss` | `gl_cfg80211.c`, `gl_init.c`, `gl_p2p_cfg80211.c` | → `links[0].client.current_bss` |
+| `wireless_dev.ssid_len` | `gl_init.c` | → `u.client.ssid_len` (**не** `links[0].client` — там только `current_bss`) |
+| `cfg80211_roam_info.bss` | `gl_kal.c` | → `links[0].bss` |
+| `station_parameters.{supported_rates,ht_capa,vht_capa}` | `gl_cfg80211.c` | → `link_sta_params.*` (в 6.12 переехали; TDLS оставлен включённым) |
+| `ndo_select_queue` (accel_priv/fallback убраны в 5.2) | `gl_init.c`, `gl_os.h` | 3 аргумента |
+| `MODULE_SUPPORTED_DEVICE` (удалён в 5.13) | `gl_init.c` | строка убрана (замены нет) |
+| `sched_setscheduler` не экспортируется (5.9) | `gl_init.c` | `sched_set_fifo()`; **TODO**: `ucThreadScheduling`/`ucThreadPriority` не учитываются |
+
+**WMT / SoC power-on (`mt6771.c`)** — из §5 остались ровно те 4 места:
+
+| Строка | Было | Стало |
+|---|---|---|
+| `consys_clock_buffer_ctrl` | `KERNEL_clk_buf_ctrl(CLK_BUF_CONN, …)` | no-op + `WMT_PLAT_PR_DBG`; **TODO(power-on)**: если CONSYS не поднимается, искать гейт XO_WCN в infracfg |
+| VCN18/VCN33 | `KERNEL_upmu_set_reg_value(MT6358_LDO_VCN*_OP_EN, 1)` + `regulator_*` | только `regulator_*` (регмап MT6358 в mainline сам ставит SW-режим) |
+| `consys_vcn28_hw_mode_ctrl` | `KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_*)` | no-op + `PR_DBG`; **TODO**: `regulator_set_mode()`, если FM/co-clock потребует HW-режим |
+| EMI remap | `ioremap_nocache` | `ioremap` |
+
+Прочее в WMT: `rtc_gpio_enable_32k`/`RTC_GPIO_USER_GPS` — compat-заглушка
+(CCF-гейт 32k у MT6771 в mainline отсутствует; **TODO(power-on)**).
+
+## 19. Что не собирается и почему (осознанно)
+
+| Объект | Причина | Как закрыто |
+|---|---|---|
+| `common_main/linux/hif_sdio.c`, `stp_sdio.c`, `common_detect/sdio_detect.c`, `common_main/platform/mtk_wcn_cmb_hw.c` | SDIO-транспорт (не наш HIF) | исключены из Kbuild, символы — в `wmt_stubs.c` |
+| `common_main/linux/stp_uart.c` | tty API 6.12 (`tty_register_ldisc`, `tty_ldisc_ops`, `n_tty_ioctl_helper`, `low_latency`) — переписывать ради BT рано | исключён, стабы `mtk_wcn_stp_uart_drv_*` |
+| `common_main/linux/wmt_step.c` | MTK factory step | исключён, стабы `wmt_step_*` |
+| `common_main/platform/{mt6739,mt6755,mt6761,mt6763,mt6765}.c` | другие SoC (в патче только механические `ioremap`) | не входят в `wmt_drv-y` |
+| `wlan/os/linux/hif/ahb_sdioLike/ahb_pdma.c` | MT6797-ветка PDMA (у нас CQDMA) | не входит; `ahb_cqdma.o` собирается |
+
+## 20. Что осталось (следующий шаг)
+
+1. **Power-on CONSYS в kernel-режиме** (§7 шаг 3): DT-узлы `consys@18070000` +
+   `wifi@180f0000` + `consys-reserve-memory` 2 МиБ + `<&infracfg CLK_INFRA_CQ_DMA>`;
+   заполнить `gConEmiPhyBase` из DT; проверить `clk_buf`/32k; ожидаемый первый
+   признак — `wmt: power on ok` и чтение WCIR (`0x788`).
+2. **STP-HIF для MT6631** (главный риск §11.1): кто регистрирует HIF до
+   power-on — BTIF, `wmt_chrdev_wifi` или собственный initcall. Публичного
+   `wmt_loader` нет; вероятно, нужна минимальная реализация ioctl поверх
+   `/dev/stpwmt`.
+3. `wlan_drv_gen3` **не собирается в `=y`** и не грузится автоматически: нужен
+   rootfs с `cfg80211.ko`, `mac80211.ko`, `wmt_drv.ko`, `wlan_drv_gen3.ko` и
+   прошивкой `WIFI_RAM_CODE_6759` в `/lib/firmware` (её ещё нет, см. §11.3).
+4. Причесать предупреждения до `-Werror`-чистоты (243 `missing-prototypes`,
+   108 `empty-body`, 15 `implicit-fallthrough`) — сейчас не блокирует; отдельно
+   посмотреть `enum-int-mismatch` ×2 в `stp_core.c`/`wmt_plat_alps.c` и
+   `misleading-indentation` в `nic_rx.c` (потенциально реальные баги вендора).
+5. Оформить правки как upstream-серию (по одному патчу на тему, GPL-2.0-шапки
+   уже есть в вендорских файлах) — сейчас это два крупных патча по компонентам.
