@@ -1,0 +1,190 @@
+From 8e5831ebeb5e39bd50cc9ce3b9b0a3d981e25809 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Wed, 11 Nov 2026 20:26:30 +0300
+Subject: [PATCH] arm64: dts: t1100: describe CONSYS and the MT6631 Wi-Fi HIF
+
+The vendor connectivity stack (wmt_drv + wlan_drv_gen3, ported in
+patches/wifi/) needs the SoC side of the MT6631 combo chip described before it
+can power it on.  Three things are added, all taken from the stock device tree
+of this tablet (refs/stock-mt6771.dts) - there is no public MT6771 TRM, so no
+address, IRQ or clock here is guessed:
+
+  consys@18070000          connectivity subsystem: mcu / ap_rgu / topckgen /
+                           spm windows, IRQ 289 (AP) and 291 (MD),
+                           memory-region and the MT6358 VCN rails
+  wifi@180f0000            AHB/WFDMA HIF: wfdma / cqdma-ch2 / infra /
+                           conn_cfg windows, IRQ 290 (HIF) and 118 (HIF DMA),
+                           "wifi-dma", hardware-values
+  consys-reserve-memory    2 MiB of no-map shared RAM for the firmware
+
+Details that differ from a mechanical copy of the vendor DT:
+
+ - No "clocks" on the consys node.  The vendor tree pointed "conn" at its own
+   "mediatek,scpsys" clock provider, which mainline does not implement, and
+   CONSYS_PWR_ON_OFF_API_AVAILABLE is 0 for MT6771, so the driver never
+   enables it: it walks the CONN power domain through the SPM registers
+   (0x1000632c) it already maps.  No power-domains reference either - genpd
+   would write the same register behind the driver's back.
+
+ - consys-reserve-memory keeps the alloc-ranges form of the stock DT instead
+   of a fixed reg.  LK reserves its own blocks and appends them as mblock-N-*
+   children; a fixed reg is checked against them by
+   reserved_memory_conflict_check() and can hang LK (docs/lk-dtb-rules.md).
+   The stock dmesg shows the allocator picked 0xbfc00000, and the driver reads
+   the result back through the memory-region phandle.
+
+ - "wifi-dma" is <&infracfg CLK_INFRA_CQ_DMA>, not the numeric topckgen ID
+   (0x4e) of the vendor DT: that ID belongs to MT6771's own topckgen table and
+   is a different clock under the mt8183 bindings.  infra_cqdma is the gate
+   behind the same block and is what the sibling cq_dma@10212000 node uses.
+
+ - vcn33_bt-supply and vcn33_wifi-supply name the same mainline MT6358 rail:
+   mt6358_sync_vcn33_setting() keeps the WIFI/BT enable bits in sync.
+
+Both nodes are left disabled: they must not be probed until the power-on test
+is planned, and the tablet currently carries the touch/display work.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 130 ++++++++++++++++++
+ 1 file changed, 130 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index e63a1db67..6fd946f6f 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -818,3 +818,133 @@ ramoops@70000000 {
+ 		pmsg-size    = <0x20000>;
+ 	};
+ };
++
++/*
++ * ---------------------------------------------------------------------------
++ * Phase 5, path A: CONSYS / MT6631 combo chip (Wi-Fi + BT), power-on prep.
++ *
++ * Both nodes stay disabled: nothing may touch the connectivity hardware until
++ * the first successful power-on test, and the tablet currently carries the
++ * touch/display work (docs/wifi-plan.md §6, docs/wifi-port-log.md "M3").
++ *
++ * Every number below is taken from the stock device tree of this tablet
++ * (refs/stock-mt6771.dts) and from the vendor driver code that consumes it
++ * (patches/wifi/, Motorola Pie-9 GPL-2.0 drop). There is no public MT6771
++ * TRM, so nothing here is guessed:
++ *
++ *   consys@18070000          refs/stock-mt6771.dts:2206-2213
++ *   wifi@180f0000            refs/stock-mt6771.dts:1687-1695
++ *   consys-reserve-memory    refs/stock-mt6771.dts:460-466
++ *   VCN33_BT / VCN33_WIFI    refs/stock-mt6771.dts:1244-1258
++ * ---------------------------------------------------------------------------
++ */
++
++/*
++ * CONNSYS shared RAM: 2 MiB, no-map.
++ *
++ * The stock tree does not pin the address either - it asks the kernel for
++ * 2 MiB (2 MiB aligned) anywhere in 0x40000000-0xc0000000, and the stock
++ * dmesg shows the allocator landed on 0xbfc00000
++ * ("reserve_memory_consys_fn ... base 0xbfc00000 size 0x200000").
++ *
++ * The alloc-ranges form is kept on purpose: LK reserves its own blocks
++ * (ATF/TEE/SCP/SSPM/SPM/modem/VPU/framebuffer) and appends them as
++ * mblock-N-* children, and a *fixed* reg here would be checked against them
++ * by reserved_memory_conflict_check() - which can hang LK
++ * (docs/lk-dtb-rules.md). With alloc-ranges the kernel picks a free window
++ * itself, and the driver reads the result back through the memory-region
++ * phandle (of_reserved_mem_lookup(), see patches/wifi/0002).
++ */
++&{/reserved-memory} {
++	consys_reserve_memory: consys-reserve-memory {
++		compatible = "mediatek,consys-reserve-memory";
++		no-map;
++		size = <0 0x200000>;
++		alignment = <0 0x200000>;
++		alloc-ranges = <0 0x40000000 0 0x80000000>;
++	};
++};
++
++&{/} {
++	/*
++	 * CONSYS - the SoC side of the MT6631 combo (driver: wmt_drv.ko,
++	 * common_main/platform/mt6771.c, compatible "mediatek,mt6771-consys").
++	 *
++	 * reg windows, in the order of_iomap() takes them:
++	 *   0 0x18070000  CONSYS MCU registers
++	 *   1 0x10007000  AP_RGU (reset of the connectivity subsystem)
++	 *   2 0x10001000  topckgen (AXI bus protect, EMI remapping)
++	 *   3 0x10006000  SPM (CONN power domain: 0x1000632c)
++	 * IRQ 289 = CONSYS AP, 291 = CONSYS MD (stock: <0 0x121 8>, <0 0x123 8>,
++	 * 8 = IRQ_TYPE_LEVEL_LOW, passed verbatim to request_irq()).
++	 *
++	 * No `clocks` property: the vendor DT pointed "conn" at its own
++	 * "mediatek,scpsys" clock provider (clocks = <&scpsys 2>), which
++	 * mainline does not implement. CONSYS_PWR_ON_OFF_API_AVAILABLE is 0 for
++	 * MT6771, so the driver never enables that clock anyway - it powers the
++	 * domain through the SPM registers of window 3 (0x1000632c), which is
++	 * exactly ctl_offs 0x032c of MT8183_POWER_DOMAIN_CONN. Hence no
++	 * power-domains reference either: genpd would fight the driver for the
++	 * same register.
++	 */
++	consys@18070000 {
++		compatible = "mediatek,mt6771-consys";
++		reg = <0 0x18070000 0 0x1000>,
++		      <0 0x10007000 0 0x100>,
++		      <0 0x10001000 0 0x1000>,
++		      <0 0x10006000 0 0x1000>;
++		interrupts = <GIC_SPI 289 IRQ_TYPE_LEVEL_LOW>,
++			     <GIC_SPI 291 IRQ_TYPE_LEVEL_LOW>;
++		memory-region = <&consys_reserve_memory>;
++
++		/*
++		 * MT6358 behind pwrap. Mainline exposes a single VCN33 rail
++		 * whose WIFI/BT enable bits mt6358_sync_vcn33_setting() keeps in
++		 * sync, so both supply names point at the same regulator; the
++		 * driver asks for them by these names (regulator_get()).
++		 */
++		vcn18-supply = <&mt6358_vcn18_reg>;
++		vcn28-supply = <&mt6358_vcn28_reg>;
++		vcn33_bt-supply = <&mt6358_vcn33_reg>;
++		vcn33_wifi-supply = <&mt6358_vcn33_reg>;
++
++		status = "disabled";
++	};
++
++	/*
++	 * Wi-Fi HIF of the same chip: AHB/WFDMA, driver wlan_drv_gen3.ko
++	 * (os/linux/hif/ahb_sdioLike, compatible "mediatek,wifi").
++	 *
++	 * reg windows, in the order of_iomap() takes them:
++	 *   0 0x180f0000  WFDMA (HIF)
++	 *   1 0x10212180  CQDMA channel 2 - the Wi-Fi DMA engine
++	 *   2 0x10001000  infra
++	 *   3 0x180e0000  CONN_CFG
++	 * IRQ 290 = HIF, 118 = HIF DMA (both level-low, as in the stock DT).
++	 *
++	 * The stock DT pointed the "wifi-dma" clock at topckgen ID 0x4e. That
++	 * numeric ID belongs to MT6771's own topckgen table and must not be
++	 * reused with the mt8183 bindings (ID 78 is CLK_TOP_APLL2_D4 there);
++	 * the gate behind the same register block is infra_cqdma, which
++	 * mainline has as CLK_INFRA_CQ_DMA (INFRA2 bit 27), and that is what
++	 * the vendor stack actually switches (the sibling cq_dma@10212000 node
++	 * in the stock DT uses the same clock).
++	 *
++	 * hardware-values = expected WCIR chip id (0x788, compared against the
++	 * AP-side WCIR in nic/nic.c), firmware load address and start address
++	 * (wlan_lib.c).
++	 */
++	wifi@180f0000 {
++		compatible = "mediatek,wifi";
++		reg = <0 0x180f0000 0 0x1100>,
++		      <0 0x10212180 0 0x6c>,
++		      <0 0x10001000 0 0x1000>,
++		      <0 0x180e0000 0 0x70>;
++		interrupts = <GIC_SPI 290 IRQ_TYPE_LEVEL_LOW>,
++			     <GIC_SPI 118 IRQ_TYPE_LEVEL_LOW>;
++		clocks = <&infracfg CLK_INFRA_CQ_DMA>;
++		clock-names = "wifi-dma";
++		hardware-values = <0x788 0xa5800 0xa5800>;
++		status = "disabled";
++	};
++};
+-- 
+2.53.0
+
