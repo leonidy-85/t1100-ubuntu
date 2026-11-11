@@ -1923,3 +1923,44 @@ event1 (1746 событий за сессию): TRACKING_ID, POS_X/POS_Y, TOUCH_
    `himax_sense_on` и, если подтвердится, добавить `sense_off` перед
    `power_on_init`;
 3. после этого — `libinput` + проверка тача в Weston.
+
+### 11.11 (7): Wi-Fi M3 подготовлен (build-only, на железе не проверялся)
+
+**Образ:** `build/boot_ubuntu41.img` (не 35 — имя `boot_ubuntu35` занято рабочим
+откатным образом), sha256 `0c21c2f3261bae95456923fb9b79ff9780d73e196929ea89e2b6274997a9589e`,
+ядро + модули собраны на `675178729` + патч 0049, **vermagic у всех идентичен**:
+`6.12.114-g675178729a-dirty SMP preempt mod_unload aarch64`.
+
+| артефакт | sha256 |
+|---|---|
+| `Image` | `696ce20e1bb51038cda80a2be13a5a76b6f2b8761eb8d1a5b2442480d03da9d7` |
+| DTB `mt6771-fplus-t1100.dtb` | `bebd312f62e5f7089d4d6715ab90d8da1eb72796486b348cb78acf12c665fa33` |
+| `wmt_drv.ko` | `cc2f061d59824e25677837a751166c516be58cd1cf6016f6811a16f87031176a` |
+| `wlan_drv_gen3.ko` | `ba69c10fddc6377104d81e7f11054ae2aff858701f87426560c49ce8ee6c413c` |
+| `cfg80211.ko` / `mac80211.ko` / `rfkill.ko` | `e30338f8…` / `c8acef16…` / `d765f566…` |
+
+**DT (патч 0049):** `consys@18070000` (окна 0x18070000/0x10007000/0x10001000/0x10006000,
+IRQ 289/291), `wifi@180f0000` (0x180f0000/0x10212180/0x10001000/0x180e0000, IRQ 290/118,
+`clocks = <&infracfg CLK_INFRA_CQ_DMA>`, `hardware-values = <0x788 0xa5800 0xa5800>`),
+`consys-reserve-memory` 2 МиБ `no-map` с `alloc-ranges`. Оба новых узла
+`status = "disabled"` — поведение HEAD не меняется (тач 0047/0048 не откатывается).
+Четыре отклонения от стока обоснованы в патче: без `clocks` у consys (нет
+`mediatek,scpsys` в mainline; домен поднимается SPM `0x1000632c` = `ctl_offs 0x032c`,
+как `MT8183_POWER_DOMAIN_CONN`), `alloc-ranges` вместо фиксированного `reg`
+(LK-конфликт-чек), `wifi-dma` = инфра-гейт `CLK_INFRA_CQ_DMA` (а не topckgen `0x4e`),
+`vcn33_wifi`/`vcn33_bt` — один rail.
+
+**Драйверная часть** (`patches/wifi/0002`): `gConEmiPhyBase/Size` из DT
+(`of_reserved_mem_lookup` → fallback `of_address_to_resource`), `devm_clk_get_optional`,
+нормализация `ERR_PTR` от `regulator_get`; `CONFIG_MTK_COMBO_CHIP="CONSYS_6771"`
+(в кавычках) передаётся в сборку.
+
+**Деплой:** `tools/host/wifi-deploy.sh` (`--apply` → `.ko` в
+`/lib/modules/<release>/updates/wifi` + `depmod`; `--apply --enable` → юнит
+`t1100-wifi.service`, `start` не делает), release сверяется с `uname -r`.
+
+**План проверки M3:** `--load wmt` → ожидаем
+`CONNSYS EMI from DT: phys …, size 0x200000` → `Clearing Connsys EMI …` →
+**`wmt: power on ok`** → chip id **`0x788`**. Риск №1 прежний: STP-HIF для MT6631
+(публичного `wmt_loader` нет); прошивки `WIFI_RAM_CODE_6759`/`WMT_SOC.cfg` в rootfs
+пока нет.
