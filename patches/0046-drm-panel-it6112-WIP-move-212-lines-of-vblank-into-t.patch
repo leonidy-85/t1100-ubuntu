@@ -1,0 +1,44 @@
+From be4c58d5a5f882c9b119a5228e05b4f6fe10652e Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 11 Nov 2026 16:40:37 +0300
+Subject: [PATCH 2/2] drm/panel: it6112: WIP - move 212 lines of vblank into
+ the back porch
+
+The panel shows the frame ~212 lines early: with the vendor porches
+(vsa 8, vbp 28, vfp 220) a ~10% black band sits on the portrait top edge
+and the opposite edge is cut off, at boot as well as in the compositor,
+so it is not a userspace problem.
+
+First experiment: keep vsa 8 and move the 212 lines from the front porch
+into the back porch (vbp 240, vfp 8).  The vblank total stays 256 lines,
+so the pixel clock is untouched.
+---
+ drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index d3082865b..e23dc351a 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -902,9 +902,16 @@ static const struct drm_display_mode boe_tv110xum_lb2_mode = {
+ 	.hsync_end = 1600 + 14 + 44,
+ 	.htotal = 1600 + 14 + 44 + 44,
+ 	.vdisplay = 2176,
++	/*
++	 * EXPERIMENT: the image comes out shifted towards the start of the
++	 * frame - a ~10% black band on the portrait top edge, content cut off
++	 * on the opposite edge - so move ~212 lines from the front porch into
++	 * the back porch.  The vblank total (and the pixel clock) is unchanged,
++	 * so this only moves the active window inside the frame.
++	 */
+ 	.vsync_start = 2176 + 8,
+-	.vsync_end = 2176 + 8 + 28,
+-	.vtotal = 2176 + 8 + 28 + 220,
++	.vsync_end = 2176 + 8 + 240,
++	.vtotal = 2176 + 8 + 240 + 8,
+ 	.width_mm = 166,
+ 	.height_mm = 226,
+ };
+-- 
+2.54.0
+
