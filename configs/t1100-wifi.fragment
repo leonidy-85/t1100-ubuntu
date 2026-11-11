@@ -1,0 +1,33 @@
+# Kconfig fragment: Wi-Fi/BT connectivity stack (phase 5, path A) build knobs.
+#
+# Applied *on top of* configs/t1100.fragment, but in a separate out-tree
+# (/home/l/t1100-wifi-build/out) so that the vendor out-of-tree Wi-Fi modules
+# can be built with a .config whose header-visible ABI matches the modules:
+#
+#   - CONFIG_WEXT_* change the layout of struct iw_handler_def and
+#     struct iw_statistics; the driver must be compiled against exactly the
+#     same values as the kernel, otherwise the structures are silently
+#     misaligned (see docs/wifi-port-log.md, milestone 1 §6).
+#   - CONFIG_NL80211_TESTMODE is hard-required by the vendor driver:
+#     os/linux/include/gl_cfg80211.h has #error unless it is set.
+#
+# Not merged into configs/t1100.fragment: WEXT is only needed while the vendor
+# stack is being brought up, and it is an ABI-affecting option.
+
+CONFIG_MODULES=y
+CONFIG_CFG80211=m
+CONFIG_CFG80211_WEXT=y
+CONFIG_NL80211_TESTMODE=y
+CONFIG_MAC80211=m
+
+# CONFIG_WEXT_CORE / CONFIG_WEXT_SPY / CONFIG_WEXT_PRIV are hidden `bool`s with
+# no prompt in net/wireless/Kconfig: they can only be switched on by a driver
+# that `select`s them. The vendor driver needs WEXT_PRIV (struct iw_handler_def
+# only has num_private/private/private_args under #ifdef CONFIG_WEXT_PRIV, and
+# os/linux/gl_wext.c registers exactly those), so we enable the smallest
+# mainline driver that selects it. ipw2200.ko is never loaded; it exists in
+# this build only to flip the symbol (and it selects WEXT_SPY as well, which
+# costs nothing).
+#
+# Alternative rejected: patching net/wireless/Kconfig in ../linux-t1100.
+CONFIG_IPW2200=m
