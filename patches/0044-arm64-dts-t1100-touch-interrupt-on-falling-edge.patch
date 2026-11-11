@@ -1,0 +1,30 @@
+From 95e3b41b8667961a6486dbd267ebe6e3d81cfb25 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Wed, 11 Nov 2026 16:50:47 +0300
+Subject: [PATCH] arm64: dts: t1100: trigger the touch interrupt on the falling
+ edge
+
+HX_INT_IS_EDGE = 1 in the controller's touch information and the vendor
+driver requests IRQF_TRIGGER_FALLING (falling back to TRIGGER_LOW only if
+that fails).  Match the vendor: IRQ_TYPE_EDGE_FALLING instead of level low.
+---
+ arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index d259c2a17..e63a1db67 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -226,7 +226,8 @@ touchscreen@48 {
+ 		compatible = "himax,hx83102e";
+ 		reg = <0x48>;
+ 
+-		interrupts-extended = <&pio 1 IRQ_TYPE_LEVEL_LOW>;
++		/* vendor: HX_INT_IS_EDGE = 1, IRQF_TRIGGER_FALLING */
++		interrupts-extended = <&pio 1 IRQ_TYPE_EDGE_FALLING>;
+ 		reset-gpios = <&pio 158 GPIO_ACTIVE_LOW>;
+ 
+ 		touchscreen-size-x = <1600>;
+-- 
+2.53.0
+
