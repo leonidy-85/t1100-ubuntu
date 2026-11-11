@@ -1,0 +1,1816 @@
+diff --git a/common/debug.c b/common/debug.c
+index 543b008..9a42713 100644
+--- a/common/debug.c
++++ b/common/debug.c
+@@ -13,6 +13,7 @@
+ */
+ 
+ #include "precomp.h"
++#include <linux/sched/clock.h>	/* sched_clock() moved here in 4.15 */
+ 
+ #if (CFG_SUPPORT_DEBUG_STATISTICS == 1)
+ struct _PKT_STATUS_ENTRY {
+@@ -603,7 +604,7 @@ VOID wlanFillTimestamp(P_ADAPTER_T prAdapter, PVOID pvPacket, UINT_8 ucPhase)
+ 	PUINT_8 pucEth = NULL;
+ 	UINT_32 u4Length = 0;
+ 	PUINT_8 pucUdp = NULL;
+-	struct timeval tval;
++	struct timespec64 tval;
+ 
+ 	if (!prAdapter || !prAdapter->rDebugInfo.fgVoE5_7Test || !skb)
+ 		return;
+@@ -617,7 +618,7 @@ VOID wlanFillTimestamp(P_ADAPTER_T prAdapter, PVOID pvPacket, UINT_8 ucPhase)
+ 	pucUdp = &pucEth[ETH_HLEN+28];
+ 	if (kalStrnCmp(pucUdp, "1345678", 7))
+ 		return;
+-	do_gettimeofday(&tval);
++	ktime_get_real_ts64(&tval);
+ 	switch (ucPhase) {
+ 	case PHASE_XMIT_RCV: /* xmit */
+ 		pucUdp += 20;
+@@ -629,7 +630,7 @@ VOID wlanFillTimestamp(P_ADAPTER_T prAdapter, PVOID pvPacket, UINT_8 ucPhase)
+ 		pucUdp += 36;
+ 		break;
+ 	}
+-	wlanSetBE32(tval.tv_sec, pucUdp);
+-	wlanSetBE32(tval.tv_usec, pucUdp+4);
++	wlanSetBE32((UINT_32)tval.tv_sec, pucUdp);
++	wlanSetBE32((UINT_32)(tval.tv_nsec / NSEC_PER_USEC), pucUdp + 4);
+ }
+ /* End: Functions used to breakdown packet jitter, for test case VoE 5.7 */
+diff --git a/common/wlan_lib.c b/common/wlan_lib.c
+index f8425a9..ba83f4b 100644
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -689,7 +689,7 @@ wlanAdapterStart(IN P_ADAPTER_T prAdapter, IN P_REG_INFO_T prRegInfo)
+ 
+ 		/* Power state initialization */
+ 		prAdapter->fgWiFiInSleepyState = FALSE;
+-		prAdapter->rAcpiState = ACPI_STATE_D0;
++		prAdapter->rAcpiState = WLAN_ACPI_STATE_D0;
+ 
+ 		/* Online scan option */
+ 		if (prRegInfo->fgDisOnlineScan == 0)
+@@ -977,7 +977,7 @@ wlanImageDividDownload(IN P_ADAPTER_T prAdapter, IN PVOID pvFwImageMapFile)
+ 	}
+ 
+ 	kalSetEmiMpuProtection(gConEmiPhyBase, WIFI_EMI_MEM_SIZE, FALSE);
+-	prWifiEmiBaseAddr = ioremap_nocache(gConEmiPhyBase, WIFI_EMI_AVAILABLE_MEM_SIZE);
++	prWifiEmiBaseAddr = ioremap(gConEmiPhyBase, WIFI_EMI_AVAILABLE_MEM_SIZE);
+ 
+ 	/* IEMI + DEMI */
+ 	for (i = ENTRY_DIRECTLY_TO_CHIP; i < prFwHead->u4NumOfEntries; i++) {
+@@ -1081,7 +1081,7 @@ WLAN_STATUS wlanAdapterStop(IN P_ADAPTER_T prAdapter)
+ 
+ #endif
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D0 &&
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D0 &&
+ 	    !wlanIsChipNoAck(prAdapter) && !kalIsCardRemoved(prAdapter->prGlueInfo)) {
+ 		UINT_32 u4RegValue = 0;
+ 		UINT_32 u4RegValueNew = 0;
+@@ -4754,8 +4754,8 @@ UINT_32 wlanGetTxPendingFrameCount(IN P_ADAPTER_T prAdapter)
+ *
+ * @param prAdapter      Pointer of Adapter Data Structure
+ *
+-* @return ACPI_STATE_D0 Normal Operation Mode
+-*         ACPI_STATE_D3 Suspend Mode
++* @return WLAN_ACPI_STATE_D0 Normal Operation Mode
++*         WLAN_ACPI_STATE_D3 Suspend Mode
+ */
+ /*----------------------------------------------------------------------------*/
+ ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
+@@ -4770,8 +4770,8 @@ ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
+ * @brief This function is to update current ACPI state only
+ *
+ * @param prAdapter      Pointer of Adapter Data Structure
+-* @param ePowerState    ACPI_STATE_D0 Normal Operation Mode
+-*                       ACPI_STATE_D3 Suspend Mode
++* @param ePowerState    WLAN_ACPI_STATE_D0 Normal Operation Mode
++*                       WLAN_ACPI_STATE_D3 Suspend Mode
+ *
+ * @return none
+ */
+@@ -4779,7 +4779,7 @@ ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
+ VOID wlanSetAcpiState(IN P_ADAPTER_T prAdapter, IN ENUM_ACPI_STATE_T ePowerState)
+ {
+ 	ASSERT(prAdapter);
+-	ASSERT(ePowerState <= ACPI_STATE_D3);
++	ASSERT(ePowerState <= WLAN_ACPI_STATE_D3);
+ 
+ 	prAdapter->rAcpiState = ePowerState;
+ }
+diff --git a/common/wlan_oid.c b/common/wlan_oid.c
+index aae63c0..7dd495b 100644
+--- a/common/wlan_oid.c
++++ b/common/wlan_oid.c
+@@ -35,7 +35,7 @@
+ #include "mgmt/rsn.h"
+ #include "gl_wext.h"
+ #include "debug.h"
+-#include <stddef.h>
++#include <linux/stddef.h>
+ 
+ #ifdef FW_CFG_SUPPORT
+ #include "fwcfg.h"
+@@ -405,7 +405,7 @@ wlanoidQueryBssidList(IN P_ADAPTER_T prAdapter,
+ 
+ 	prGlueInfo = prAdapter->prGlueInfo;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in qeury BSSID list! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -492,7 +492,7 @@ wlanoidSetBssidListScan(IN P_ADAPTER_T prAdapter,
+ 
+ 	DEBUGFUNC("wlanoidSetBssidListScan()");
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set BSSID list scan! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -567,7 +567,7 @@ wlanoidSetBssidListScanExt(IN P_ADAPTER_T prAdapter,
+ 
+ 	DEBUGFUNC("wlanoidSetBssidListScanExt()");
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, ERROR,
+ 		       "Fail in set BSSID list scan! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -656,7 +656,7 @@ wlanoidSetBssidListScanAdv(IN P_ADAPTER_T prAdapter,
+ 
+ 	DEBUGFUNC("wlanoidSetBssidListScanAdv()");
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set BSSID list scan! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -764,7 +764,7 @@ wlanoidSetBssid(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4Set
+ 	if (u4SetBufferLen != MAC_ADDR_LEN) {
+ 		*pu4SetInfoLen = MAC_ADDR_LEN;
+ 		return WLAN_STATUS_INVALID_LENGTH;
+-	} else if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	} else if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail in set ssid! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -872,7 +872,7 @@ wlanoidSetSsid(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4SetB
+ 
+ 	if (u4SetBufferLen < sizeof(PARAM_SSID_T) || u4SetBufferLen > sizeof(PARAM_SSID_T))
+ 		return WLAN_STATUS_INVALID_LENGTH;
+-	else if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	else if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail in set ssid! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -1014,7 +1014,7 @@ wlanoidSetConnect(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4S
+ 
+ 	if (u4SetBufferLen != sizeof(PARAM_CONNECT_T))
+ 		return WLAN_STATUS_INVALID_LENGTH;
+-	else if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	else if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail in set ssid! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -1343,7 +1343,7 @@ wlanoidSetInfrastructureMode(IN P_ADAPTER_T prAdapter,
+ 
+ 	*pu4SetInfoLen = sizeof(ENUM_PARAM_OP_MODE_T);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set infrastructure mode! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -1536,7 +1536,7 @@ wlanoidSetAuthMode(IN P_ADAPTER_T prAdapter,
+ 	/* return WLAN_STATUS_SUCCESS; */
+ 	/* } */
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set Authentication mode! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -1765,7 +1765,7 @@ wlanoidSetPrivacyFilter(IN P_ADAPTER_T prAdapter,
+ 	if (u4SetBufferLen < sizeof(ENUM_PARAM_PRIVACY_FILTER_T))
+ 		return WLAN_STATUS_INVALID_LENGTH;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set Authentication mode! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -1829,7 +1829,7 @@ wlanoidSetReloadDefaults(IN P_ADAPTER_T prAdapter,
+ 	/* return WLAN_STATUS_SUCCESS; */
+ 	/* } */
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set Reload default! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -1972,7 +1972,7 @@ wlanoidSetAddWep(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4Se
+ 	ASSERT(pvSetBuffer);
+ 	ASSERT(pu4SetInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail in set add WEP! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -2089,7 +2089,7 @@ wlanoidSetRemoveWep(IN P_ADAPTER_T prAdapter,
+ 	DBGLOG(OID, INFO, "Set: Dump PARAM_KEY_INDEX content\n");
+ 	DBGLOG(OID, INFO, "Index : 0x%08x\n", u4KeyId);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set remove WEP! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -2168,7 +2168,7 @@ wlanoidSetAddKey(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4Se
+ 	ASSERT(pvSetBuffer);
+ 	ASSERT(pu4SetInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail in set add key! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -2646,7 +2646,7 @@ wlanoidSetRemoveKey(IN P_ADAPTER_T prAdapter,
+ 	if (u4SetBufferLen < sizeof(PARAM_REMOVE_KEY_T))
+ 		return WLAN_STATUS_INVALID_LENGTH;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set remove key! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -2893,7 +2893,7 @@ wlanoidSetEncryptionStatus(IN P_ADAPTER_T prAdapter,
+ 	/* return WLAN_STATUS_SUCCESS; */
+ 	/* } */
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set encryption status! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -3789,7 +3789,7 @@ wlanoidQueryRcvError(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -3856,7 +3856,7 @@ wlanoidQueryRcvNoBuffer(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -3921,7 +3921,7 @@ wlanoidQueryRcvCrcError(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -3986,7 +3986,7 @@ wlanoidQueryStatistics(IN P_ADAPTER_T prAdapter,
+ 
+ 	*pu4QueryInfoLen = sizeof(PARAM_802_11_STATISTICS_STRUCT_T);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -6202,7 +6202,7 @@ wlanoidQueryXmitOk(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -6268,7 +6268,7 @@ wlanoidQueryRcvOk(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -6334,7 +6334,7 @@ wlanoidQueryXmitError(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -6399,7 +6399,7 @@ wlanoidQueryXmitOneCollision(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -6468,7 +6468,7 @@ wlanoidQueryXmitMoreCollisions(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -6533,7 +6533,7 @@ wlanoidQueryXmitMaxCollisions(IN P_ADAPTER_T prAdapter,
+ 		ASSERT(pvQueryBuffer);
+ 	ASSERT(pu4QueryInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -6695,7 +6695,7 @@ wlanoidSetMulticastList(IN P_ADAPTER_T prAdapter,
+ 	if (u4SetBufferLen)
+ 		ASSERT(pvSetBuffer);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set multicast list! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -6765,7 +6765,7 @@ wlanoidSetCurrentPacketFilter(IN P_ADAPTER_T prAdapter,
+ 
+ 	DBGLOG(OID, TRACE, "New packet filter: %#08x\n", u4NewPacketFilter);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set current packet filter! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -7182,7 +7182,7 @@ wlanoidSetDisassociate(IN P_ADAPTER_T prAdapter,
+ 
+ 	*pu4SetInfoLen = 0;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set disassociate! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -8702,7 +8702,7 @@ wlanoidSetWapiKey(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4S
+ 	ASSERT(pvSetBuffer);
+ 	ASSERT(pu4SetInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set add key! (Adapter not ready). ACPI=D%d, Radio=%d\r\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -9814,7 +9814,7 @@ wlanoidSetBT(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4SetBuf
+ 		return WLAN_STATUS_INVALID_LENGTH;
+ 	}
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail to set BT profile because of ACPI_D3\n");
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+ 	}
+@@ -9945,7 +9945,7 @@ wlanoidSetBtSingleAntenna(IN P_ADAPTER_T prAdapter,
+ 	if (IS_ARB_IN_RFTEST_STATE(prAdapter))
+ 		return WLAN_STATUS_SUCCESS;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail to set antenna because of ACPI_D3\n");
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+ 	}
+@@ -10019,7 +10019,7 @@ wlanoidSetPta(IN P_ADAPTER_T prAdapter, IN PVOID pvSetBuffer, IN UINT_32 u4SetBu
+ 	if (IS_ARB_IN_RFTEST_STATE(prAdapter))
+ 		return WLAN_STATUS_SUCCESS;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail to set BT setting because of ACPI_D3\n");
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+ 	}
+@@ -10332,7 +10332,7 @@ wlanoidSetDefaultKey(IN P_ADAPTER_T prAdapter,
+ 	ASSERT(pvSetBuffer);
+ 	ASSERT(pu4SetInfoLen);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN, "Fail in set add key! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -10486,7 +10486,7 @@ wlanoidSetStartSchedScan(IN P_ADAPTER_T prAdapter,
+ 
+ 	DEBUGFUNC("wlanoidSetStartSchedScan()");
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, WARN,
+ 		       "Fail in set scheduled scan! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+@@ -10922,7 +10922,7 @@ wlanoidSetGSCNAction(IN P_ADAPTER_T prAdapter,
+ {
+ 	P_CMD_SET_PSCAN_ENABLE prCmdPscnAction;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(SCN, ERROR, "Adapter not ready: ACPI=%d, Radio=%d\n",
+ 				   prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -10988,7 +10988,7 @@ wlanoidSetGSCNParam(IN P_ADAPTER_T prAdapter,
+ {
+ 	P_PARAM_WIFI_GSCAN_CMD_PARAMS prCmdGscnParam;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(SCN, ERROR, "Adapter not ready: ACPI=%d, Radio=%d\n",
+ 				   prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -11045,7 +11045,7 @@ wlanoidSetGSCNConfig(IN P_ADAPTER_T prAdapter,
+ 	P_PARAM_WIFI_GSCAN_CMD_PARAMS prCmdGscnConfigParam;
+ 	CMD_GSCN_SCN_COFIG_T rCmdGscnConfig;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(SCN, ERROR, "Adapter not ready: ACPI=%d, Radio=%d\n",
+ 				   prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -11108,7 +11108,7 @@ wlanoidGetGSCNResult(IN P_ADAPTER_T prAdapter,
+ 	P_PARAM_WIFI_GSCAN_GET_RESULT_PARAMS prGetGscnScnResultParm;
+ 	CMD_GET_GSCAN_RESULT_T rGetGscnScnResultCmd;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(SCN, ERROR, "Adapter not ready: ACPI=%d, Radio=%d\n",
+ 				   prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+ 		return WLAN_STATUS_ADAPTER_NOT_READY;
+@@ -12497,7 +12497,7 @@ uint32_t wlanoidGetWifiType(IN P_ADAPTER_T prAdapter,
+ 
+ 	*pu4SetInfoLen = 0;
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(OID, ERROR,
+ 		       "Fail in query receive error! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 		       prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+diff --git a/common/wlan_p2p.c b/common/wlan_p2p.c
+index 45037d8..915e799 100644
+--- a/common/wlan_p2p.c
++++ b/common/wlan_p2p.c
+@@ -831,7 +831,7 @@ wlanoidSetP2PMulticastList(IN P_ADAPTER_T prAdapter,
+ 	if (u4SetBufferLen)
+ 		ASSERT(pvSetBuffer);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(REQ, WARN,
+ 		       "Fail in set multicast list! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 			prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+diff --git a/include/nic/hal.h b/include/nic/hal.h
+index 42304b7..d96acd7 100644
+--- a/include/nic/hal.h
++++ b/include/nic/hal.h
+@@ -75,7 +75,7 @@
+ #define HAL_MCR_HIF_RD(_prAdapter, _u4Offset, _pu4Value) \
+ do { \
+ 	if (HAL_TEST_FLAG(_prAdapter, ADAPTER_FLAG_HW_ERR) == FALSE) { \
+-		if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++		if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 			ASSERT(0); \
+ 		} \
+ 		if (kalDevRegRead(_prAdapter->prGlueInfo, _u4Offset, _pu4Value) == FALSE) {\
+@@ -97,7 +97,7 @@ do { \
+ #define HAL_MCR_HIF_WR(_prAdapter, _u4Offset, _u4Value) \
+ do { \
+ 	if (HAL_TEST_FLAG(_prAdapter, ADAPTER_FLAG_HW_ERR) == FALSE) { \
+-		if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++		if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 			ASSERT(0); \
+ 		} \
+ 		if (kalDevRegWrite(_prAdapter->prGlueInfo, _u4Offset, _u4Value) == FALSE) {\
+@@ -115,7 +115,7 @@ do { \
+ 
+ #define HAL_PORT_RD(_prAdapter, _u4Port, _u4Len, _pucBuf, _u4ValidBufSize) \
+ { \
+-	if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++	if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 		ASSERT(0); \
+ 	} \
+ 	if (HAL_TEST_FLAG(_prAdapter, ADAPTER_FLAG_HW_ERR) == FALSE) { \
+@@ -140,7 +140,7 @@ do { \
+ 
+ #define HAL_PORT_WR(_prAdapter, _u4Port, _u4Len, _pucBuf, _u4ValidBufSize) \
+ { \
+-	if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++	if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 		ASSERT(0); \
+ 	} \
+ 	if (HAL_TEST_FLAG(_prAdapter, ADAPTER_FLAG_HW_ERR) == FALSE) { \
+@@ -165,7 +165,7 @@ do { \
+ 
+ #define HAL_BYTE_WR(_prAdapter, _u4Port, _ucBuf) \
+ { \
+-	if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++	if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 		ASSERT(0); \
+ 	} \
+ 	if (HAL_TEST_FLAG(_prAdapter, ADAPTER_FLAG_HW_ERR) == FALSE) { \
+@@ -188,7 +188,7 @@ do { \
+ #define HAL_DRIVER_OWN_BY_SDIO_CMD52(_prAdapter, _pfgDriverIsOwnReady) \
+ { \
+ 	UINT_8 ucBuf = BIT(1); \
+-	if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++	if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 		ASSERT(0); \
+ 	} \
+ 	if (HAL_TEST_FLAG(_prAdapter, ADAPTER_FLAG_HW_ERR) == FALSE) { \
+@@ -228,7 +228,7 @@ do { \
+ 
+ #define HAL_MCR_HIF_RD(_prAdapter, _u4Offset, _pu4Value) \
+ do { \
+-	if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++	if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 		ASSERT(0); \
+ 	} \
+ 	if (kalIsResetting() || kalIsResetTriggered()) { \
+@@ -255,7 +255,7 @@ do { \
+ 
+ #define HAL_MCR_HIF_WR(_prAdapter, _u4Offset, _u4Value) \
+ do { \
+-	if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++	if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 		ASSERT(0); \
+ 	} \
+ 	if (kalIsResetting() || kalIsResetTriggered()) {\
+@@ -267,7 +267,7 @@ do { \
+ 
+ #define HAL_PORT_RD(_prAdapter, _u4Port, _u4Len, _pucBuf, _u4ValidBufSize) \
+ do { \
+-	if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++	if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 		ASSERT(0); \
+ 	} \
+ 	if (_prAdapter->fgIsFwOwn == TRUE) { \
+@@ -283,7 +283,7 @@ do { \
+ 
+ #define HAL_PORT_WR(_prAdapter, _u4Port, _u4Len, _pucBuf, _u4ValidBufSize) \
+ do { \
+-	if (_prAdapter->rAcpiState == ACPI_STATE_D3) { \
++	if (_prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) { \
+ 		ASSERT(0); \
+ 	} \
+ 	if (_prAdapter->fgIsFwOwn == TRUE) { \
+diff --git a/include/nic/wlan_def.h b/include/nic/wlan_def.h
+index 38a2663..7c14703 100644
+--- a/include/nic/wlan_def.h
++++ b/include/nic/wlan_def.h
+@@ -526,10 +526,10 @@ typedef enum _ENUM_MODULATION_TYPE_T {
+ } ENUM_MODULATION_TYPE_T, *P_ENUM_MODULATION_TYPE_T;
+ 
+ typedef enum _ENUM_ACPI_STATE_T {
+-	ACPI_STATE_D0 = 0,
+-	ACPI_STATE_D1,
+-	ACPI_STATE_D2,
+-	ACPI_STATE_D3
++	WLAN_ACPI_STATE_D0 = 0,
++	WLAN_ACPI_STATE_D1,
++	WLAN_ACPI_STATE_D2,
++	WLAN_ACPI_STATE_D3
+ } ENUM_ACPI_STATE_T;
+ 
+ /* The operation mode of a specific Network */
+diff --git a/mgmt/stats.c b/mgmt/stats.c
+index 90c34b2..2cf4b32 100644
+--- a/mgmt/stats.c
++++ b/mgmt/stats.c
+@@ -31,6 +31,7 @@
+  ********************************************************************************
+  */
+ #include "precomp.h"
++#include <linux/sched/clock.h>	/* sched_clock() moved here in 4.15 */
+ 
+ #if (CFG_SUPPORT_STATISTICS == 1)
+ 
+@@ -140,7 +141,7 @@ VOID StatsEnvRxTime2Host(IN P_ADAPTER_T prAdapter, struct sk_buff *prSkb)
+ 	UINT_64 u8IntTime = 0;
+ 	UINT_64 u8RxTime = 0;
+ 	UINT_32 u4Delay = 0;
+-	struct timeval tval;
++	struct timespec64 tval;
+ 	struct rtc_time tm;
+ 
+ 	if ((g_ucTxRxFlag & BIT(1)) == 0)
+@@ -162,8 +163,8 @@ VOID StatsEnvRxTime2Host(IN P_ADAPTER_T prAdapter, struct sk_buff *prSkb)
+ 	u8IntTime = GLUE_RX_GET_PKT_INT_TIME(prSkb);
+ 	u4Delay = ((UINT_32)(sched_clock() - u8IntTime))/NSEC_PER_USEC;
+ 	u8RxTime = GLUE_RX_GET_PKT_RX_TIME(prSkb);
+-	do_gettimeofday(&tval);
+-	rtc_time_to_tm(tval.tv_sec, &tm);
++	ktime_get_real_ts64(&tval);
++	rtc_time64_to_tm(tval.tv_sec, &tm);
+ 
+ 	switch (ucIpProto) {
+ 	case IP_PRO_TCP:
+@@ -182,7 +183,7 @@ VOID StatsEnvRxTime2Host(IN P_ADAPTER_T prAdapter, struct sk_buff *prSkb)
+ 	"IPID 0x%04x src %d dst %d UP %d,delay %u us,int2rx %lu us,IntTime %llu,%u/%u,leave at %02d:%02d:%02d.%06ld\n",
+ 			u2IPID, u2UdpSrcPort, u2UdpDstPort, ((pucEth[1] & IPTOS_PREC_MASK) >> IPTOS_PREC_OFFSET),
+ 			u4Delay, ((UINT_32)(u8RxTime - u8IntTime))/NSEC_PER_USEC, u8IntTime, u4NoDelayRx, u4TotalRx,
+-			tm.tm_hour, tm.tm_min, tm.tm_sec, tval.tv_usec);
++			tm.tm_hour, tm.tm_min, tm.tm_sec, (long)(tval.tv_nsec / NSEC_PER_USEC));
+ 		break;
+ 	default:
+ 		break;
+diff --git a/mgmt/wmm.c b/mgmt/wmm.c
+index 683597c..e814267 100644
+--- a/mgmt/wmm.c
++++ b/mgmt/wmm.c
+@@ -1272,12 +1272,12 @@ BOOLEAN wmmAcmCanDequeue(P_ADAPTER_T prAdapter, UINT_8 ucAc, UINT_32 u4PktTxTime
+ 	struct SOFT_ACM_CTRL *prAcmCtrl = NULL;
+ 	struct WMM_INFO *prWmmInfo = &prAdapter->rWifiVar.rWmmInfo;
+ 	UINT_32 u4CurTime = 0;
+-	struct timespec ts;
++	struct timespec64 ts;
+ 
+ 	prAcmCtrl = &prWmmInfo->arAcmCtrl[ucAc];
+ 	if (!prAcmCtrl->u4AdmittedTime)
+ 		return FALSE;
+-	get_monotonic_boottime(&ts);
++	ktime_get_boottime_ts64(&ts);
+ 	u4CurTime = ts.tv_sec;
+ 	if (!TIME_BEFORE(u4CurTime, prAcmCtrl->u4IntervalEndSec)) {
+ 		u4CurTime++;
+@@ -1317,7 +1317,7 @@ BOOLEAN wmmAcmCanDequeue(P_ADAPTER_T prAdapter, UINT_8 ucAc, UINT_32 u4PktTxTime
+ 	if (!timerPendingTimer(&prWmmInfo->rAcmDeqTimer)) {
+ 		UINT_32 u4EndMsec = prAcmCtrl->u4IntervalEndSec * 1000;
+ 
+-		get_monotonic_boottime(&ts);
++		ktime_get_boottime_ts64(&ts);
+ 		u4CurTime = ts.tv_sec * MSEC_PER_SEC;
+ 		u4CurTime += ts.tv_nsec / NSEC_PER_MSEC;
+ 		/* It is impossible that u4EndMsec is less than u4CurTime */
+diff --git a/nic/nic.c b/nic/nic.c
+index 10c6e75..d695cdd 100644
+--- a/nic/nic.c
++++ b/nic/nic.c
+@@ -508,7 +508,7 @@ WLAN_STATUS nicProcessIST(IN P_ADAPTER_T prAdapter)
+ 
+ 	ASSERT(prAdapter);
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D3) {
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D3) {
+ 		DBGLOG(REQ, WARN,
+ 		       "Fail in set nicProcessIST! (Adapter not ready). ACPI=D%d, Radio=%d\n",
+ 			prAdapter->rAcpiState, prAdapter->fgIsRadioOff);
+diff --git a/nic/nic_pwr_mgt.c b/nic/nic_pwr_mgt.c
+index bd8fb4b..d685f68 100644
+--- a/nic/nic_pwr_mgt.c
++++ b/nic/nic_pwr_mgt.c
+@@ -307,7 +307,7 @@ BOOLEAN nicpmSetAcpiPowerD0(IN P_ADAPTER_T prAdapter)
+ 		/* 0. Reset variables in ADAPTER_T */
+ 		prAdapter->fgIsFwOwn = TRUE;
+ 		prAdapter->fgWiFiInSleepyState = FALSE;
+-		prAdapter->rAcpiState = ACPI_STATE_D0;
++		prAdapter->rAcpiState = WLAN_ACPI_STATE_D0;
+ 		prAdapter->fgIsEnterD3ReqIssued = FALSE;
+ 
+ 		/* 1. Request Ownership to enter F/W download state */
+@@ -501,7 +501,7 @@ BOOLEAN nicpmSetAcpiPowerD3(IN P_ADAPTER_T prAdapter)
+ 	nicpmSetFWOwn(prAdapter, FALSE);
+ 
+ 	/* 7. Set variables */
+-	prAdapter->rAcpiState = ACPI_STATE_D3;
++	prAdapter->rAcpiState = WLAN_ACPI_STATE_D3;
+ 
+ 	return TRUE;
+ }
+diff --git a/nic/nic_rx.c b/nic/nic_rx.c
+index 368bb33..1f1306d 100644
+--- a/nic/nic_rx.c
++++ b/nic/nic_rx.c
+@@ -34,6 +34,7 @@
+ ********************************************************************************
+ */
+ #include "precomp.h"
++#include <linux/sched/clock.h>	/* sched_clock() moved here in 4.15 */
+ #include "que_mgt.h"
+ 
+ #ifndef LINUX
+diff --git a/os/linux/gl_bow.c b/os/linux/gl_bow.c
+index 9804e43..e671f90 100644
+--- a/os/linux/gl_bow.c
++++ b/os/linux/gl_bow.c
+@@ -354,9 +354,9 @@ static long bow_ampc_ioctl(IN struct file *filp, IN unsigned int cmd, IN OUT uns
+ 		return -EFAULT;
+ 	/* permission check */
+ 	if (_IOC_DIR(cmd) & _IOC_READ)
+-		err = !access_ok(VERIFY_WRITE, (void __user *)arg, _IOC_SIZE(cmd));
++		err = !access_ok((void __user *)arg, _IOC_SIZE(cmd));
+ 	else if (_IOC_DIR(cmd) & _IOC_WRITE)
+-		err = !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd));
++		err = !access_ok((void __user *)arg, _IOC_SIZE(cmd));
+ 	if (err)
+ 		return -EFAULT;
+ 
+diff --git a/os/linux/gl_cfg80211.c b/os/linux/gl_cfg80211.c
+index cec0993..9a632f0 100644
+--- a/os/linux/gl_cfg80211.c
++++ b/os/linux/gl_cfg80211.c
+@@ -149,6 +149,7 @@ mtk_cfg80211_change_iface(struct wiphy *wiphy,
+ int
+ mtk_cfg80211_add_key(struct wiphy *wiphy,
+ 		     struct net_device *ndev,
++		     int link_id,	/* 6.12: MLO link id; unused (single link) */
+ 		     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params)
+ {
+ 	PARAM_KEY_T rKey;
+@@ -236,6 +237,7 @@ mtk_cfg80211_add_key(struct wiphy *wiphy,
+ int
+ mtk_cfg80211_get_key(struct wiphy *wiphy,
+ 		     struct net_device *ndev,
++		     int link_id,	/* 6.12: MLO link id; unused (single link) */
+ 		     u8 key_index,
+ 		     bool pairwise,
+ 		     const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *))
+@@ -264,7 +266,8 @@ mtk_cfg80211_get_key(struct wiphy *wiphy,
+  *         others:  failure
+  */
+ /*----------------------------------------------------------------------------*/
+-int mtk_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev, u8 key_index, bool pairwise, const u8 *mac_addr)
++int mtk_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev, int link_id, u8 key_index, bool pairwise,
++			 const u8 *mac_addr)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	WLAN_STATUS rStatus = WLAN_STATUS_SUCCESS;
+@@ -314,7 +317,8 @@ int mtk_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev, u8 key_in
+  */
+ /*----------------------------------------------------------------------------*/
+ int
+-mtk_cfg80211_set_default_key(struct wiphy *wiphy, struct net_device *ndev, u8 key_index, bool unicast, bool multicast)
++mtk_cfg80211_set_default_key(struct wiphy *wiphy, struct net_device *ndev, int link_id, u8 key_index,
++			     bool unicast, bool multicast)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	PARAM_DEFAULT_KEY_T rDefaultKey;
+@@ -891,7 +895,7 @@ int mtk_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev, struct cf
+ 	 * Beacaus driver disconnected is done, but cfg80211 is disconnecting.
+ 	 * Reject this request.Supplicant will issue the connecting request again.
+ 	 */
+-	if (wdev->current_bss &&
++	if (wdev->links[0].client.current_bss &&
+ 		kalGetMediaStateIndicated(prGlueInfo) == PARAM_MEDIA_STATE_DISCONNECTED) {
+ 		DBGLOG(REQ, WARN, "Reject this connecting request\n");
+ 		return -EALREADY;
+@@ -1583,7 +1587,27 @@ int mtk_cfg80211_set_rekey_data(struct wiphy *wiphy, struct net_device *dev, str
+ 	return 0;
+ }
+ 
+-void mtk_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
++void mtk_cfg80211_update_mgmt_frame_registrations(IN struct wiphy *wiphy,
++						  IN struct wireless_dev *wdev,
++						  IN struct mgmt_frame_regs *upd)
++{
++	/* 6.12: cfg80211_ops.mgmt_frame_register() became
++	 * update_mgmt_frame_registrations(wiphy, wdev, struct mgmt_frame_regs *),
++	 * i.e. cfg80211 now hands over the full registration bitmap instead of
++	 * one (frame_type, enable) pair per call.
++	 *
++	 * The 4.14 implementation in this driver was a no-op (its payload was
++	 * inside "#if 0"), so the port keeps it a no-op: the firmware-side
++	 * action-frame filter is set up from the P2P path
++	 * (mtk_p2p_cfg80211_update_mgmt_frame_registrations()) instead.
++	 */
++	(void)wiphy;
++	(void)wdev;
++	(void)upd;
++	return;
++}
++
++void mtk_cfg80211_mgmt_frame_register_legacy(IN struct wiphy *wiphy,
+ 				      IN struct wireless_dev *wdev,
+ 				      IN u16 frame_type, IN bool reg)
+ {
+@@ -2713,19 +2737,19 @@ mtk_cfg80211_change_station(struct wiphy *wiphy, struct net_device *ndev, const
+ 
+ 	if (params == NULL)
+ 		return 0;
+-	else if (params->supported_rates == NULL)
++	else if (params->link_sta_params.supported_rates == NULL)
+ 		return 0;
+ 
+ 	/* init */
+ 	kalMemZero(&rCmdUpdate, sizeof(rCmdUpdate));
+ 	kalMemCopy(rCmdUpdate.aucPeerMac, mac, 6);
+ 
+-	if (params->supported_rates != NULL) {
++	if (params->link_sta_params.supported_rates != NULL) {
+ 
+-		u4Temp = params->supported_rates_len;
++		u4Temp = params->link_sta_params.supported_rates_len;
+ 		if (u4Temp > CMD_PEER_UPDATE_SUP_RATE_MAX)
+ 			u4Temp = CMD_PEER_UPDATE_SUP_RATE_MAX;
+-		kalMemCopy(rCmdUpdate.aucSupRate, params->supported_rates, u4Temp);
++		kalMemCopy(rCmdUpdate.aucSupRate, params->link_sta_params.supported_rates, u4Temp);
+ 		rCmdUpdate.u2SupRateLen = u4Temp;
+ 	}
+ 
+@@ -2747,23 +2771,23 @@ mtk_cfg80211_change_station(struct wiphy *wiphy, struct net_device *ndev, const
+ 		rCmdUpdate.u2ExtCapLen = u4Temp;
+ 	}
+ 
+-	if (params->ht_capa != NULL) {
++	if (params->link_sta_params.ht_capa != NULL) {
+ 
+-		rCmdUpdate.rHtCap.u2CapInfo = params->ht_capa->cap_info;
+-		rCmdUpdate.rHtCap.ucAmpduParamsInfo = params->ht_capa->ampdu_params_info;
+-		rCmdUpdate.rHtCap.u2ExtHtCapInfo = params->ht_capa->extended_ht_cap_info;
+-		rCmdUpdate.rHtCap.u4TxBfCapInfo = params->ht_capa->tx_BF_cap_info;
+-		rCmdUpdate.rHtCap.ucAntennaSelInfo = params->ht_capa->antenna_selection_info;
++		rCmdUpdate.rHtCap.u2CapInfo = params->link_sta_params.ht_capa->cap_info;
++		rCmdUpdate.rHtCap.ucAmpduParamsInfo = params->link_sta_params.ht_capa->ampdu_params_info;
++		rCmdUpdate.rHtCap.u2ExtHtCapInfo = params->link_sta_params.ht_capa->extended_ht_cap_info;
++		rCmdUpdate.rHtCap.u4TxBfCapInfo = params->link_sta_params.ht_capa->tx_BF_cap_info;
++		rCmdUpdate.rHtCap.ucAntennaSelInfo = params->link_sta_params.ht_capa->antenna_selection_info;
+ 		kalMemCopy(rCmdUpdate.rHtCap.rMCS.arRxMask,
+-			   params->ht_capa->mcs.rx_mask, sizeof(rCmdUpdate.rHtCap.rMCS.arRxMask));
++			   params->link_sta_params.ht_capa->mcs.rx_mask, sizeof(rCmdUpdate.rHtCap.rMCS.arRxMask));
+ 
+-		rCmdUpdate.rHtCap.rMCS.u2RxHighest = params->ht_capa->mcs.rx_highest;
+-		rCmdUpdate.rHtCap.rMCS.ucTxParams = params->ht_capa->mcs.tx_params;
++		rCmdUpdate.rHtCap.rMCS.u2RxHighest = params->link_sta_params.ht_capa->mcs.rx_highest;
++		rCmdUpdate.rHtCap.rMCS.ucTxParams = params->link_sta_params.ht_capa->mcs.tx_params;
+ 		rCmdUpdate.fgIsSupHt = TRUE;
+ 	}
+ 	/* vht */
+ 
+-	if (params->vht_capa != NULL) {
++	if (params->link_sta_params.vht_capa != NULL) {
+ 		/* rCmdUpdate.rVHtCap */
+ 		/* rCmdUpdate.rVHtCap */
+ 	}
+@@ -2906,7 +2930,8 @@ int mtk_cfg80211_del_station(struct wiphy *wiphy, struct net_device *ndev, const
+ /*----------------------------------------------------------------------------*/
+ int
+ mtk_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev,
+-		       const u8 *peer, u8 action_code, u8 dialog_token,
++		       const u8 *peer, int link_id,	/* 6.12: MLO link id */
++		       u8 action_code, u8 dialog_token,
+ 		       u16 status_code, u32 peer_capability,
+ 		       bool initiator, const u8 *buf, size_t len)
+ {
+diff --git a/os/linux/gl_init.c b/os/linux/gl_init.c
+index 4048668..4bbd42e 100644
+--- a/os/linux/gl_init.c
++++ b/os/linux/gl_init.c
+@@ -293,7 +293,8 @@ static struct cfg80211_ops mtk_wlan_ops = {
+ 	.cancel_remain_on_channel = mtk_cfg80211_cancel_remain_on_channel,
+ 	.mgmt_tx = mtk_cfg80211_mgmt_tx,
+ 	/* .mgmt_tx_cancel_wait        = mtk_cfg80211_mgmt_tx_cancel_wait, */
+-	.mgmt_frame_register = mtk_cfg80211_mgmt_frame_register,
++	/* 6.12: renamed from .mgmt_frame_register (2 args) */
++	.update_mgmt_frame_registrations = mtk_cfg80211_update_mgmt_frame_registrations,
+ #ifdef CONFIG_NL80211_TESTMODE
+ 	.testmode_cmd = mtk_cfg80211_testmode_cmd,
+ #endif
+@@ -631,9 +632,9 @@ unsigned int _cfg80211_classify8021d(struct sk_buff *skb)
+ }
+ #endif
+ 
+-UINT_16 wlanSelectQueue(struct net_device *dev, struct sk_buff *skb,
+-			void *accel_priv, select_queue_fallback_t fallback)
++UINT_16 wlanSelectQueue(struct net_device *dev, struct sk_buff *skb, struct net_device *sb_dev)
+ {
++	/* 6.12: ndo_select_queue() lost accel_priv/fallback (5.2) */
+ 	UINT_16 au16Wlan1dToQueueIdx[8] = { 1, 0, 0, 1, 2, 2, 3, 3 };
+ 
+ 	/* Use Linux wireless utility function */
+@@ -676,10 +677,13 @@ static int wlanSetMacAddress(struct net_device *ndev, void *addr)
+ 	 **********************************************************************
+ 	 */
+ 	wdev = ndev->ieee80211_ptr;
+-	if (wdev->ssid_len > 0 || (wdev->current_bss)) {
++	/* 6.12: wireless_dev.ssid_len -> u.client.ssid_len,
++	 * current_bss -> links[0].client.current_bss */
++	if (wdev->u.client.ssid_len > 0 || (wdev->links[0].client.current_bss)) {
+ 		DBGLOG(INIT, ERROR,
+ 		       "Reject mac addr change due to ssid_len(%d) & bss(%d)\n",
+-		       wdev->ssid_len, wdev->current_bss);
++		       wdev->u.client.ssid_len, wdev->links[0].client.current_bss);
++
+ 		return WLAN_STATUS_NOT_ACCEPTED;
+ 	}
+ 
+@@ -2302,20 +2306,19 @@ static INT_32 wlanProbe(PVOID pvData)
+ #endif
+ 
+ 		/* TODO the change schedule API shall be provided by OS glue layer */
+-		/* Switch the Wi-Fi task priority to higher priority and change the scheduling method */
++		/* 6.12: sched_setscheduler() is no longer exported to modules (5.9).
++		 * The exported helpers are sched_set_fifo()/sched_set_fifo_low()/
++		 * sched_set_normal(); they cover "make the Wi-Fi threads RT".
++		 * TODO(port): honour ucThreadScheduling (SCHED_RR/SCHED_FIFO) and
++		 * ucThreadPriority instead of always using SCHED_FIFO.
++		 */
+ 		if (prGlueInfo->prAdapter->rWifiVar.ucThreadPriority > 0) {
+-			struct sched_param param = {.sched_priority = prGlueInfo->prAdapter->rWifiVar.ucThreadPriority
+-			};
+-			sched_setscheduler(prGlueInfo->main_thread,
+-					   prGlueInfo->prAdapter->rWifiVar.ucThreadScheduling, &param);
++			sched_set_fifo(prGlueInfo->main_thread);
+ #if CFG_SUPPORT_MULTITHREAD
+-			sched_setscheduler(prGlueInfo->hif_thread,
+-					   prGlueInfo->prAdapter->rWifiVar.ucThreadScheduling, &param);
+-			sched_setscheduler(prGlueInfo->rx_thread,
+-					   prGlueInfo->prAdapter->rWifiVar.ucThreadScheduling, &param);
++			sched_set_fifo(prGlueInfo->hif_thread);
++			sched_set_fifo(prGlueInfo->rx_thread);
+ #endif
+-			DBGLOG(INIT, INFO,
+-			       "Set pri = %d, sched = %d\n",
++			DBGLOG(INIT, INFO, "Set RT (SCHED_FIFO) for Wi-Fi threads, cfg pri = %d sched = %d\n",
+ 			       prGlueInfo->prAdapter->rWifiVar.ucThreadPriority,
+ 			       prGlueInfo->prAdapter->rWifiVar.ucThreadScheduling);
+ 		}
+@@ -2801,5 +2804,5 @@ module_exit(exitWlan);
+ 
+ MODULE_AUTHOR(NIC_AUTHOR);
+ MODULE_DESCRIPTION(NIC_DESC);
+-MODULE_SUPPORTED_DEVICE(NIC_NAME);
++/* MODULE_SUPPORTED_DEVICE() was removed in 5.13; nothing replaces it. */
+ MODULE_LICENSE("GPL");
+diff --git a/os/linux/gl_kal.c b/os/linux/gl_kal.c
+index b75532c..89ed9b0 100644
+--- a/os/linux/gl_kal.c
++++ b/os/linux/gl_kal.c
+@@ -34,12 +34,14 @@
+  ********************************************************************************
+  */
+ #include "gl_os.h"
++#include <linux/sched/clock.h>	/* sched_clock() moved here in 4.15 */
+ #include "gl_kal.h"
+ #include "gl_wext.h"
+ #include "precomp.h"
+ #include "gl_rst.h"
+ #if CFG_SUPPORT_AGPS_ASSIST
+ #include <net/netlink.h>
++#include <net/addrconf.h>	/* struct inet6_dev, needed for IPv6 addr enumeration */
+ #endif
+ #if CFG_SUPPORT_WAKEUP_REASON_DEBUG
+ #include <mt_sleep.h>
+@@ -110,7 +112,13 @@ BOOLEAN wlan_perf_monitor_force_enable = FALSE;
+ static struct file *filp;
+ static uid_t orgfsuid;
+ static gid_t orgfsgid;
+-static mm_segment_t orgfs;
++/* 6.12: mm_segment_t / set_fs() / get_fs() are gone (5.10). They existed only
++ * to let kernel code pass kernel pointers to the VFS; kernel_read()/
++ * kernel_write() take plain kernel pointers now, so the saved segment is not
++ * needed. Kept as a boolean so that kalFirmwareClose() still knows whether the
++ * credentials were overridden by kalFirmwareOpen().
++ */
++static BOOLEAN fgFwCredSaved;
+ 
+ static PUINT_8 apucFwPath[] = {
+ 	(PUINT_8) "/storage/sdcard0/",
+@@ -197,18 +205,20 @@ WLAN_STATUS kalFirmwareOpen(IN P_GLUE_INFO_T prGlueInfo)
+ 	/*
+ 	 * save uid and gid used for filesystem access.
+ 	 * set user and group to 0(root)
++	 *
++	 * TODO(port 6.12): this mutates the *current* (possibly shared) cred
++	 * object in place; the 4.14 vendor code did the same. Replace with
++	 * prepare_creds()/commit_creds() when this path is actually exercised.
+ 	 */
+ 	struct cred *cred = (struct cred *)get_current_cred();
+ 
+ 	orgfsuid = cred->fsuid.val;
+ 	orgfsgid = cred->fsgid.val;
+ 	cred->fsuid.val = cred->fsgid.val = 0;
++	fgFwCredSaved = TRUE;
+ 
+ 	ASSERT(prGlueInfo);
+ 
+-	orgfs = get_fs();
+-	set_fs(get_ds());
+-
+ 	/* Get FW name table */
+ 	if (ucMaxEcoVer < ucCurEcoVer)
+ 		apucNameTable = apucFwName;
+@@ -264,10 +274,10 @@ WLAN_STATUS kalFirmwareOpen(IN P_GLUE_INFO_T prGlueInfo)
+ 
+ error_open:
+ 	/* restore */
+-	set_fs(orgfs);
+ 	cred->fsuid.val = orgfsuid;
+ 	cred->fsgid.val = orgfsgid;
+ 	put_cred(cred);
++	fgFwCredSaved = FALSE;
+ 	return WLAN_STATUS_FAILURE;
+ }
+ 
+@@ -292,13 +302,13 @@ WLAN_STATUS kalFirmwareClose(IN P_GLUE_INFO_T prGlueInfo)
+ 		filp_close(filp, NULL);
+ 
+ 		/* restore */
+-		set_fs(orgfs);
+-		{
++		if (fgFwCredSaved) {
+ 			struct cred *cred = (struct cred *)get_current_cred();
+ 
+ 			cred->fsuid.val = orgfsuid;
+ 			cred->fsgid.val = orgfsgid;
+ 			put_cred(cred);
++			fgFwCredSaved = FALSE;
+ 		}
+ 		filp = NULL;
+ 	}
+@@ -961,10 +971,7 @@ WLAN_STATUS kalRxIndicateOnePkt(IN P_GLUE_INFO_T prGlueInfo, IN PVOID pvPkt)
+ 			prSkb, prSkb->len, prSkb->protocol, (ULONG)prSkb->tail, (ULONG)prSkb->end);
+ 		DBGLOG_MEM32(RX, ERROR, (PUINT_32) prSkb->data, prSkb->len);
+ 	}
+-	if (!in_interrupt())
+-		netif_rx_ni(prSkb);	/* only in non-interrupt context */
+-	else
+-		netif_rx(prSkb);
++	netif_rx(prSkb);	/* netif_rx_ni() is gone; netif_rx() is context-safe */
+ 
+ 	wlanReturnPacket(prGlueInfo->prAdapter, NULL);
+ 
+@@ -1138,7 +1145,8 @@ kalIndicateStatusAndComplete(IN P_GLUE_INFO_T prGlueInfo, IN WLAN_STATUS eStatus
+ 			/* CFG80211 Indication */
+ 			if (eStatus == WLAN_STATUS_ROAM_OUT_FIND_BEST) {
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0))
+-				rRoamInfo.bss = bss;
++				/* 6.12: cfg80211_roam_info.bss -> links[0].bss */
++				rRoamInfo.links[0].bss = bss;
+ 				rRoamInfo.req_ie = prGlueInfo->aucReqIe;
+ 				rRoamInfo.req_ie_len = prGlueInfo->u4ReqIeLength;
+ 				rRoamInfo.resp_ie = prGlueInfo->aucRspIe;
+@@ -3442,9 +3450,14 @@ VOID kalOsTimerInitialize(IN P_GLUE_INFO_T prGlueInfo, IN PVOID prTimerHandler)
+ 
+ 	ASSERT(prGlueInfo);
+ 
+-	init_timer(&(prGlueInfo->tickfn));
+-	prGlueInfo->tickfn.function = prTimerHandler;
+-	prGlueInfo->tickfn.data = (unsigned long)prGlueInfo;
++	/* 6.12: init_timer() is gone and struct timer_list has neither ->data
++	 * nor a "function(unsigned long)" callback: the callback receives the
++	 * timer_list itself and the context is recovered with from_timer().
++	 * TODO(port): drop the prTimerHandler argument from the API -- the only
++	 * caller (gl_init.c) passes kalTimeoutHandler.
++	 */
++	WARN_ON(prTimerHandler != (PVOID)kalTimeoutHandler);
++	timer_setup(&(prGlueInfo->tickfn), kalTimeoutHandler, 0);
+ }
+ 
+ /* Todo */
+@@ -3543,10 +3556,10 @@ UINT_32 kalRandomNumber(VOID)
+  * \retval (none)
+  */
+ /*----------------------------------------------------------------------------*/
+-VOID kalTimeoutHandler(unsigned long arg)
++void kalTimeoutHandler(struct timer_list *prTimer)
+ {
+ 
+-	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T) arg;
++	P_GLUE_INFO_T prGlueInfo = from_timer(prGlueInfo, prTimer, tickfn);
+ 
+ 	ASSERT(prGlueInfo);
+ 
+@@ -3991,13 +4004,11 @@ UINT_32 kalGetMfpSetting(IN P_GLUE_INFO_T prGlueInfo)
+ struct file *kalFileOpen(const char *path, int flags, int rights)
+ {
+ 	struct file *filp = NULL;
+-	mm_segment_t oldfs;
+ 	int err = 0;
+ 
+-	oldfs = get_fs();
+-	set_fs(get_ds());
++	/* 6.12: no set_fs()/get_fs() any more -- filp_open() no longer needs a
++	 * "kernel address limit" round trip. */
+ 	filp = filp_open(path, flags, rights);
+-	set_fs(oldfs);
+ 	if (IS_ERR(filp)) {
+ 		err = PTR_ERR(filp);
+ 		return NULL;
+@@ -4012,29 +4023,23 @@ VOID kalFileClose(struct file *file)
+ 
+ UINT_32 kalFileRead(struct file *file, unsigned long long offset, unsigned char *data, unsigned int size)
+ {
+-	mm_segment_t oldfs;
++	loff_t pos = offset;
+ 	int ret;
+ 
+-	oldfs = get_fs();
+-	set_fs(get_ds());
++	/* 6.12: kernel_read() takes a kernel pointer and a loff_t position. */
++	ret = kernel_read(file, data, size, &pos);
+ 
+-	ret = vfs_read(file, data, size, &offset);
+-
+-	set_fs(oldfs);
+ 	return ret;
+ }
+ 
+ UINT_32 kalFileWrite(struct file *file, unsigned long long offset, unsigned char *data, unsigned int size)
+ {
+-	mm_segment_t oldfs;
++	loff_t pos = offset;
+ 	int ret;
+ 
+-	oldfs = get_fs();
+-	set_fs(get_ds());
+-
+-	ret = vfs_write(file, data, size, &offset);
++	/* 6.12: kernel_write() takes a kernel pointer and a loff_t position. */
++	ret = kernel_write(file, data, size, &pos);
+ 
+-	set_fs(oldfs);
+ 	return ret;
+ }
+ 
+@@ -4555,15 +4560,19 @@ kalGetIPv6Address(IN struct net_device *prDev,
+ 	struct inet6_ifaddr *prIfa;
+ 	struct list_head *prAddrList;
+ 
+-	/* 4 <1> Sanity check of netDevice */
+-	if (!prDev || !(prDev->ip6_ptr)) {
++	/* 4 <1> Sanity check of netDevice
++	 *
++	 * 6.12: net_device.ip6_ptr is gone (5.15); the inet6_dev is looked up
++	 * through the IPv6 address hash instead.
++	 */
++	if (!prDev || !__in6_dev_get(prDev)) {
+ 		DBGLOG(INIT, INFO, "IPv6 address is not available for dev(0x%p)\n", prDev);
+ 
+ 		*pu4NumOfIpv6Addr = 0;
+ 		return FALSE;
+ 	}
+ 
+-	prAddrList = &((struct inet6_dev *)(prDev->ip6_ptr))->addr_list;
++	prAddrList = &__in6_dev_get(prDev)->addr_list;
+ 
+ 	/* 4 <2> copy the IPv6 address */
+ 	list_for_each_entry(prIfa, prAddrList, if_list) {
+@@ -4941,12 +4950,12 @@ const struct file_operations rMetProcFops = {
+ .write = kalMetWriteProcfs
+ };
+ #endif
+-const struct file_operations rMetProcCtrlFops = {
+-.write = kalMetCtrlWriteProcfs
++const struct proc_ops rMetProcCtrlFops = {
++	.proc_write = kalMetCtrlWriteProcfs
+ };
+ 
+-const struct file_operations rMetProcPortFops = {
+-.write = kalMetPortWriteProcfs
++const struct proc_ops rMetProcPortFops = {
++	.proc_write = kalMetPortWriteProcfs
+ };
+ 
+ int kalMetInitProcfs(IN P_GLUE_INFO_T prGlueInfo)
+@@ -5027,10 +5036,10 @@ nla_put_failure:
+ 
+ UINT_64 kalGetBootTime(void)
+ {
+-	struct timespec ts;
++	struct timespec64 ts;
+ 	UINT_64 bootTime = 0;
+ 
+-	get_monotonic_boottime(&ts);
++	ktime_get_boottime_ts64(&ts);
+ 	bootTime = ts.tv_sec;
+ 	bootTime *= USEC_PER_SEC;
+ 	bootTime += ts.tv_nsec / NSEC_PER_USEC;
+diff --git a/os/linux/gl_p2p.c b/os/linux/gl_p2p.c
+index dbc3d21..0e3b2a4 100644
+--- a/os/linux/gl_p2p.c
++++ b/os/linux/gl_p2p.c
+@@ -94,7 +94,8 @@ static struct cfg80211_ops mtk_p2p_ops = {
+ 	.set_wiphy_params = mtk_p2p_cfg80211_set_wiphy_params,
+ 	.del_station = mtk_p2p_cfg80211_del_station,
+ 	.set_bitrate_mask = mtk_p2p_cfg80211_set_bitrate_mask,
+-	.mgmt_frame_register = mtk_p2p_cfg80211_mgmt_frame_register,
++	/* 6.12: renamed from .mgmt_frame_register (2 args) */
++	.update_mgmt_frame_registrations = mtk_p2p_cfg80211_update_mgmt_frame_registrations,
+ 	.get_station = mtk_p2p_cfg80211_get_station,
+ 	.add_key = mtk_p2p_cfg80211_add_key,
+ 	.get_key = mtk_p2p_cfg80211_get_key,
+diff --git a/os/linux/gl_p2p_cfg80211.c b/os/linux/gl_p2p_cfg80211.c
+index 794bfe8..9bb160a 100644
+--- a/os/linux/gl_p2p_cfg80211.c
++++ b/os/linux/gl_p2p_cfg80211.c
+@@ -243,6 +243,7 @@ int mtk_p2p_cfg80211_del_iface(struct wiphy *wiphy,
+ 
+ int mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
+ 			     struct net_device *ndev,
++			     int link_id,	/* 6.12: MLO link id; unused (single link) */
+ 			     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+@@ -319,6 +320,7 @@ int mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
+ 
+ int mtk_p2p_cfg80211_get_key(struct wiphy *wiphy,
+ 			     struct net_device *ndev,
++			     int link_id,	/* 6.12: MLO link id; unused (single link) */
+ 			     u8 key_index,
+ 			     bool pairwise,
+ 			     const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *))
+@@ -335,7 +337,8 @@ int mtk_p2p_cfg80211_get_key(struct wiphy *wiphy,
+ }
+ 
+ int mtk_p2p_cfg80211_del_key(struct wiphy *wiphy,
+-			     struct net_device *ndev, u8 key_index, bool pairwise, const u8 *mac_addr)
++			     struct net_device *ndev, int link_id, u8 key_index, bool pairwise,
++			     const u8 *mac_addr)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	PARAM_REMOVE_KEY_T rRemoveKey;
+@@ -381,7 +384,8 @@ int mtk_p2p_cfg80211_del_key(struct wiphy *wiphy,
+ 
+ int
+ mtk_p2p_cfg80211_set_default_key(struct wiphy *wiphy,
+-				 struct net_device *netdev, u8 key_index, bool unicast, bool multicast)
++				 struct net_device *netdev, int link_id, u8 key_index,
++				 bool unicast, bool multicast)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = NULL;
+ 	/* PARAM_DEFAULT_KEY_T rDefaultKey; */
+@@ -866,8 +870,12 @@ int mtk_p2p_cfg80211_start_ap(struct wiphy *wiphy, struct net_device *dev, struc
+  * };
+  */
+ 
+-int mtk_p2p_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_beacon_data *beacon)
++int mtk_p2p_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_ap_update *info)
+ {
++	/* 6.12: .change_beacon() now receives struct cfg80211_ap_update *, whose
++	 * first member is the old struct cfg80211_beacon_data. */
++	struct cfg80211_beacon_data *beacon = info ? &info->beacon : NULL;
++
+ 	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T) NULL;
+ 	INT_32 i4Rslt = -EINVAL;
+ 	P_MSG_P2P_BEACON_UPDATE_T prP2pBcnUpdateMsg = (P_MSG_P2P_BEACON_UPDATE_T) NULL;
+@@ -937,8 +945,9 @@ int mtk_p2p_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev,
+ }				/* mtk_p2p_cfg80211_change_beacon */
+ 
+ 
+-int mtk_p2p_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev)
++int mtk_p2p_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev, unsigned int link_id)
+ {
++	/* 6.12: .stop_ap() gained the MLO link_id argument; unused here. */
+ 	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T) NULL;
+ 	INT_32 i4Rslt = -EINVAL;
+ 
+@@ -1374,7 +1383,9 @@ int mtk_p2p_cfg80211_connect(struct wiphy *wiphy, struct net_device *dev, struct
+ 		ASSERT_BREAK((prGlueInfo != NULL) && (prNetDevPrivate != NULL));
+ 		prP2pBssInfo = GET_BSS_INFO_BY_INDEX(prGlueInfo->prAdapter, prNetDevPrivate->ucBssIdx);
+ 
+-		if (wdev->current_bss && (prP2pBssInfo->eConnectionState == PARAM_MEDIA_STATE_DISCONNECTED)) {
++		/* 6.12: wireless_dev.current_bss moved under links[0].client */
++		if (wdev->links[0].client.current_bss &&
++		    (prP2pBssInfo->eConnectionState == PARAM_MEDIA_STATE_DISCONNECTED)) {
+ 			DBGLOG(P2P, WARN, "Reject this connecting request\n");
+ 			return -EALREADY;
+ 		}
+@@ -1597,6 +1608,7 @@ int mtk_p2p_cfg80211_set_channel(IN struct wiphy *wiphy,
+ int
+ mtk_p2p_cfg80211_set_bitrate_mask(IN struct wiphy *wiphy,
+ 				  IN struct net_device *dev,
++				  IN unsigned int link_id,
+ 				  IN const u8 *peer, IN const struct cfg80211_bitrate_mask *mask)
+ {
+ 	INT_32 i4Rslt = -EINVAL;
+@@ -1618,54 +1630,53 @@ mtk_p2p_cfg80211_set_bitrate_mask(IN struct wiphy *wiphy,
+ 	return i4Rslt;
+ }				/* mtk_p2p_cfg80211_set_bitrate_mask */
+ 
+-void mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
+-					  struct wireless_dev *wdev,
+-					  IN u16 frame_type, IN bool reg)
++void mtk_p2p_cfg80211_update_mgmt_frame_registrations(IN struct wiphy *wiphy,
++						      IN struct wireless_dev *wdev,
++						      IN struct mgmt_frame_regs *upd)
+ {
+ 	P_GLUE_INFO_T prGlueInfo = (P_GLUE_INFO_T) NULL;
++	UINT_32 u4Stypes;
+ 
+ 	do {
+-		if (wiphy == NULL)
++		if (wiphy == NULL || upd == NULL)
+ 			break;
+ 
+-		DBGLOG(P2P, TRACE, "mtk_p2p_cfg80211_mgmt_frame_register\n");
++		DBGLOG(P2P, TRACE, "mtk_p2p_cfg80211_update_mgmt_frame_registrations\n");
+ 
+ 		prGlueInfo = *((P_GLUE_INFO_T *) wiphy_priv(wiphy));
+-
+-		switch (frame_type) {
+-		case MAC_FRAME_PROBE_REQ:
+-			if (reg) {
+-				prGlueInfo->prP2PInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_PROBE_REQ;
+-				DBGLOG(P2P, TRACE, "Open packet filer probe request\n");
+-			} else {
+-				prGlueInfo->prP2PInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_PROBE_REQ;
+-				DBGLOG(P2P, TRACE, "Close packet filer probe request\n");
+-			}
+-			break;
+-		case MAC_FRAME_ACTION:
+-			if (reg) {
+-				prGlueInfo->prP2PInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_ACTION_FRAME;
+-				DBGLOG(P2P, TRACE, "Open packet filer action frame.\n");
+-			} else {
+-				prGlueInfo->prP2PInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_ACTION_FRAME;
+-				DBGLOG(P2P, TRACE, "Close packet filer action frame.\n");
+-			}
+-			break;
+-		default:
+-			DBGLOG(P2P, ERROR, "Ask frog to add code for mgmt:%x\n", frame_type);
++		if (prGlueInfo == NULL || prGlueInfo->prP2PInfo == NULL)
+ 			break;
++
++		/* 6.12: cfg80211 passes the full registration bitmap; bit N of
++		 * *_stypes corresponds to management frame subtype N
++		 * (IEEE80211_STYPE_* >> 4), same encoding as the old per-frame
++		 * MAC_FRAME_PROBE_REQ / MAC_FRAME_ACTION switch.
++		 */
++		u4Stypes = upd->interface_stypes;
++
++		if (u4Stypes & BIT(IEEE80211_STYPE_PROBE_REQ >> 4)) {
++			prGlueInfo->prP2PInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_PROBE_REQ;
++			DBGLOG(P2P, TRACE, "Open packet filer probe request\n");
++		} else {
++			prGlueInfo->prP2PInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_PROBE_REQ;
++			DBGLOG(P2P, TRACE, "Close packet filer probe request\n");
++		}
++
++		if (u4Stypes & BIT(IEEE80211_STYPE_ACTION >> 4)) {
++			prGlueInfo->prP2PInfo->u4OsMgmtFrameFilter |= PARAM_PACKET_FILTER_ACTION_FRAME;
++			DBGLOG(P2P, TRACE, "Open packet filer action frame.\n");
++		} else {
++			prGlueInfo->prP2PInfo->u4OsMgmtFrameFilter &= ~PARAM_PACKET_FILTER_ACTION_FRAME;
++			DBGLOG(P2P, TRACE, "Close packet filer action frame.\n");
+ 		}
+ 
+ 		set_bit(GLUE_FLAG_FRAME_FILTER_BIT, &prGlueInfo->ulFlag);
+ 
+ 		/* wake up main thread */
+ 		wake_up_interruptible(&prGlueInfo->waitq);
+-
+-		if (in_interrupt())
+-			DBGLOG(P2P, TRACE, "It is in interrupt level\n");
+ 	} while (FALSE);
+ 
+-}				/* mtk_p2p_cfg80211_mgmt_frame_register */
++}				/* mtk_p2p_cfg80211_update_mgmt_frame_registrations */
+ 
+ #if CONFIG_NL80211_TESTMODE
+ 
+diff --git a/os/linux/gl_proc.c b/os/linux/gl_proc.c
+index 03165ac..9cbe6e4 100644
+--- a/os/linux/gl_proc.c
++++ b/os/linux/gl_proc.c
+@@ -204,10 +204,9 @@ static ssize_t procDbgLevelWrite(struct file *file, const char __user *buffer, s
+ }
+ 
+ 
+-static const struct file_operations dbglevel_ops = {
+-	.owner = THIS_MODULE,
+-	.read = procDbgLevelRead,
+-	.write = procDbgLevelWrite,
++static const struct proc_ops dbglevel_ops = {
++	.proc_read = procDbgLevelRead,
++	.proc_write = procDbgLevelWrite,
+ };
+ 
+ static ssize_t procPktDelayDbgCfgRead(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
+@@ -322,10 +321,9 @@ static ssize_t procPktDelayDbgCfgWrite(struct file *file, const char __user *buf
+ 	return count;
+ }
+ 
+-static const struct file_operations proc_pkt_delay_dbg_ops = {
+-	.owner = THIS_MODULE,
+-	.read  = procPktDelayDbgCfgRead,
+-	.write = procPktDelayDbgCfgWrite,
++static const struct proc_ops proc_pkt_delay_dbg_ops = {
++	.proc_read  = procPktDelayDbgCfgRead,
++	.proc_write = procPktDelayDbgCfgWrite,
+ };
+ 
+ static ssize_t procSetCamCfgWrite(struct file *file, const char __user *buffer, size_t count, loff_t *data)
+@@ -378,9 +376,8 @@ static ssize_t procSetCamCfgWrite(struct file *file, const char __user *buffer,
+ 	return count;
+ }
+ 
+-static const struct file_operations proc_set_cam_ops = {
+-	.owner = THIS_MODULE,
+-	.write = procSetCamCfgWrite,
++static const struct proc_ops proc_set_cam_ops = {
++	.proc_write = procSetCamCfgWrite,
+ };
+ 
+ /*******************************************************************************
+@@ -504,10 +501,9 @@ static ssize_t procMCRWrite(struct file *file, const char __user *buffer,
+ 
+ }				/* end of procMCRWrite() */
+ 
+-static const struct file_operations mcr_ops = {
+-	.owner = THIS_MODULE,
+-	.read = procMCRRead,
+-	.write = procMCRWrite,
++static const struct proc_ops mcr_ops = {
++	.proc_read = procMCRRead,
++	.proc_write = procMCRWrite,
+ };
+ 
+ #if CFG_SUPPORT_DEBUG_FS
+@@ -571,10 +567,9 @@ static ssize_t procRoamWrite(struct file *file, const char __user *buffer,
+ 	return count;
+ }
+ 
+-static const struct file_operations roam_ops = {
+-	.owner = THIS_MODULE,
+-	.read = procRoamRead,
+-	.write = procRoamWrite,
++static const struct proc_ops roam_ops = {
++	.proc_read = procRoamRead,
++	.proc_write = procRoamWrite,
+ };
+ 
+ static ssize_t procCountryRead(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
+@@ -635,10 +630,9 @@ static ssize_t procCountryWrite(struct file *file, const char __user *buffer,
+ 	return count;
+ }
+ 
+-static const struct file_operations country_ops = {
+-	.owner = THIS_MODULE,
+-	.read = procCountryRead,
+-	.write = procCountryWrite,
++static const struct proc_ops country_ops = {
++	.proc_read = procCountryRead,
++	.proc_write = procCountryWrite,
+ };
+ #endif
+ 
+@@ -705,7 +699,11 @@ static ssize_t procWifiCfgWrite(struct file *file, const char __user *buffer, si
+ 	prAdapter = g_prGlueInfo_proc->prAdapter;
+ 	kalMemSet(aucProcBuf, 0, u4CopySize);
+ 
+-	u4CopySize = (u4CopySize >= count + 1) ? count : u4CopySize - 1;
++	/* 6.12: check_copy_size() is a compile-time check now; keep the bound
++	 * explicit so that it can see the destination is large enough. */
++	u4CopySize = sizeof(aucProcBuf) - 1;
++	if (count < u4CopySize)
++		u4CopySize = count;
+ 
+ 	if (!u4CopySize || copy_from_user(aucProcBuf, buffer, u4CopySize)) {
+ 		pr_err("error of copy from user\n");
+@@ -717,10 +715,9 @@ static ssize_t procWifiCfgWrite(struct file *file, const char __user *buffer, si
+ 	return count;
+ }
+ 
+-static const struct file_operations wifi_cfg_ops = {
+-	.owner = THIS_MODULE,
+-	.read = procWifiCfgRead,
+-	.write = procWifiCfgWrite,
++static const struct proc_ops wifi_cfg_ops = {
++	.proc_read = procWifiCfgRead,
++	.proc_write = procWifiCfgWrite,
+ };
+ #endif
+ static ssize_t procAutoPerfCfgRead(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
+@@ -796,10 +793,9 @@ static ssize_t procAutoPerfCfgWrite(struct file *file, const char *buffer, size_
+ 	return -EFAULT;
+ }
+ 
+-static const struct file_operations auto_perf_ops = {
+-	.owner = THIS_MODULE,
+-	.read = procAutoPerfCfgRead,
+-	.write = procAutoPerfCfgWrite,
++static const struct proc_ops auto_perf_ops = {
++	.proc_read = procAutoPerfCfgRead,
++	.proc_write = procAutoPerfCfgWrite,
+ };
+ 
+ VOID glWriteStatus(PPUINT_8 ppucWrPos, PUINT_32 pu4RemainLen, PUINT_8 pucFwt, ...)
+@@ -809,17 +805,17 @@ VOID glWriteStatus(PPUINT_8 ppucWrPos, PUINT_32 pu4RemainLen, PUINT_8 pucFwt, ..
+ 	INT_32 i4BufUsed = 0;
+ 	INT_32 i4TimeUsed = 0;
+ 	va_list ap;
+-	struct timeval tval;
++	struct timespec64 tval;
+ 	struct rtc_time tm;
+ 	static UINT_8 aucBuf[TEMP_BUF_LEN];
+ 
+ 	pucTemp = &aucBuf[0];
+-	do_gettimeofday(&tval);
++	ktime_get_real_ts64(&tval);
+ 	tval.tv_sec -= sys_tz.tz_minuteswest * 60;
+-	rtc_time_to_tm(tval.tv_sec, &tm);
++	rtc_time64_to_tm(tval.tv_sec, &tm);
+ 	i4TimeUsed = kalSnprintf(pucTemp, TEMP_BUF_LEN, "%04d-%02d-%02d %02d:%02d:%02d.%03d ",
+ 				 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+-				 tm.tm_min, tm.tm_sec, (INT_32)(tval.tv_usec / USEC_PER_MSEC));
++				 tm.tm_min, tm.tm_sec, (INT_32)(tval.tv_nsec / NSEC_PER_MSEC));
+ 	if (i4TimeUsed < 0) {
+ 		DBGLOG(INIT, INFO, "error to sprintf time\n");
+ 		return;
+@@ -1092,10 +1088,9 @@ static ssize_t procDrvStatusCfg(struct file *file, const char *buffer, size_t co
+ 	return -EINVAL;
+ }
+ 
+-static const struct file_operations drv_status_ops = {
+-	.owner = THIS_MODULE,
+-	.read = procReadDrvStatus,
+-	.write = procDrvStatusCfg,
++static const struct proc_ops drv_status_ops = {
++	.proc_read = procReadDrvStatus,
++	.proc_write = procDrvStatusCfg,
+ };
+ 
+ INT_32 procInitFs(VOID)
+@@ -1557,10 +1552,9 @@ static ssize_t cfgWrite(struct file *filp, const char __user *buf, size_t count,
+ 	return count;
+ }
+ 
+-static const struct file_operations cfg_ops = {
+-	.owner = THIS_MODULE,
+-	.read = cfgRead,
+-	.write = cfgWrite,
++static const struct proc_ops cfg_ops = {
++	.proc_read = cfgRead,
++	.proc_write = cfgWrite,
+ };
+ 
+ INT_32 cfgRemoveProcEntry(void)
+diff --git a/os/linux/gl_wext.c b/os/linux/gl_wext.c
+index e3d60f6..763b62e 100644
+--- a/os/linux/gl_wext.c
++++ b/os/linux/gl_wext.c
+@@ -2142,12 +2142,12 @@ wext_set_txpow(IN struct net_device *prNetDev,
+ 			DBGLOG(INIT, INFO, "######set assoc ok\n");
+ 		}
+ 		/* <2> mark to power state flag */
+-		ePowerState = ACPI_STATE_D0;
++		ePowerState = WLAN_ACPI_STATE_D0;
+ 		DBGLOG(INIT, INFO, "set to acpi d3(0)\n");
+ 		wlanSetAcpiState(prGlueInfo->prAdapter, ePowerState);
+ 
+ 	} else {
+-		ePowerState = ACPI_STATE_D0;
++		ePowerState = WLAN_ACPI_STATE_D0;
+ 		DBGLOG(INIT, INFO, "set to acpi d0\n");
+ 		wlanSetAcpiState(prGlueInfo->prAdapter, ePowerState);
+ 	}
+diff --git a/os/linux/gl_wext_priv.c b/os/linux/gl_wext_priv.c
+index 0ae325c..4512c6b 100644
+--- a/os/linux/gl_wext_priv.c
++++ b/os/linux/gl_wext_priv.c
+@@ -1967,7 +1967,7 @@ priv_set_driver(IN struct net_device *prNetDev,
+ 
+ 	ASSERT(IW_IS_GET(u2Cmd));
+ 	if (prIwReqData->data.length != 0) {
+-		if (!access_ok(VERIFY_READ, prIwReqData->data.pointer, prIwReqData->data.length)) {
++		if (!access_ok(prIwReqData->data.pointer, prIwReqData->data.length)) {
+ 			DBGLOG(REQ, INFO, "%s access_ok Read fail written = %d\n", __func__, i4BytesWritten);
+ 			return -EFAULT;
+ 		}
+diff --git a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
+index f19254e..e34a2e8 100644
+--- a/os/linux/hif/ahb_sdioLike/ahb.c
++++ b/os/linux/hif/ahb_sdioLike/ahb.c
+@@ -22,6 +22,7 @@
+ ********************************************************************************
+ */
+ #include <linux/interrupt.h>
++#include <linux/sched/clock.h>	/* sched_clock() moved here in 4.15 */
+ #include <linux/device.h>
+ #include <linux/platform_device.h>
+ #include <linux/mm.h>
+@@ -87,7 +88,7 @@ static int HifAhbMiscClose(IN struct inode *Inodep, IN struct file *Filp);
+ 
+ static int HifAhbPltmProbe(IN struct platform_device *pDev);
+ 
+-static int HifAhbPltmRemove(IN struct platform_device *pDev);
++static void HifAhbPltmRemove(IN struct platform_device *pDev);
+ 
+ #ifdef CONFIG_PM
+ static int HifAhbPltmSuspend(IN struct platform_device *pDev, pm_message_t message);
+@@ -1281,10 +1282,10 @@ static int HifAhbPltmProbe(IN struct platform_device *pDev)
+ * \return 0
+ */
+ /*----------------------------------------------------------------------------*/
+-static int HifAhbPltmRemove(IN struct platform_device *pDev)
++static void HifAhbPltmRemove(IN struct platform_device *pDev)
+ {
++	/* 6.11: platform_driver.remove() returns void */
+ 	mtk_wcn_wmt_wlan_unreg();
+-	return 0;
+ }
+ 
+ #ifdef CONFIG_PM
+diff --git a/os/linux/hif/ahb_sdioLike/ahb_cqdma.c b/os/linux/hif/ahb_sdioLike/ahb_cqdma.c
+index fc4506c..b03c6f2 100644
+--- a/os/linux/hif/ahb_sdioLike/ahb_cqdma.c
++++ b/os/linux/hif/ahb_sdioLike/ahb_cqdma.c
+@@ -32,7 +32,7 @@
+ 
+ #if CONFIG_ANDROID
+ #ifdef CONFIG_WAKELOCK
+-#include <linux/wakelock.h>
++/* removed: linux/wakelock.h (gone since 4.15); API stubbed via compat */
+ #else
+ #include <linux/device.h>
+ #endif
+diff --git a/os/linux/hif/ahb_sdioLike/ahb_pdma.c b/os/linux/hif/ahb_sdioLike/ahb_pdma.c
+index 09af0fb..7f13eb9 100644
+--- a/os/linux/hif/ahb_sdioLike/ahb_pdma.c
++++ b/os/linux/hif/ahb_sdioLike/ahb_pdma.c
+@@ -32,7 +32,7 @@
+ 
+ #if CONFIG_ANDROID
+ #ifdef CONFIG_WAKELOCK
+-#include <linux/wakelock.h>
++/* removed: linux/wakelock.h (gone since 4.15); API stubbed via compat */
+ #else
+ #include <linux/device.h>
+ #endif
+diff --git a/os/linux/include/gl_cfg80211.h b/os/linux/include/gl_cfg80211.h
+index e76c3fb..f7f0c59 100644
+--- a/os/linux/include/gl_cfg80211.h
++++ b/os/linux/include/gl_cfg80211.h
+@@ -193,20 +193,24 @@ mtk_cfg80211_change_iface(struct wiphy *wiphy,
+ int
+ mtk_cfg80211_add_key(struct wiphy *wiphy,
+ 		     struct net_device *ndev,
++		     int link_id,
+ 		     u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params);
+ 
+ int
+ mtk_cfg80211_get_key(struct wiphy *wiphy,
+ 		     struct net_device *ndev,
++		     int link_id,
+ 		     u8 key_index,
+ 		     bool pairwise,
+ 		     const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *));
+ 
+ int
+-mtk_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev, u8 key_index, bool pairwise, const u8 *mac_addr);
++mtk_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev, int link_id, u8 key_index, bool pairwise,
++			 const u8 *mac_addr);
+ 
+ int
+-mtk_cfg80211_set_default_key(struct wiphy *wiphy, struct net_device *ndev, u8 key_index, bool unicast, bool multicast);
++mtk_cfg80211_set_default_key(struct wiphy *wiphy, struct net_device *ndev, int link_id, u8 key_index,
++			     bool unicast, bool multicast);
+ 
+ int mtk_cfg80211_get_station(struct wiphy *wiphy, struct net_device *ndev, const u8 *mac, struct station_info *sinfo);
+ 
+@@ -252,9 +256,9 @@ int mtk_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			struct cfg80211_mgmt_tx_params *params,
+ 			u64 *cookie);
+ 
+-void mtk_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
+-				      IN struct wireless_dev *wdev,
+-				      IN u16 frame_type, IN bool reg);
++void mtk_cfg80211_update_mgmt_frame_registrations(IN struct wiphy *wiphy,
++						  IN struct wireless_dev *wdev,
++						  IN struct mgmt_frame_regs *upd);
+ 
+ int mtk_cfg80211_mgmt_tx_cancel_wait(struct wiphy *wiphy,
+ 				     struct wireless_dev *wdev,
+@@ -312,8 +316,9 @@ int mtk_cfg80211_del_station(struct wiphy *wiphy, struct net_device *ndev, const
+ #endif
+ 
+ int
+-mtk_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev, const u8 *peer, u8 action_code, u8 dialog_token,
+-		u16 status_code, u32 peer_capability, bool initiator, const u8 *buf, size_t len);
++mtk_cfg80211_tdls_mgmt(struct wiphy *wiphy, struct net_device *dev, const u8 *peer, int link_id,
++		u8 action_code, u8 dialog_token, u16 status_code, u32 peer_capability, bool initiator,
++		const u8 *buf, size_t len);
+ 
+ int mtk_cfg80211_tdls_oper(struct wiphy *wiphy, struct net_device *dev, const u8 *peer,
+ 		enum nl80211_tdls_operation oper);
+diff --git a/os/linux/include/gl_kal.h b/os/linux/include/gl_kal.h
+index 88e104e..44e5003 100644
+--- a/os/linux/include/gl_kal.h
++++ b/os/linux/include/gl_kal.h
+@@ -951,7 +951,7 @@ VOID kalScanDone(IN P_GLUE_INFO_T prGlueInfo, IN ENUM_KAL_NETWORK_TYPE_INDEX_T e
+ 
+ UINT_32 kalRandomNumber(VOID);
+ 
+-VOID kalTimeoutHandler(unsigned long arg);
++void kalTimeoutHandler(struct timer_list *prTimer);
+ 
+ VOID kalSetEvent(P_GLUE_INFO_T pr);
+ 
+diff --git a/os/linux/include/gl_os.h b/os/linux/include/gl_os.h
+index 148c9e7..95d183b 100644
+--- a/os/linux/include/gl_os.h
++++ b/os/linux/include/gl_os.h
+@@ -95,7 +95,7 @@
+ 
+ #if CONFIG_ANDROID
+ #ifdef CONFIG_WAKELOCK
+-#include <linux/wakelock.h>
++/* removed: linux/wakelock.h (gone since 4.15); API stubbed via compat */
+ #else
+ #include <linux/device.h>
+ #endif /*CONFIG_WAKELOCK*/
+@@ -952,8 +952,7 @@ BOOLEAN glUnregisterAmpc(P_GLUE_INFO_T prGlueInfo);
+ 
+ P_GLUE_INFO_T wlanGetGlueInfo(VOID);
+ 
+-UINT_16 wlanSelectQueue(struct net_device *dev, struct sk_buff *skb,
+-			void *accel_priv, select_queue_fallback_t fallback);
++UINT_16 wlanSelectQueue(struct net_device *dev, struct sk_buff *skb, struct net_device *sb_dev);
+ 
+ VOID wlanDebugInit(VOID);
+ 
+diff --git a/os/linux/include/gl_p2p_ioctl.h b/os/linux/include/gl_p2p_ioctl.h
+index 1472a29..7c6b16e 100644
+--- a/os/linux/include/gl_p2p_ioctl.h
++++ b/os/linux/include/gl_p2p_ioctl.h
+@@ -328,22 +328,26 @@ int mtk_p2p_cfg80211_del_iface(struct wiphy *wiphy,
+ int
+ mtk_p2p_cfg80211_add_key(struct wiphy *wiphy,
+ 			 struct net_device *ndev,
++			 int link_id,
+ 			 u8 key_index, bool pairwise, const u8 *mac_addr, struct key_params *params);
+ 
+ int
+ mtk_p2p_cfg80211_get_key(struct wiphy *wiphy,
+ 			 struct net_device *ndev,
++			 int link_id,
+ 			 u8 key_index,
+ 			 bool pairwise,
+ 			 const u8 *mac_addr, void *cookie, void (*callback) (void *cookie, struct key_params *));
+ 
+ int
+ mtk_p2p_cfg80211_del_key(struct wiphy *wiphy,
+-			 struct net_device *ndev, u8 key_index, bool pairwise, const u8 *mac_addr);
++			 struct net_device *ndev, int link_id, u8 key_index, bool pairwise,
++			 const u8 *mac_addr);
+ 
+ int
+ mtk_p2p_cfg80211_set_default_key(struct wiphy *wiphy,
+-				 struct net_device *netdev, u8 key_index, bool unicast, bool multicast);
++				 struct net_device *netdev, int link_id, u8 key_index,
++				 bool unicast, bool multicast);
+ 
+ int mtk_p2p_cfg80211_get_station(struct wiphy *wiphy, struct net_device *ndev,
+ 				const u8 *mac, struct station_info *sinfo);
+@@ -388,7 +392,7 @@ int mtk_p2p_cfg80211_disassoc(struct wiphy *wiphy, struct net_device *dev, struc
+ 
+ int mtk_p2p_cfg80211_start_ap(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_ap_settings *settings);
+ 
+-int mtk_p2p_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_beacon_data *info);
++int mtk_p2p_cfg80211_change_beacon(struct wiphy *wiphy, struct net_device *dev, struct cfg80211_ap_update *info);
+ 
+ int mtk_p2p_cfg80211_mgmt_tx(struct wiphy *wiphy,
+ 			     struct wireless_dev *wdev,
+@@ -399,7 +403,7 @@ int mtk_p2p_cfg80211_mgmt_tx_cancel_wait(struct wiphy *wiphy,
+ 					 struct wireless_dev *wdev,
+ 					 u64 cookie);
+ 
+-int mtk_p2p_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev);
++int mtk_p2p_cfg80211_stop_ap(struct wiphy *wiphy, struct net_device *dev, unsigned int link_id);
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0))
+ int mtk_p2p_cfg80211_del_station(struct wiphy *wiphy, struct net_device *dev, struct station_del_parameters *params);
+@@ -410,13 +414,14 @@ int mtk_p2p_cfg80211_del_station(struct wiphy *wiphy, struct net_device *dev, co
+ int mtk_p2p_cfg80211_set_channel(struct wiphy *wiphy,
+ 				 struct cfg80211_chan_def *chandef);
+ 
+-void mtk_p2p_cfg80211_mgmt_frame_register(IN struct wiphy *wiphy,
+-					  struct wireless_dev *wdev,
+-					  IN u16 frame_type, IN bool reg);
++void mtk_p2p_cfg80211_update_mgmt_frame_registrations(IN struct wiphy *wiphy,
++						      struct wireless_dev *wdev,
++						      IN struct mgmt_frame_regs *upd);
+ 
+ int
+ mtk_p2p_cfg80211_set_bitrate_mask(IN struct wiphy *wiphy,
+ 				  IN struct net_device *dev,
++				  IN unsigned int link_id,
+ 				  IN const u8 *peer, IN const struct cfg80211_bitrate_mask *mask);
+ 
+ #if CONFIG_NL80211_TESTMODE

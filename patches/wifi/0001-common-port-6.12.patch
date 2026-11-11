@@ -1,0 +1,546 @@
+diff --git a/common_detect/wmt_detect.c b/common_detect/wmt_detect.c
+index 393eb94..ee4b989 100644
+--- a/common_detect/wmt_detect.c
++++ b/common_detect/wmt_detect.c
+@@ -322,7 +322,7 @@ static int wmt_detect_driver_init(void)
+ 		goto err1;
+ 	}
+ 
+-	pDetectClass = class_create(THIS_MODULE, WMT_DETECT_DEVICE_NAME);
++	pDetectClass = class_create(WMT_DETECT_DEVICE_NAME);
+ 	if (IS_ERR(pDetectClass)) {
+ 		WMT_DETECT_PR_ERR("class create fail, error code(%ld)\n", PTR_ERR(pDetectClass));
+ 		goto err1;
+diff --git a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
+index 10f68ed..9622eb7 100644
+--- a/common_main/core/wmt_ic_soc.c
++++ b/common_main/core/wmt_ic_soc.c
+@@ -3484,7 +3484,7 @@ INT32 mtk_wcn_soc_rom_patch_dwn(UINT32 ip_ver)
+ 			WMT_INFO_FUNC("[Rom Patch]Name=%s,EmiOffset=0x%x,Size=0x%x\n",
+ 					gFullPatchName, patchEmiOffset, patchSize);
+ 
+-			patchAddr = ioremap_nocache(emiInfo->emi_ap_phy_addr + patchEmiOffset, patchSize);
++			patchAddr = ioremap(emiInfo->emi_ap_phy_addr + patchEmiOffset, patchSize);
+ 			if (patchAddr) {
+ 				osal_memcpy_toio(patchAddr, pPatchBuf, patchSize);
+ 				iounmap(patchAddr);
+diff --git a/common_main/core/wmt_lib.c b/common_main/core/wmt_lib.c
+index dcfe8b9..7995743 100644
+--- a/common_main/core/wmt_lib.c
++++ b/common_main/core/wmt_lib.c
+@@ -1171,7 +1171,7 @@ static INT32 met_thread(void *pvData)
+ 	}
+ 	osal_memset(met_dump_buf, 0, MET_DUMP_SIZE);
+ 
+-	emi_met_base = ioremap_nocache(emi_info->emi_ap_phy_addr + emi_met_offset, emi_met_size);
++	emi_met_base = ioremap(emi_info->emi_ap_phy_addr + emi_met_offset, emi_met_size);
+ 	if (!emi_met_base) {
+ 		osal_free(met_dump_buf);
+ 		WMT_ERR_FUNC("met emi ioremap fail\n");
+diff --git a/common_main/linux/fw_log_wmt.c b/common_main/linux/fw_log_wmt.c
+index bf495f8..c54c43d 100644
+--- a/common_main/linux/fw_log_wmt.c
++++ b/common_main/linux/fw_log_wmt.c
+@@ -136,7 +136,7 @@ int fw_log_wmt_init(void)
+ 		goto error;
+ 	}
+ 
+-	fw_log_wmt_class = class_create(THIS_MODULE, DRIVER_NAME);
++	fw_log_wmt_class = class_create(DRIVER_NAME);
+ 	if (IS_ERR(fw_log_wmt_class)) {
+ 		pr_err("class_create fail\n");
+ 		goto error;
+diff --git a/common_main/linux/osal.c b/common_main/linux/osal.c
+index dadc93a..13e2cc2 100644
+--- a/common_main/linux/osal.c
++++ b/common_main/linux/osal.c
+@@ -786,13 +786,21 @@ INT32 osal_test_and_set_bit(UINT32 bitOffset, P_OSAL_BIT_OP_VAR pData)
+   *
+ */
+ 
+-INT32 osal_timer_create(P_OSAL_TIMER pTimer)
++static VOID osal_timer_timeout(struct timer_list *timer)
+ {
+-	struct timer_list *timer = &pTimer->timer;
++	P_OSAL_TIMER pTimer = from_timer(pTimer, timer, timer);
++
++	if (pTimer->timeoutHandler)
++		pTimer->timeoutHandler(pTimer->timeroutHandlerData);
++}
+ 
+-	init_timer(timer);
+-	timer->function = pTimer->timeoutHandler;
+-	timer->data = (ULONG)pTimer->timeroutHandlerData;
++INT32 osal_timer_create(P_OSAL_TIMER pTimer)
++{
++	/* 6.12: struct timer_list has no ->function/->data; the callback gets
++	 * the timer_list and finds its context with from_timer(). The vendor
++	 * 4.14 API (function + data) is kept, the dispatch happens above.
++	 */
++	timer_setup(&pTimer->timer, osal_timer_timeout, 0);
+ 	return 0;
+ }
+ 
+@@ -1192,7 +1200,8 @@ INT32 osal_wake_lock_init(P_OSAL_WAKE_LOCK pLock)
+ 		return -1;
+ 
+ 	if (pLock->init_flag == 0) {
+-		pLock->wake_lock = wakeup_source_register(pLock->name);
++		/* 6.12: wakeup_source_register(struct device *, const char *) */
++		pLock->wake_lock = wakeup_source_register(NULL, pLock->name);
+ 		pLock->init_flag = 1;
+ 	}
+ 
+diff --git a/common_main/linux/wmt_dbg.c b/common_main/linux/wmt_dbg.c
+index 054ad20..bb40f15 100644
+--- a/common_main/linux/wmt_dbg.c
++++ b/common_main/linux/wmt_dbg.c
+@@ -674,7 +674,7 @@ static INT32 wmt_dbg_ap_reg_read(INT32 par1, INT32 par2, INT32 par3)
+ 	PUINT8 ap_reg_base = NULL;
+ 
+ 	WMT_INFO_FUNC("AP register read, reg address:0x%x\n", par2);
+-	ap_reg_base = ioremap_nocache(par2, 0x4);
++	ap_reg_base = ioremap(par2, 0x4);
+ 	if (ap_reg_base) {
+ 		value = readl(ap_reg_base);
+ 		WMT_INFO_FUNC("AP register read, reg address:0x%x, value:0x%x\n", par2, value);
+@@ -692,7 +692,7 @@ static INT32 wmt_dbg_ap_reg_write(INT32 par1, INT32 par2, INT32 par3)
+ 
+ 	WMT_INFO_FUNC("AP register write, reg address:0x%x, value:0x%x\n", par2, par3);
+ 
+-	ap_reg_base = ioremap_nocache(par2, 0x4);
++	ap_reg_base = ioremap(par2, 0x4);
+ 	if (ap_reg_base) {
+ 		writel(par3, ap_reg_base);
+ 		value = readl(ap_reg_base);
+@@ -1481,10 +1481,9 @@ ssize_t wmt_dbg_write(struct file *filp, const char __user *buffer, size_t count
+ 
+ INT32 wmt_dev_dbg_setup(VOID)
+ {
+-	static const struct file_operations wmt_dbg_fops = {
+-		.owner = THIS_MODULE,
+-		.read = wmt_dbg_read,
+-		.write = wmt_dbg_write,
++	static const struct proc_ops wmt_dbg_fops = {
++	.proc_read = wmt_dbg_read,
++		.proc_write = wmt_dbg_write,
+ 	};
+ 	INT32 i_ret = 0;
+ 
+diff --git a/common_main/linux/wmt_dev.c b/common_main/linux/wmt_dev.c
+index db118f6..cd42427 100644
+--- a/common_main/linux/wmt_dev.c
++++ b/common_main/linux/wmt_dev.c
+@@ -405,10 +405,9 @@ static ssize_t wmt_dev_proc_for_aee_write(struct file *filp, const char __user *
+ 
+ INT32 wmt_dev_proc_for_aee_setup(VOID)
+ {
+-	static const struct file_operations wmt_aee_fops = {
+-		.owner = THIS_MODULE,
+-		.read = wmt_dev_proc_for_aee_read,
+-		.write = wmt_dev_proc_for_aee_write,
++	static const struct proc_ops wmt_aee_fops = {
++	.proc_read = wmt_dev_proc_for_aee_read,
++		.proc_write = wmt_dev_proc_for_aee_write,
+ 	};
+ 
+ 	gWmtAeeEntry = proc_create(WMT_AEE_PROCNAME, 0664, NULL, &wmt_aee_fops);
+@@ -1549,7 +1548,7 @@ static INT32 WMT_init(VOID)
+ 	WMT_INFO_FUNC("driver(major %d) installed\n", gWmtMajor);
+ 
+ #if WMT_CREATE_NODE_DYNAMIC
+-	wmt_class = class_create(THIS_MODULE, "stpwmt");
++	wmt_class = class_create("stpwmt");
+ 	if (IS_ERR(wmt_class))
+ 		goto error;
+ 	wmt_dev = device_create(wmt_class, NULL, devID, NULL, "stpwmt");
+diff --git a/common_main/linux/wmt_step.c b/common_main/linux/wmt_step.c
+index 5a02353..0fb458d 100644
+--- a/common_main/linux/wmt_step.c
++++ b/common_main/linux/wmt_step.c
+@@ -285,7 +285,7 @@ static unsigned char __iomem *wmt_step_get_emi_base_address(void)
+ {
+ 	if (g_step_env.emi_base_addr == NULL) {
+ 		if (gConEmiPhyBase)
+-			g_step_env.emi_base_addr = ioremap_nocache(gConEmiPhyBase, gConEmiSize);
++			g_step_env.emi_base_addr = ioremap(gConEmiPhyBase, gConEmiSize);
+ 	}
+ 
+ 	return g_step_env.emi_base_addr;
+@@ -1623,7 +1623,7 @@ static int wmt_step_do_write_register_action(struct step_reigster_info *p_reg_in
+ 			return -1;
+ 		}
+ 
+-		p_addr = ioremap_nocache(phy_addr, 0x4);
++		p_addr = ioremap(phy_addr, 0x4);
+ 		if (p_addr) {
+ 			CONSYS_REG_WRITE_MASK((unsigned int *)p_addr, p_reg_info->value, p_reg_info->mask);
+ 			WMT_INFO_FUNC(
+@@ -1689,7 +1689,7 @@ static int wmt_step_do_read_register_action(struct step_reigster_info *p_reg_inf
+ 			return -1;
+ 		}
+ 
+-		p_addr = ioremap_nocache(phy_addr, 0x4);
++		p_addr = ioremap(phy_addr, 0x4);
+ 		if (p_addr) {
+ 			sprintf(buf, "STEP show: reg read Phy addr(0x%08x): 0x%08x\n",
+ 				(unsigned int)phy_addr, CONSYS_REG_READ(p_addr));
+diff --git a/common_main/platform/mt6739.c b/common_main/platform/mt6739.c
+index 12a47a1..435c4e7 100644
+--- a/common_main/platform/mt6739.c
++++ b/common_main/platform/mt6739.c
+@@ -722,7 +722,7 @@ static VOID consys_afe_reg_setting(VOID)
+ 	UINT8 i = 0;
+ 
+ 	/*15.default no need,update ANA_WBG(AFE) CR if needed, CONSYS_AFE_REG */
+-	consys_afe_reg_base = ioremap_nocache(CONSYS_AFE_REG_BASE, 0x100);
++	consys_afe_reg_base = ioremap(CONSYS_AFE_REG_BASE, 0x100);
+ 	if (consys_afe_reg_base) {
+ 		CONSYS_REG_WRITE(consys_afe_reg_base + CONSYS_AFE_REG_WBG_AFE_01_OFFSET,
+ 				CONSYS_AFE_REG_WBG_AFE_01_VALUE);
+@@ -1139,7 +1139,7 @@ P_WMT_CONSYS_IC_OPS mtk_wcn_get_consys_ic_ops(VOID)
+ static INT32 consys_emi_coredump_remapping(UINT8 __iomem **addr, UINT32 enable)
+ {
+ 	if (enable) {
+-		*addr = ioremap_nocache(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
++		*addr = ioremap(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
+ 		if (*addr) {
+ 			WMT_PLAT_PR_INFO("COREDUMP EMI mapping OK virtual(0x%p) physical(0x%x)\n",
+ 					   *addr, (UINT32) gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET);
+diff --git a/common_main/platform/mt6755.c b/common_main/platform/mt6755.c
+index 99c0889..9999a6e 100644
+--- a/common_main/platform/mt6755.c
++++ b/common_main/platform/mt6755.c
+@@ -1129,7 +1129,7 @@ P_WMT_CONSYS_IC_OPS mtk_wcn_get_consys_ic_ops(VOID)
+ static INT32 consys_emi_coredump_remapping(UINT8 __iomem **addr, UINT32 enable)
+ {
+ 	if (enable) {
+-		*addr = ioremap_nocache(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
++		*addr = ioremap(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
+ 		if (*addr) {
+ 			WMT_PLAT_PR_INFO("COREDUMP EMI mapping OK virtual(0x%p) physical(0x%x)\n",
+ 					   *addr, (UINT32) gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET);
+diff --git a/common_main/platform/mt6761.c b/common_main/platform/mt6761.c
+index e29b9b8..ce27932 100644
+--- a/common_main/platform/mt6761.c
++++ b/common_main/platform/mt6761.c
+@@ -431,7 +431,7 @@ static VOID consys_set_if_pinmux(MTK_WCN_BOOL enable)
+ 	UINT8 *consys_if_pinmux_reg_base = NULL;
+ 
+ 	/* Switch D die pinmux for connecting A die */
+-	consys_if_pinmux_reg_base = ioremap_nocache(CONSYS_IF_PINMUX_REG_BASE, 0x1000);
++	consys_if_pinmux_reg_base = ioremap(CONSYS_IF_PINMUX_REG_BASE, 0x1000);
+ 	if (!consys_if_pinmux_reg_base) {
+ 		WMT_PLAT_PR_ERR("consys_if_pinmux_reg_base(%x) ioremap fail\n", CONSYS_IF_PINMUX_REG_BASE);
+ 		return;
+@@ -698,7 +698,7 @@ static INT32 polling_consys_chipid(VOID)
+ 	consys_ver_id = CONSYS_REG_READ(conn_reg.mcu_base + CONSYS_FW_ID_OFFSET);
+ 	WMT_PLAT_PR_INFO("consys FW version id(0x%x)\n", consys_ver_id & 0xFFFF);
+ 	if (mtk_wcn_soc_co_clock_get()) {
+-		consys_reg_base = ioremap_nocache(CONSYS_COCLOCK_STABLE_TIME_BASE, 0x100);
++		consys_reg_base = ioremap(CONSYS_COCLOCK_STABLE_TIME_BASE, 0x100);
+ 		if (consys_reg_base) {
+ 			value = CONSYS_REG_READ(consys_reg_base);
+ 			value = (value & CONSYS_COCLOCK_STABLE_TIME_MASK) | CONSYS_COCLOCK_STABLE_TIME;
+@@ -726,7 +726,7 @@ static VOID consys_afe_reg_setting(VOID)
+ 	UINT8 *consys_afe_reg_base = NULL;
+ 
+ 	/*15.default no need,update ANA_WBG(AFE) CR if needed, CONSYS_AFE_REG */
+-	consys_afe_reg_base = ioremap_nocache(CONSYS_AFE_REG_BASE, 0x100);
++	consys_afe_reg_base = ioremap(CONSYS_AFE_REG_BASE, 0x100);
+ 	if (consys_afe_reg_base) {
+ 		CONSYS_REG_WRITE(consys_afe_reg_base + CONSYS_AFE_RG_WBG_01_OFFSET,
+ 				CONSYS_AFE_RG_WBG_01_VALUE);
+@@ -1131,7 +1131,7 @@ static VOID consys_dedicated_log_path_deinit(VOID)
+ static INT32 consys_emi_coredump_remapping(UINT8 __iomem **addr, UINT32 enable)
+ {
+ 	if (enable) {
+-		*addr = ioremap_nocache(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
++		*addr = ioremap(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
+ 		if (*addr) {
+ 			WMT_PLAT_PR_INFO("COREDUMP EMI mapping OK virtual(0x%p) physical(0x%x)\n",
+ 					   *addr, (UINT32) gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET);
+diff --git a/common_main/platform/mt6763.c b/common_main/platform/mt6763.c
+index b04418f..d329794 100644
+--- a/common_main/platform/mt6763.c
++++ b/common_main/platform/mt6763.c
+@@ -722,7 +722,7 @@ static VOID consys_afe_reg_setting(VOID)
+ 	UINT8 i = 0;
+ 
+ 	/*15.default no need,update ANA_WBG(AFE) CR if needed, CONSYS_AFE_REG */
+-	consys_afe_reg_base = ioremap_nocache(CONSYS_AFE_REG_BASE, 0x100);
++	consys_afe_reg_base = ioremap(CONSYS_AFE_REG_BASE, 0x100);
+ 	if (consys_afe_reg_base) {
+ 		CONSYS_REG_WRITE(consys_afe_reg_base + CONSYS_AFE_REG_WBG_AFE_01_OFFSET,
+ 				CONSYS_AFE_REG_WBG_AFE_01_VALUE);
+@@ -1145,7 +1145,7 @@ P_WMT_CONSYS_IC_OPS mtk_wcn_get_consys_ic_ops(VOID)
+ static INT32 consys_emi_coredump_remapping(UINT8 __iomem **addr, UINT32 enable)
+ {
+ 	if (enable) {
+-		*addr = ioremap_nocache(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
++		*addr = ioremap(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
+ 		if (*addr) {
+ 			WMT_PLAT_PR_INFO("COREDUMP EMI mapping OK virtual(0x%p) physical(0x%x)\n",
+ 					   *addr, (UINT32) gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET);
+diff --git a/common_main/platform/mt6765.c b/common_main/platform/mt6765.c
+index 682be6e..b0c1c9b 100644
+--- a/common_main/platform/mt6765.c
++++ b/common_main/platform/mt6765.c
+@@ -433,7 +433,7 @@ static VOID consys_set_if_pinmux(MTK_WCN_BOOL enable)
+ 	UINT8 *consys_if_pinmux_reg_base = NULL;
+ 
+ 	/* Switch D die pinmux for connecting A die */
+-	consys_if_pinmux_reg_base = ioremap_nocache(CONSYS_IF_PINMUX_REG_BASE, 0x1000);
++	consys_if_pinmux_reg_base = ioremap(CONSYS_IF_PINMUX_REG_BASE, 0x1000);
+ 	if (!consys_if_pinmux_reg_base) {
+ 		WMT_PLAT_PR_ERR("consys_if_pinmux_reg_base(%x) ioremap fail\n", CONSYS_IF_PINMUX_REG_BASE);
+ 		return;
+@@ -702,7 +702,7 @@ static INT32 polling_consys_chipid(VOID)
+ 	CONSYS_REG_WRITE(conn_reg.mcu_base + CONSYS_MCU_ROM_DELSEL_OFFSET, consys_ver_id);
+ 
+ 	if (wmt_plat_soc_co_clock_flag_get()) {
+-		consys_reg_base = ioremap_nocache(CONSYS_COCLOCK_STABLE_TIME_BASE, 0x100);
++		consys_reg_base = ioremap(CONSYS_COCLOCK_STABLE_TIME_BASE, 0x100);
+ 		if (consys_reg_base) {
+ #if 0
+ 			/* disable XO stable time setting */
+@@ -735,7 +735,7 @@ static VOID consys_afe_reg_setting(VOID)
+ 	UINT8 *consys_afe_reg_base = NULL;
+ 
+ 	/*15.default no need,update ANA_WBG(AFE) CR if needed, CONSYS_AFE_REG */
+-	consys_afe_reg_base = ioremap_nocache(CONSYS_AFE_REG_BASE, 0x100);
++	consys_afe_reg_base = ioremap(CONSYS_AFE_REG_BASE, 0x100);
+ 	if (consys_afe_reg_base) {
+ 		CONSYS_REG_WRITE(consys_afe_reg_base + CONSYS_AFE_RG_WBG_PLL_03_OFFSET,
+ 				CONSYS_AFE_RG_WBG_PLL_03_VALUE);
+@@ -1165,7 +1165,7 @@ static INT32 consys_check_reg_readable(VOID)
+ static INT32 consys_emi_coredump_remapping(UINT8 __iomem **addr, UINT32 enable)
+ {
+ 	if (enable) {
+-		*addr = ioremap_nocache(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
++		*addr = ioremap(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
+ 		if (*addr) {
+ 			WMT_PLAT_PR_INFO("COREDUMP EMI mapping OK virtual(0x%p) physical(0x%x)\n",
+ 					   *addr, (UINT32) gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET);
+diff --git a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
+index 9cb7965..f1602d0 100644
+--- a/common_main/platform/mt6771.c
++++ b/common_main/platform/mt6771.c
+@@ -395,11 +395,18 @@ static INT32 consys_co_clock_type(VOID)
+ 
+ static INT32 consys_clock_buffer_ctrl(MTK_WCN_BOOL enable)
+ {
+-	if (enable)
+-		KERNEL_clk_buf_ctrl(CLK_BUF_CONN, true);	/*open XO_WCN*/
+-	else
+-		KERNEL_clk_buf_ctrl(CLK_BUF_CONN, false);	/*close XO_WCN*/
+-
++	/* 4.14 vendor: KERNEL_clk_buf_ctrl(CLK_BUF_CONN, ...) -> MTK clock
++	 * buffer driver (drivers/misc/mediatek/base/power/clkbuf_v1), which
++	 * gates the 26 MHz XO_WCN reference to CONSYS.
++	 *
++	 * 6.12: there is no clkbuf driver in mainline, and the MT6771 DT has no
++	 * node describing the WCN buffer. Stubbed as a no-op.
++	 *
++	 * TODO(power-on): if CONSYS never reports "power on ok", check whether
++	 * XO_WCN has to be enabled here (likely a CCF gate in infracfg, to be
++	 * found in the stock DTB - cf. docs/wifi-plan.md §8.3).
++	 */
++	WMT_PLAT_PR_DBG("clock buffer ctrl (XO_WCN) %d: no-op on mainline\n", enable);
+ 	return 0;
+ }
+ 
+@@ -408,7 +415,7 @@ static VOID consys_set_if_pinmux(MTK_WCN_BOOL enable)
+ 	UINT8 *consys_if_pinmux_reg_base = NULL;
+ 
+ 	/* Switch D die pinmux for connecting A die */
+-	consys_if_pinmux_reg_base = ioremap_nocache(CONSYS_IF_PINMUX_REG_BASE, 0x1000);
++	consys_if_pinmux_reg_base = ioremap(CONSYS_IF_PINMUX_REG_BASE, 0x1000);
+ 	if (!consys_if_pinmux_reg_base) {
+ 		WMT_PLAT_PR_ERR("consys_if_pinmux_reg_base(%x) ioremap fail\n", CONSYS_IF_PINMUX_REG_BASE);
+ 		return;
+@@ -691,7 +698,7 @@ static VOID consys_afe_reg_setting(VOID)
+ 	UINT8 *consys_afe_reg_base = NULL;
+ 
+ 	/*15.default no need,update ANA_WBG(AFE) CR if needed, CONSYS_AFE_REG */
+-	consys_afe_reg_base = ioremap_nocache(CONSYS_AFE_REG_BASE, 0x100);
++	consys_afe_reg_base = ioremap(CONSYS_AFE_REG_BASE, 0x100);
+ 	if (consys_afe_reg_base) {
+ 		CONSYS_REG_WRITE(consys_afe_reg_base + CONSYS_AFE_RG_WBG_PLL_03_OFFSET,
+ 				CONSYS_AFE_RG_WBG_PLL_03_VALUE);
+@@ -714,11 +721,12 @@ static INT32 consys_hw_vcn18_ctrl(MTK_WCN_BOOL enable)
+ {
+ #if CONSYS_PMIC_CTRL_ENABLE
+ 	if (enable) {
+-		/*need PMIC driver provide new API protocol */
+-		/*1.AP power on VCN_1V8 LDO (with PMIC_WRAP API) VCN_1V8  */
+-		/*set vcn18 SW mode*/
+-		KERNEL_upmu_set_reg_value(MT6358_LDO_VCN18_OP_EN, 0x1);
+-
++		/* 4.14 vendor additionally poked the PMIC register
++		 * MT6358_LDO_VCN18_OP_EN to put the LDO in SW mode before
++		 * enabling it. In mainline the MT6358 regulator driver owns that
++		 * register and regulator_enable() does the equivalent, so the
++		 * poking is dropped (keeping it would fight the regmap cache).
++		 */
+ 		if (reg_VCN18) {
+ 			regulator_set_voltage(reg_VCN18, 1800000, 1800000);
+ 			if (regulator_enable(reg_VCN18))
+@@ -727,9 +735,7 @@ static INT32 consys_hw_vcn18_ctrl(MTK_WCN_BOOL enable)
+ 				WMT_PLAT_PR_DBG("enable VCN18 ok\n");
+ 		}
+ 
+-		/*set vcn33 SW mode*/
+-		KERNEL_upmu_set_reg_value(MT6358_LDO_VCN33_OP_EN, 0x1);
+-
++		/* ditto for VCN33 (MT6358_LDO_VCN33_OP_EN) */
+ 		if (reg_VCN33_BT) {
+ 			regulator_set_voltage(reg_VCN33_BT, 3500000, 3500000);
+ 			if (regulator_enable(reg_VCN33_BT))
+@@ -754,15 +760,18 @@ static INT32 consys_hw_vcn18_ctrl(MTK_WCN_BOOL enable)
+ 
+ static VOID consys_vcn28_hw_mode_ctrl(UINT32 enable)
+ {
+-#if CONSYS_PMIC_CTRL_ENABLE
+-	if (enable) {
+-		KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_OP_EN, 1);
+-		KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_OP_CFG, 0);
+-	} else {
+-		KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_OP_EN, 0);
+-		KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_OP_CFG, 0);
+-	}
+-#endif
++	/* 4.14 vendor: KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_*
++	 * ...) -- switch the VCN28 LDO between HW (PMIC-internal) and SW control.
++	 * That is MTK-PMIC-internal API (upmu_common) which has no mainline
++	 * equivalent; the MT6358 regulator driver always drives VCN28 in SW mode.
++	 *
++	 * Stubbed as a no-op with an explicit message so that a power-on failure
++	 * in FM/co-clock mode is not silently attributed to the wrong place.
++	 *
++	 * TODO(port): if VCN28 needs HW mode on MT6771, this has to become a
++	 * regulator mode request (regulator_set_mode()).
++	 */
++	WMT_PLAT_PR_DBG("vcn28 hw mode ctrl %u: no-op on mainline\n", enable);
+ }
+ 
+ static INT32 consys_hw_vcn28_ctrl(UINT32 enable)
+@@ -1034,7 +1043,7 @@ P_WMT_CONSYS_IC_OPS mtk_wcn_get_consys_ic_ops(VOID)
+ static INT32 consys_emi_coredump_remapping(UINT8 __iomem **addr, UINT32 enable)
+ {
+ 	if (enable) {
+-		*addr = ioremap_nocache(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
++		*addr = ioremap(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
+ 		if (*addr) {
+ 			WMT_PLAT_PR_INFO("COREDUMP EMI mapping OK virtual(0x%p) physical(0x%x)\n",
+ 					   *addr, (UINT32) gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET);
+diff --git a/common_main/platform/mtk_wcn_consys_hw.c b/common_main/platform/mtk_wcn_consys_hw.c
+index 3023374..d197c5e 100644
+--- a/common_main/platform/mtk_wcn_consys_hw.c
++++ b/common_main/platform/mtk_wcn_consys_hw.c
+@@ -57,7 +57,7 @@
+ ********************************************************************************
+ */
+ static INT32 mtk_wmt_probe(struct platform_device *pdev);
+-static INT32 mtk_wmt_remove(struct platform_device *pdev);
++static void mtk_wmt_remove(struct platform_device *pdev);
+ static INT32 mtk_wmt_suspend(struct platform_device *pdev, pm_message_t state);
+ static INT32 mtk_wmt_resume(struct platform_device *pdev);
+ 
+@@ -188,7 +188,7 @@ static INT32 mtk_wmt_probe(struct platform_device *pdev)
+ 		return iRet;
+ 
+ 	if (gConEmiPhyBase) {
+-		pConnsysEmiStart = ioremap_nocache(gConEmiPhyBase, gConEmiSize);
++		pConnsysEmiStart = ioremap(gConEmiPhyBase, gConEmiSize);
+ 		WMT_PLAT_PR_INFO("Clearing Connsys EMI (virtual(0x%p) physical(0x%pa)) %llu bytes\n",
+ 				   pConnsysEmiStart, &gConEmiPhyBase, gConEmiSize);
+ 		memset_io(pConnsysEmiStart, 0, gConEmiSize);
+@@ -247,7 +247,7 @@ static INT32 mtk_wmt_probe(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
+-static INT32 mtk_wmt_remove(struct platform_device *pdev)
++static void mtk_wmt_remove(struct platform_device *pdev)
+ {
+ 	if (wmt_consys_ic_ops->consys_ic_need_store_pdev) {
+ 		if (wmt_consys_ic_ops->consys_ic_need_store_pdev() == MTK_WCN_BOOL_TRUE)
+@@ -261,8 +261,6 @@ static INT32 mtk_wmt_remove(struct platform_device *pdev)
+ 
+ 	if (g_pdev)
+ 		g_pdev = NULL;
+-
+-	return 0;
+ }
+ 
+ static INT32 mtk_wmt_suspend(struct platform_device *pdev, pm_message_t state)
+diff --git a/common_main/platform/wmt_plat_alps.c b/common_main/platform/wmt_plat_alps.c
+index 284f057..11ea0ab 100644
+--- a/common_main/platform/wmt_plat_alps.c
++++ b/common_main/platform/wmt_plat_alps.c
+@@ -32,7 +32,7 @@
+ 
+ #ifdef CONFIG_PM_WAKELOCKS
+ #else
+-#include <linux/wakelock.h>
++/* removed: linux/wakelock.h (gone since 4.15); API stubbed via compat */
+ #endif
+ #define CFG_WMT_WAKELOCK_SUPPORT 1
+ 
+diff --git a/common_main/platform/wmt_plat_stub.c b/common_main/platform/wmt_plat_stub.c
+index c5f52d1..3b5d8e3 100644
+--- a/common_main/platform/wmt_plat_stub.c
++++ b/common_main/platform/wmt_plat_stub.c
+@@ -34,7 +34,7 @@
+ #ifdef CONFIG_PM_WAKELOCKS
+ /* #include <linux/pm_wakeup.h> */
+ #else
+-#include <linux/wakelock.h>
++/* removed: linux/wakelock.h (gone since 4.15); API stubbed via compat */
+ #endif
+ #define CFG_WMT_WAKELOCK_SUPPORT 1
+ 
+diff --git a/debug_utility/connsys_debug_utility.c b/debug_utility/connsys_debug_utility.c
+index bf1ff58..9238d91 100644
+--- a/debug_utility/connsys_debug_utility.c
++++ b/debug_utility/connsys_debug_utility.c
+@@ -139,7 +139,7 @@ static void connlog_dump_buf(const char *title, const char *buf, ssize_t sz);
+ static void connlog_ring_print(int conn_type);
+ static void connlog_event_set(int conn_type);
+ static void connlog_log_data_handler(struct work_struct *work);
+-static void work_timer_handler(unsigned long data);
++static void work_timer_handler(struct timer_list *timer);
+ static void connlog_do_schedule_work(bool count);
+ 
+ /* connlog when suspend */
+@@ -479,8 +479,10 @@ static void connlog_do_schedule_work(bool count)
+ * RETURNS
+ *  void
+ *****************************************************************************/
+-static void work_timer_handler(unsigned long data)
++static void work_timer_handler(struct timer_list *timer)
+ {
++	/* 6.12: timer callbacks receive the timer_list, not a ulong cookie;
++	 * the vendor handler ignored its argument, so nothing to recover. */
+ 	connlog_do_schedule_work(false);
+ }
+ 
+@@ -831,7 +833,7 @@ static int connlog_emi_init(phys_addr_t emiaddr)
+ 	}
+ 
+ 	gDev.phyAddrEmiBase = emiaddr;
+-	gDev.virAddrEmiLogBase = ioremap_nocache(gDev.phyAddrEmiBase +
++	gDev.virAddrEmiLogBase = ioremap(gDev.phyAddrEmiBase +
+ 		CONNLOG_EMI_LOG_BASE_OFFSET, CONNLOG_EMI_SIZE);
+ 	if (gDev.virAddrEmiLogBase) {
+ 		pr_info("EMI mapping OK virtual(0x%p) physical(0x%x)\n",
+@@ -940,8 +942,7 @@ int connsys_dedicated_log_path_apsoc_init(phys_addr_t emiaddr, unsigned int irq_
+ 		return -2;
+ 	}
+ 
+-	init_timer(&gDev.workTimer);
+-	gDev.workTimer.function = work_timer_handler;
++	timer_setup(&gDev.workTimer, work_timer_handler, 0);
+ 	spin_lock_init(&gDev.irq_lock);
+ 	INIT_WORK(&gDev.logDataWorker, connlog_log_data_handler);
+ 	if (connlog_eirq_init(irq_num, irq_flag)) {
