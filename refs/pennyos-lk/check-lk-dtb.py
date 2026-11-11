@@ -85,7 +85,17 @@ mblocks = []
 for m in re.finditer(r'(mblock-\d+-[\w-]+) \{\s*reg = <0x([0-9a-f]+) 0x([0-9a-f]+) 0x([0-9a-f]+) 0x([0-9a-f]+)>', open(live).read()):
     s = (int(m.group(2), 16) << 32) | int(m.group(3), 16); z = (int(m.group(4), 16) << 32) | int(m.group(5), 16)
     mblocks.append((m.group(1), s, s + z))
-res(len(mblocks) > 5, 'loaded %d LK mblock reservations from vendor live tree' % len(mblocks))
+# Reservations some LK builds make without exposing them in the live tree.
+# Taken verbatim from LK's own log in expdb (see docs/lk-dtb-rules.md):
+#   mblock_reserve-R[2].start: 0x70000000, sz: 0x10000, name: ibc-reserved
+#   (followed by a [0x70010000, 0x7fe0000) block, mblock 8)
+# Pass as LK_EXTRA_RES="0x70000000:0x10000:ibc-reserved,..." when the live tree
+# of the target does not contain them.
+for _spec in filter(None, (os.environ.get('LK_EXTRA_RES') or '').split(',')):
+    _f = _spec.split(':')
+    _s = int(_f[0], 0); _z = int(_f[1], 0)
+    mblocks.append((_f[2] if len(_f) > 2 else 'extra', _s, _s + _z))
+res(len(mblocks) > 5, 'loaded %d LK mblock reservations (live tree + LK_EXTRA_RES)' % len(mblocks))
 for child in (get('/reserved-memory') or '').split():
     reg = get('/reserved-memory/' + child, 'reg')
     if not reg:
