@@ -612,3 +612,192 @@ out-дерева `/home/l/t1100-wifi-build/out`, которое собирает
    `misleading-indentation` в `nic_rx.c` (потенциально реальные баги вендора).
 5. Оформить правки как upstream-серию (по одному патчу на тему, GPL-2.0-шапки
    уже есть в вендорских файлах) — сейчас это два крупных патча по компонентам.
+
+## 21. M3 подготовка (build-only, 11.11)
+
+Цель M3 — **первый power-on CONSYS** (`wmt: power on ok` + чтение WCIR `0x788`).
+Всё ниже собрано и проверено офлайн; **на планшет ничего не прошивалось и не
+загружалось** (там в это время шла работа по тачу, лид решил не менять два
+фактора одновременно). Артефакты готовы к передаче.
+
+### 21.1 Device Tree (патч ядра **0049**, узлы `status = "disabled"`)
+
+Источник каждого числа — стоковый DTB этой платы; TRM MT6771 не публичен.
+
+| Узел / свойство | Значение | Откуда |
+|---|---|---|
+| `consys@18070000` compatible | `mediatek,mt6771-consys` | `refs/stock-mt6771.dts:2206` |
+| `reg` (0..3) | `0x18070000` (mcu), `0x10007000` (ap_rgu), `0x10001000` (topckgen), `0x10006000` (spm) | там же; порядок = `of_iomap()` в `common_main/platform/mt6771.c` |
+| `interrupts` | `GIC_SPI 289` (AP), `GIC_SPI 291` (MD), обе `IRQ_TYPE_LEVEL_LOW` | сток `<0 0x121 8>`, `<0 0x123 8>`; флаги уходят в `request_irq()` как есть |
+| `memory-region` | `&consys_reserve_memory` | наш `reserved-memory` (ниже) |
+| `vcn18/vcn28/vcn33_bt/vcn33_wifi-supply` | MT6358 `vcn18`, `vcn28`, `vcn33` (последние два — один rail) | сток `:1244-1258`; в mainline `mt6358_sync_vcn33_setting()` синхронизирует биты WIFI/BT |
+| `consys-reserve-memory` | 2 МиБ, `no-map`, `alignment` 2 МиБ, `alloc-ranges = <0 0x40000000 0 0x80000000>` | сток `:460-466` (там тоже без `reg`: адрес выбирал аллокатор, в стоке вышло `0xbfc00000`) |
+| `wifi@180f0000` compatible | `mediatek,wifi` | сток `:1687` |
+| `reg` (0..3) | `0x180f0000` (WFDMA), `0x10212180` (CQDMA ch2), `0x10001000` (infra), `0x180e0000` (CONN_CFG) | там же; порядок = `of_iomap()` в `os/linux/hif/ahb_sdioLike/ahb.c` |
+| `interrupts` | `GIC_SPI 290` (HIF), `GIC_SPI 118` (HIF DMA), level-low | сток `<0 0x122 8>`, `<0 0x76 8>` |
+| `clocks` | `<&infracfg CLK_INFRA_CQ_DMA>`, `clock-names = "wifi-dma"` | гейт `INFRA2[27]` (`clk-mt8183.c:782`); см. ниже |
+| `hardware-values` | `<0x788 0xa5800 0xa5800>` | сток; [0] — ожидаемый WCIR chip id (`nic/nic.c:655-676`), [1]/[2] — адреса загрузки/старта прошивки (`wlan_lib.c:550-560`) |
+
+Четыре решения, которые отличаются от механического копирования стока:
+
+1. **У `consys` нет `clocks`.** В стоке `clocks = <&scpsys 2>` (имя `conn`), но это
+   вендорский clock-provider `mediatek,scpsys`, которого в mainline нет. При этом
+   `CONSYS_PWR_ON_OFF_API_AVAILABLE` для MT6771 не определён → в
+   `consys_hw_power_ctrl()` работает ветка `#else`, которая поднимает домен
+   **регистрами SPM** (`0x1000632c`), а `clk_prepare_enable(clk_scp_conn_main)` не
+   вызывается вообще. Перекрёстная проверка: `0x32c` — это ровно `ctl_offs`
+   у `MT8183_POWER_DOMAIN_CONN` в `drivers/pmdomain/mediatek/mt8183-pm-domains.h`.
+   Поэтому: clock-провайдера не выдумываем, `power-domains` не ставим (genpd писал
+   бы тот же регистр за спиной драйвера), а драйвер правим так, чтобы отсутствие
+   клока не валило probe (см. 21.2).
+2. **`consys-reserve-memory` — с `alloc-ranges`, без `reg`.** Фиксированный `reg`
+   проверяется LK по его собственным mblock-блокам (`reserved_memory_conflict_check`,
+   `docs/lk-dtb-rules.md`) и может подвесить загрузку. С `alloc-ranges` ядро само
+   выбирает свободное окно (в стоке вышло `0xbfc00000`), а драйвер читает результат
+   через `memory-region` (21.2). Отдельная проверка на это — LK-валидатор, см. 21.4.
+3. **`wifi-dma` = `CLK_INFRA_CQ_DMA`**, а не числовой ID `0x4e` из стока: `0x4e`
+   (78) — это ID **таблицы topckgen MT6771**, и привязывать его к биндингам mt8183
+   нельзя (там 78 = `CLK_TOP_APLL2_D4`). Гейт того же блока в mainline —
+   `infra_cqdma`, `INFRA2[27]`; соседний `cq_dma@10212000` в стоке тактируется тем
+   же `<0x15 0x4e>`, т.е. это один и тот же клок.
+4. **`vcn33_bt` и `vcn33_wifi` — один и тот же rail** `&mt6358_vcn33_reg`:
+   `regulator_get()` зовётся по именам свойств, а mainline-драйвер MT6358 держит
+   биты WIFI/BT синхронно.
+
+### 21.2 Драйверная часть (патч вендора `patches/wifi/0002-common-consys-power-on-dt.patch`)
+
+| Что | Файл | Правка |
+|---|---|---|
+| `gConEmiPhyBase/gConEmiSize` из DT | `common_main/platform/mtk_wcn_consys_hw.c` | новая `mtk_wmt_consys_emi_from_dt(pdev)`, зовётся в `mtk_wmt_probe()` перед `if (gConEmiPhyBase)`: `of_parse_phandle(...,"memory-region",0)` → `of_reserved_mem_lookup()` (работает и для `alloc-ranges`-регионов) → fallback `of_address_to_resource()`; пишет `WMT_PLAT_PR_INFO("CONNSYS EMI from DT: phys 0x%pa size 0x%pa")`. При неудаче — `PR_ERR` и EMI remap/MPU/coredump остаются выключенными (безопасный дефолт) |
+| клок `conn` больше не валит probe | `common_main/platform/mt6771.c` | `devm_clk_get()` → `devm_clk_get_optional()`; `NULL` = норма (power-on идёт через SPM), ошибка логируется и тоже не фатальна |
+| рельсы не роняют power-on | там же | `regulator_get()` в `consys_pmic_get_from_dts()`: `ERR_PTR` нормализуется в `NULL` (вендор проверял только `!reg`, а `regulator_enable(ERR_PTR)` — падение), отсутствующий rail пропускается с `PR_ERR` |
+| `CONFIG_MTK_COMBO_CHIP="CONSYS_6771"` | `scripts/remote/build-wifi-remote.sh` | переменная передаётся в `make` и печатается в лог (как в вендорском Makefile, **в кавычках**). Реальный выбор чипа у нас — в Kbuild-обёртках (`mt6771.o` в списке объектов + `-DMT6631` для wlan); в C-коде эта переменная не читается (проверено grep’ом) |
+
+Kbuild-врапперы уже интегрированы в `scripts/build-wifi-remote.sh` →
+`scripts/remote/build-wifi-remote.sh`: на хосте `patches/wifi/` целиком
+раскладывается в `wifi-patches/` и применяется по маске `*common*`/`*wlan*`
+(`patch -p1`), затем `make -C <kernel-out> M=<work>/<m> modules` с
+`KBUILD_EXTRA_SYMBOLS` на `Module.symvers` соседа. Новый патч подхватывается этой
+же маской, отдельной проводки не требует.
+
+### 21.3 Артефакты (собрано на build-хосте, 11.11)
+
+| Файл | Размер | sha256 |
+|---|---|---|
+| `build/boot_ubuntu41.img` | 33 554 432 | `ee3e468a64d12479ca9a8c4335346661f5d29fc80c9c5dfdbe4a63f302a026de` |
+| `build/remote/Image` | 39 873 024 | `536a864a1e28f1cf44b077583a53fde6f0c493bd2b2fe34a156a6135ca7ad282` |
+| `build/remote/dtbs/mt6771-fplus-t1100.dtb` | 53 526 | `aa7f44320fd9292787f7ea5211e5f39d97e31acfedfb3601ff66d69faaa76114` |
+| `build/wifi/common/wmt_drv.ko` | 1 111 976 | `a9b1b1d9144d94940ea975e268b4a12dc7404d75aa172e2f7fb1740071e80432` |
+| `build/wifi/wlan/wlan_drv_gen3.ko` | 2 895 080 | `cfd182c528133c3ea8d88f9510feae507816c491e19b4e10e7a0dd033b0638b8` |
+| `build/remote/modules/cfg80211.ko` | 614 888 | `97cdb09008bcde4dc74f4baeadb59f84684f446eddf1eb9eba7e3cb51b1a2afd` |
+| `build/remote/modules/mac80211.ko` | 812 160 | `3562959307bbddf5cc7882942202cecaba35601d7d76fca7315d63e7bb49a8f0` |
+| `build/remote/modules/rfkill.ko` | 48 272 | `ddca022fe020e73dd72e2b45f35de30702be41701beeac58ef87644a380a2c86` |
+
+`vermagic` у всех пяти модулей и у `Image` один и тот же:
+
+```
+6.12.114-g95e3b41b86-dirty SMP preempt mod_unload aarch64
+```
+
+Детали, которые важны для воспроизведения:
+
+- Ядро образа собрано **с тем же конфигом, что и вендорские модули**:
+  `defconfig + configs/t1100.fragment + configs/t1100-wifi.fragment`. Parity
+  доказывается побайтово: `cfg80211.ko`/`mac80211.ko`, собранные в
+  `/home/l/t1100-ubuntu-build/out`, совпали по sha256 с версиями из
+  `/home/l/t1100-wifi-build/out`. Это принципиально: `CONFIG_WEXT_PRIV`
+  (его включает `ipw2200`) меняет раскладку `struct iw_handler_def`, а
+  `WEXT_CORE/WEXT_SPY` — built-in, поэтому `cfg80211.ko` из «чужого» out-дерева
+  либо не слинкуется по символам, либо разъедется по ABI (§16).
+- Для этого в `scripts/build-kernel-remote.sh` добавлены `EXTRA_FRAGMENTS`
+  (доп. фрагменты) и `--modules` (собрать и забрать `cfg80211/mac80211/rfkill`).
+- `wmt_drv.ko` изменился (`0b4a2bfa…` → `a9b1b1d9…`, +2 568 Б) из-за патча
+  0002; `wlan_drv_gen3.ko` пересобран и оказался **побайтово тем же** (сборка
+  воспроизводима: `DRIVER_BUILD_DATE` зафиксирован).
+- Warnings: common 65 / wlan 376, ошибок 0, undefined 0 — как в M2.
+- `EXTRA_FRAGMENTS`/`--modules` — единственное изменение конфига образа
+  относительно `boot_ubuntu40`; дисплей/GPU/тач-опции не менялись.
+- Образ перепакован из `boot_ubuntu40.img` как шаблона заголовка
+  (`kernel_addr 0x40080000`, `ramdisk_addr 0x55000000`, `tags 0x54000000`,
+  `dtb_addr 0x54000000`, page 0x800), ramdisk — `build/initramfs_root_usb.cpio.gz`
+  (тот же, что в 40). **Имя:** `boot_ubuntu35.img` уже занят рабочим
+  откатным образом (11.11 17:29), поэтому M3-образ назван `boot_ubuntu41.img`;
+  в `docs/STATUS.md`/`handover.md` имя надо поправить.
+- Ядро образа — из worktree с коммитом *этого же* патча 0049 поверх `95e3b41b8`,
+  поэтому версия осталась `-g95e3b41b86-dirty` и совпала с модулями. Если дерево
+  уйдёт вперёд (тач 0047/0048 или свои коммиты), **модули надо пересобрать**
+  (`scripts/build-wifi-remote.sh --kernel`), иначе new Image получит другое
+  `vermagic` и `insmod` откажет.
+
+### 21.4 Проверки до прошивки
+
+- `make dtbs` — DTB собирается, `dtc` без ошибок.
+- `tools/lk/verify-dtb.sh` на DTB из дерева и на DTB, вынутом из
+  `boot_ubuntu41.img` (`tools/lk/extract-boot-dtb.py`): `RESULT: LK should accept
+  this DTB`, оверлей `dtbo_a` применяется, размер 88 713 ≤ 524 288,
+  `/reserved-memory/ramoops@70000000` чист по mblock’ам. У `consys-reserve-memory`
+  `reg` нет вообще, поэтому LK-конфликт-чек его не рассматривает (в этом и смысл
+  `alloc-ranges`).
+- Патчи 0047+0048 (тач) + 0049 применяются в этом порядке чисто
+  (`git apply --check` в worktree на `95e3b41b8`).
+
+### 21.5 Деплой модулей (не выполнен)
+
+```sh
+tools/host/wifi-deploy.sh              # план, ничего не делает
+tools/host/wifi-deploy.sh --apply      # .ko в /lib/modules/<release>/updates/wifi,
+                                       # depmod -a, unit в /etc/systemd/system, daemon-reload
+tools/host/wifi-deploy.sh --apply --enable   # + systemctl enable (не start)
+tools/host/wifi-deploy.sh --status     # что лежит/загружено
+```
+
+Скрипт берёт `release` из `vermagic` самого `wmt_drv.ko`, сравнивает с
+`uname -r` на планшете и при расхождении отказывается работать (`--force` —
+только чтобы разложить файлы). Юнит
+`rootfs-overlay/etc/systemd/system/t1100-wifi.service`: `modprobe wmt_drv` →
+пауза 2 с + `dmesg`-хвост → `modprobe wlan_drv_gen3`, `ConditionPathExistsGlob`
+по `.../updates/wifi/wmt_drv.ko`, `WantedBy=multi-user.target` (по умолчанию
+**не включён**). `cfg80211` подтягивается как зависимость (`depends=cfg80211,wmt_drv`).
+
+### 21.6 План первой проверки на железе (M3)
+
+Предусловие: прошит `build/boot_ubuntu41.img` (бэкап `boot_a` сделан, откат —
+`boot_ubuntu40`/`boot_ubuntu33`), панель/тач/GPU проверены, питание не ниже 3.8 В
+(`t1100-power-guard`).
+
+1. `uname -r` → `6.12.114-g95e3b41b86-dirty`; `tools/host/wifi-deploy.sh --apply`.
+2. `insmod`-эквивалент: `tools/host/wifi-deploy.sh --load wmt` (или
+   `modprobe wmt_drv` вручную).
+3. **Ожидаемый dmesg (порядок):**
+   - `[CCF]no "conn" clock in DT, power-on uses the SPM sequence` — норма;
+   - `CONNSYS EMI from DT: phys 0x… size 0x200000` (адрес выберет аллокатор;
+     в стоке было `0xbfc00000`);
+   - `Clearing Connsys EMI (virtual(0x…) physical(0x…)) 2097152 bytes`;
+   - `[WMT-CORE]`/`[WMT-PLAT]` power-on: **`wmt: power on ok`**;
+   - чтение WCIR: chip id **`0x788`** (`polling_consys_chipid`), без
+     `consys emi memory address gConEmiPhyBase invalid`.
+4. Признак успеха M3 = `wmt: power on ok` + chip id `0x788`, `/proc/wmt`-узлы
+   живы, панель/тач не пострадали. Загрузка прошивки Wi-Fi-части в M3 не
+   требуется.
+5. Затем `--load wlan` (`modprobe wlan_drv_gen3`): ожидаемо — HIF init
+   (`HifRegBaseAddr`, `WIFI-HIF irq 290`, `HIF DMA irq 118`), попытка скачать
+   `WIFI_RAM_CODE_6759` и **отказ, если прошивки нет** в `/lib/firmware`
+   (её в rootfs пока нет: взять из Aurora RPM-репозитория, см.
+   `refs/aurora-5.2.1.200.md`). `wlan0` в M3 не обязателен.
+
+Типичные отказы и что это значит:
+
+| Симптом | Причина | Что делать |
+|---|---|---|
+| `wmt_core_stp_init: no hif info!`, затем `opfunc_pwr_on ... fail (-8)` | не зарегистрирован STP-HIF (`WMT_OP_HIF_BIT`) — тот самый риск §11.1: публичного `wmt_loader` нет | это не power-on CONSYS, а слой выше: минимальный STP-init ioctl поверх `/dev/stpwmt` (или разбор, кто в стоке зовёт `mtk_wcn_stp_*_drv_init`) |
+| нет `power on ok`, `polling_consys_chipid` висит/таймаут | SPM-последовательность (`0x1000632c`) не подняла домен или VCN33 не включён | `regulator_summary` (vcn33/VCN18), `cat /proc/wmt` (если успел создать), проверить, что `of_iomap`-окна 0..3 замапились (dmesg `Get … register base`) |
+| `-110` (`ETIMEDOUT`) на STP/HIF | handshake не прошёл: нет IRQ, не скачана прошивка или HIF не в AHB-режиме | сначала убедиться, что power-on был; `/proc/interrupts` (290/118 должны считать), затем firmware в `/lib/firmware` |
+| `version magic … should be 6.12.114-…` при `insmod` | образ и модули из разных сборок | пересобрать пару (`--modules`/`--kernel`) и перепаковать образ |
+| `Unknown symbol rfkill_*` / `wext` при `insmod cfg80211` | в `/lib/modules` попал `cfg80211.ko` из «чужого» out-дерева | класть только из `build/remote/modules/` (этого же out-дерева) |
+| `Regulator_get VCN33_WIFI fail` | нет supply в DT / mt6358 ещё не поднялся | проверить `regulator_summary`, порядок probe (mt6358 раньше, чем wmt_drv) |
+
+Риски, которые это не снимает: (а) STP-HIF для MT6631 (главный, §11.1);
+(б) прошивки `WIFI_RAM_CODE_6759`/`WMT_SOC.cfg` в rootfs нет — до неё `wlan0` не
+появится; (в) `clk_buf`/32k (`rtc_gpio_enable_32k` — заглушка) может понадобиться
+для стабильного XO_WCN; (г) `power on ok` — это про WMT-слой, а не про рабочий
+Wi-Fi.
