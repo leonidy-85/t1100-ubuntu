@@ -1859,3 +1859,30 @@ SDIO-ветка, `stp_uart.c`, `wmt_step.c`, чужие SoC, `ahb_pdma.c` (у н
 модулями (vermagic должен совпасть), первый признак — `wmt: power on ok` и
 чтение WCIR `0x788`. Главный открытый риск — кто регистрирует STP-HIF для
 MT6631 до power-on (BTIF vs собственный initcall; публичного `wmt_loader` нет).
+
+## 11.11: итог дня (планшет на зарядке, работа приостановлена)
+
+**Готово:** фазы 2 и 3 закрыты; фаза 4 — панель, GPU, Mesa 25.0.7 (GLES 3.1),
+Weston 13 с EGL/Wayland (56.4 fps) работают на железе. `t1100-power-guard`,
+build-хост с ccache и arm64-sysroot, статические `modetest`/`glmark2`/`egl-probe`,
+`tools/host/screen-msg.sh` (сообщения на панель латиницей).
+
+**В работе, но не доведено:**
+1. **Тач HX83102E.** Найден вендорский исходник (`refs/himax-v2/`) — стало
+   известно, чего не хватало: `AHB 0x100072EC = 0` (raw-out sel, вероятная
+   причина шаблона `14 × 00 03 00 00`), `0x10007F04 = 0` (sorting), `sense_on`,
+   `reload_to_active` (`0x90000048 = 0xEC`), затем чтение регистра `0x30`.
+   Раскладка кадра доказана (be16 x/y ×10, `num_points = buf[52] & 0x0F`,
+   checksum — сумма 56 байт ≡ 0 mod 256). Проверка на железе — следующий шаг.
+2. **Wi-Fi (фаза 5, путь A).** M1 (build-спайк) и M2 (модули) закрыты:
+   `wmt_drv.ko` `0b4a2bfa…`, `wlan_drv_gen3.ko` `cfd182c5…`, vermagic
+   `6.12.114-g95e3b41b86-dirty`, 0 ошибок. M3 подготовлен (DT-узлы `consys`/
+   `wifi`, reserved-memory, `wifi-dma`, `gConEmiPhyBase`, образ
+   `boot_ubuntu35`, скрипт деплоя `tools/host/wifi-deploy.sh`) — **на железе не
+   проверялся**.
+
+**Порядок на следующую сессию:** 1) тач — прошить образ с вендорским init и
+проверить кадр при касаниях (сообщение на панель заранее); 2) Wi-Fi M3 — прошить
+`boot_ubuntu35`, разложить модули, `insmod wmt_drv` → `wmt: power on ok` +
+WCIR `0x788`; 3) затем libinput/десктоп и DVFS GPU. Не смешивать две прошивки в
+одном шаге.
