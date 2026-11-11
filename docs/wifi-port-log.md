@@ -682,21 +682,28 @@ Kbuild-врапперы уже интегрированы в `scripts/build-wifi
 
 ### 21.3 Артефакты (собрано на build-хосте, 11.11)
 
+База: `../linux-t1100` @ **`675178729`** (`arm64: dts: t1100: finish the touch
+wiring`) + патч 0049 поверх, рабочее дерево dirty -> `vermagic`
+`-g675178729a-dirty`. Образ сознательно собран на текущем HEAD, а не на более
+раннем: иначе прошивка M3-образа откатила бы тач-патчи 0047/0048 (оба узла
+`consys`/`wifi` при этом `disabled`, т.е. поведение образа равно обычной сборке
+HEAD, кроме наличия Wi-Fi-узлов и модулей в конфиге).
+
 | Файл | Размер | sha256 |
 |---|---|---|
-| `build/boot_ubuntu41.img` | 33 554 432 | `ee3e468a64d12479ca9a8c4335346661f5d29fc80c9c5dfdbe4a63f302a026de` |
-| `build/remote/Image` | 39 873 024 | `536a864a1e28f1cf44b077583a53fde6f0c493bd2b2fe34a156a6135ca7ad282` |
-| `build/remote/dtbs/mt6771-fplus-t1100.dtb` | 53 526 | `aa7f44320fd9292787f7ea5211e5f39d97e31acfedfb3601ff66d69faaa76114` |
-| `build/wifi/common/wmt_drv.ko` | 1 111 976 | `a9b1b1d9144d94940ea975e268b4a12dc7404d75aa172e2f7fb1740071e80432` |
-| `build/wifi/wlan/wlan_drv_gen3.ko` | 2 895 080 | `cfd182c528133c3ea8d88f9510feae507816c491e19b4e10e7a0dd033b0638b8` |
-| `build/remote/modules/cfg80211.ko` | 614 888 | `97cdb09008bcde4dc74f4baeadb59f84684f446eddf1eb9eba7e3cb51b1a2afd` |
-| `build/remote/modules/mac80211.ko` | 812 160 | `3562959307bbddf5cc7882942202cecaba35601d7d76fca7315d63e7bb49a8f0` |
-| `build/remote/modules/rfkill.ko` | 48 272 | `ddca022fe020e73dd72e2b45f35de30702be41701beeac58ef87644a380a2c86` |
+| `build/boot_ubuntu41.img` | 33 554 432 | `0c21c2f3261bae95456923fb9b79ff9780d73e196929ea89e2b6274997a9589e` |
+| `build/remote/Image` | 39 873 024 | `696ce20e1bb51038cda80a2be13a5a76b6f2b8761eb8d1a5b2442480d03da9d7` |
+| `build/remote/dtbs/mt6771-fplus-t1100.dtb` | 53 774 | `bebd312f62e5f7089d4d6715ab90d8da1eb72796486b348cb78acf12c665fa33` |
+| `build/wifi/common/wmt_drv.ko` | 1 111 976 | `cc2f061d59824e25677837a751166c516be58cd1cf6016f6811a16f87031176a` |
+| `build/wifi/wlan/wlan_drv_gen3.ko` | 2 895 080 | `ba69c10fddc6377104d81e7f11054ae2aff858701f87426560c49ce8ee6c413c` |
+| `build/remote/modules/cfg80211.ko` | 614 888 | `e30338f8deca783e7dc05bc5089d33e7b30303ef62830686f023240f6e531eb2` |
+| `build/remote/modules/mac80211.ko` | 812 160 | `c8acef164e762f1696416b35581b646cc04d7985a1ee9a6aeec149fab8088732` |
+| `build/remote/modules/rfkill.ko` | 48 272 | `d765f5662bdcb8e2c481223ecf214178dc70468d11e45fa726bcb788901c67ee` |
 
 `vermagic` у всех пяти модулей и у `Image` один и тот же:
 
 ```
-6.12.114-g95e3b41b86-dirty SMP preempt mod_unload aarch64
+6.12.114-g675178729a-dirty SMP preempt mod_unload aarch64
 ```
 
 Детали, которые важны для воспроизведения:
@@ -711,9 +718,11 @@ Kbuild-врапперы уже интегрированы в `scripts/build-wifi
   либо не слинкуется по символам, либо разъедется по ABI (§16).
 - Для этого в `scripts/build-kernel-remote.sh` добавлены `EXTRA_FRAGMENTS`
   (доп. фрагменты) и `--modules` (собрать и забрать `cfg80211/mac80211/rfkill`).
-- `wmt_drv.ko` изменился (`0b4a2bfa…` → `a9b1b1d9…`, +2 568 Б) из-за патча
-  0002; `wlan_drv_gen3.ko` пересобран и оказался **побайтово тем же** (сборка
-  воспроизводима: `DRIVER_BUILD_DATE` зафиксирован).
+- `wmt_drv.ko` изменился из-за патча 0002: `0b4a2bfa…` (1 109 408 Б, M2) →
+  `cc2f061d…` (1 111 976 Б, +2 568 Б). `wlan_drv_gen3.ko` меняется только
+  встроенным `vermagic` (сборка воспроизводима: `DRIVER_BUILD_DATE`
+  зафиксирован — на одном и том же base-коммите он побайтово равен версии M2,
+  `cfd182c5…`).
 - Warnings: common 65 / wlan 376, ошибок 0, undefined 0 — как в M2.
 - `EXTRA_FRAGMENTS`/`--modules` — единственное изменение конфига образа
   относительно `boot_ubuntu40`; дисплей/GPU/тач-опции не менялись.
@@ -723,17 +732,28 @@ Kbuild-врапперы уже интегрированы в `scripts/build-wifi
   (тот же, что в 40). **Имя:** `boot_ubuntu35.img` уже занят рабочим
   откатным образом (11.11 17:29), поэтому M3-образ назван `boot_ubuntu41.img`;
   в `docs/STATUS.md`/`handover.md` имя надо поправить.
-- Ядро образа — из worktree с коммитом *этого же* патча 0049 поверх `95e3b41b8`,
-  поэтому версия осталась `-g95e3b41b86-dirty` и совпала с модулями. Если дерево
-  уйдёт вперёд (тач 0047/0048 или свои коммиты), **модули надо пересобрать**
-  (`scripts/build-wifi-remote.sh --kernel`), иначе new Image получит другое
-  `vermagic` и `insmod` откажет.
+- Воспроизведение одной командой (порядок важен: второй скрипт берёт src-snapshot
+  первого):
+
+  ```sh
+  KERNEL_SRC=<worktree с 0049> EXTRA_FRAGMENTS=configs/t1100-wifi.fragment \
+      scripts/build-kernel-remote.sh --modules
+  KERNEL_SRC=<тот же worktree> scripts/build-wifi-remote.sh --kernel
+  gzip -9 -c build/remote/Image > /tmp/Image.gz
+  python3 scripts/repack_boot.py --ref build/boot_ubuntu40.img \
+      --kernel /tmp/Image.gz --ramdisk build/initramfs_root_usb.cpio.gz \
+      --dtb build/remote/dtbs/mt6771-fplus-t1100.dtb --out build/boot_ubuntu41.img
+  ```
+
+  Любое движение дерева (новый коммит/патч) меняет `vermagic`, поэтому ядро и
+  модули пересобираются **только парой** — иначе `insmod` откажет.
 
 ### 21.4 Проверки до прошивки
 
-- `make dtbs` — DTB собирается, `dtc` без ошибок.
+- `make dtbs` — DTB собирается, `dtc` без ошибок (53 774 Б с тач-патчами).
 - `tools/lk/verify-dtb.sh` на DTB из дерева и на DTB, вынутом из
-  `boot_ubuntu41.img` (`tools/lk/extract-boot-dtb.py`): `RESULT: LK should accept
+  `boot_ubuntu41.img` (`scripts/bootimg_extract.py`; sha256 совпал —
+  `bebd312f…`): `RESULT: LK should accept
   this DTB`, оверлей `dtbo_a` применяется, размер 88 713 ≤ 524 288,
   `/reserved-memory/ramoops@70000000` чист по mblock’ам. У `consys-reserve-memory`
   `reg` нет вообще, поэтому LK-конфликт-чек его не рассматривает (в этом и смысл
@@ -765,7 +785,7 @@ tools/host/wifi-deploy.sh --status     # что лежит/загружено
 `boot_ubuntu40`/`boot_ubuntu33`), панель/тач/GPU проверены, питание не ниже 3.8 В
 (`t1100-power-guard`).
 
-1. `uname -r` → `6.12.114-g95e3b41b86-dirty`; `tools/host/wifi-deploy.sh --apply`.
+1. `uname -r` → `6.12.114-g675178729a-dirty`; `tools/host/wifi-deploy.sh --apply`.
 2. `insmod`-эквивалент: `tools/host/wifi-deploy.sh --load wmt` (или
    `modprobe wmt_drv` вручную).
 3. **Ожидаемый dmesg (порядок):**
