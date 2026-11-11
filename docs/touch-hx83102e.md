@@ -1,19 +1,24 @@
-# HX83102E: протокол по стоковому драйверу (v2, AHB-протокол и sense-цикл)
+# HX83102E: протокол, init-таблица и раскладка кадра (v3)
 
 Документ отвечает на вопросы «какие i2c-транзакции слать, в каком порядке, что
 читать» для in-cell дигитайзера **HX83102E** (BOE TV110XUM-LB2, i2c0 0x48,
 EINT 1, reset GPIO158, `ts-avdd` GPIO163).
 
-Всё ниже — из **дизассемблированного вендорского драйвера** стокового ядра
-4.14.186 (`../t1100/backup_5.1.6.110/boot_a_5.1.6.110.img`), с указанием
-адресов функций и конкретных инструкций. Где вывод не доказан — так и написано
+Источники: (1) **дизассемблированный вендорский драйвер** стокового ядра
+4.14.186 (`../t1100/backup_5.1.6.110/boot_a_5.1.6.110.img`) — адреса функций и
+инструкций; (2) **публичный GPL-исходник** того же драйвера
+(`MorgenYang/himax_v2_common`, коммит `106bb96`) — init-последовательность,
+карта адресов и раскладка кадра (§8). Где вывод не доказан — так и написано
 (§6).
 
-> v1 этого документа содержал две ошибки, найденные при повторном разборе:
+> v1 документа содержал две ошибки, найденные при повторном разборе:
 > (1) путь чтения кадра для 83102E — **другой** callback, чем у остальных IC
 > (`0xA9A450`, а не `0xA95DAC`), и он **не** пишет `0x11 = 0` перед чтением;
 > (2) «AHB-запись» в v1 была описана правдоподобно, но не по коду. Точный
 > протокол — §1.
+>
+> v3: раскладка кадра и checksum подтверждены исходником (§3.2, §8.4),
+> добавлен полный порядок «перед первым кадром» (§5, §8.3).
 
 ---
 
@@ -357,34 +362,40 @@ touch_info_size = 4 * (HX_MAX_PT + hx_raw_cnt_max) + (rem ? 8 : 4)   [+0x0C пр
 
 При `HX_MAX_PT = 10`, `hx_raw_cnt_max = 2`: `4*12 + 8 = 56`.
 
-Раскладка, которую использует mainline (`struct himax_event`, `__packed`,
-`static_assert(sizeof == 56)`), и которая совпадает с формулой вендора
-(10 точек × 4 Б = 40, далее 2 «слов» + 8 байт):
+Раскладка **подтверждена вендорским исходником** (§8.4) и совпадает с
+mainline `struct himax_event` (`__packed`, `static_assert(sizeof == 56)`):
 
-| смещение | поле |
-|---|---|
-| 0..39 | `points[10]`: по 4 Б — `__be16 x`, `__be16 y` |
-| 40..49 | `majors[10]` — «сила»/площадь по точкам |
-| 50..51 | pad |
-| 52 | `num_points` (0xFF → 0 точек; иначе `& 0x0f`) |
-| 53..54 | pad |
-| 55 | `checksum_fix` |
+| смещение | поле | как читает вендор |
+|---|---|---|
+| 0..39 | `points[10]` — по 4 Б: `be16 x`, `be16 y` | `x = buf[i*4]<<8 \| buf[i*4+1]`, `y = buf[i*4+2]<<8 \| buf[i*4+3]` |
+| 40..49 | `majors[10]` — «сила»/площадь | `w = buf[nFinger_support*4 + i]` |
+| 50 | — | (не используется) |
+| 51 | `ig_count` | `buf[coordInfoSize - 5]` |
+| 52 | `num_points`: младший ниббл — число точек (`0xFF` → 0), старший — `raw_data_sel` | `buf[coordInfoSize - 4] & 0x0F`; `buf[52]>>4 & 0x0F` |
+| 53..54 | — | |
+| 55 | `checksum` | сумма всех 56 байт ≡ 0 (mod 256) |
 
-Вендорская валидация в `himax_touch_get` (0xA9C5E4…0xA9C7D0) отличается от
-mainline и объясняет, почему «сумма всех 56 байт» может не сходиться:
+Правила валидации (исходник, §8.4):
 
-* контрольная сумма — **16-битная сумма байт до первого нулевого байта**
-  (`ldrb w13,[x11],#1; cbz; add w13,w2,w13; and w2,w13,#0xffff`), а не сумма
-  всех 56 байт;
-* байты `0xEB`, `0xEC`, `0xED` считаются служебными кодами (счётчики
-  «exception»), байт с `(b >> 4) == 0xF` — маркером/терминатором;
-* при «исключительном» кадре печатается
-  `TP] EXCEPTION event checked - ALL Zero.`
+* **checksum**: `for (i=0;i<len;i++) check_sum_cal += buf[i];` и требуется
+  `check_sum_cal % 0x100 == 0` — сумма **всех** `touch_info_size` байт, как в
+  mainline. (В v1 я записал сюда «16-битную сумму до первого нуля» — это был
+  артефакт дизассемблера, в исходнике такого нет.)
+* кадр, целиком состоящий из нулей (`zero_cnt == length`), отбрасывается
+  («All Zero event»);
+* `raw_data_sel = buf[52] >> 4 & 0x0F`; если он не `0x0F` и не равен
+  `diag_cmd`, кадр считается raw-данными и отбрасывается (стек при этом
+  дочитывается: `fp_read_event_stack(buf, 128 - touch_info_size)`);
+* точка валидна, если `0 <= x <= abs_x_max` и `0 <= y <= abs_y_max`;
+  `hx_point_num == 0` → отчёт не формируется вообще;
+* байты `0xEB/0xEC/0xED` в `himax_ts_event_check` считаются кодами
+  исключений (ESD/шум), `0xED` — «shaking».
 
-**Что означает «нет касаний»:** у вендора пустой отчёт — это кадр, который
-целиком нулевой (все точки и `num_points` = 0); mainline трактует `0xFF` в
-`num_points` как «точек нет». Наблюдаемые нули в `0x30` — это **не** «нет
-касаний», а отсутствие отчёта вообще (sensing выключен, §2).
+**«Нет касаний»** = валидный кадр с `buf[52] & 0x0F == 0` (или `0xFF`).
+Наблюдаемый у нас кадр `14 × 00 03 00 00` по этой раскладке означает:
+`x = 0x0003, y = 0x0000` во всех 10 точках, `buf[52] = 0x00` → **точек 0**,
+при этом checksum (14 × 0x03 = 0x2A) не сходится. То есть чип отдаёт не
+отчёт, а фиксированный шаблон.
 
 ### 3.3. Почему AHB `0x30` не подходит
 
@@ -432,51 +443,64 @@ qpio: 19`, `ints[0] = 1, ints[1] = 0`.
 
 ## 5. Что должен сделать bringup (по шагам)
 
-После штатного сброса и `ICID == 0x83102e`, `0x900000A8 == 0x05`:
+Вендорский `himax_mcu_power_on_init` (§8.3) задаёт точный порядок «перед первым
+кадром». Для нас он разворачивается так (после сброса и `ICID == 0x83102e`):
 
 ```
-1) AHB_write 0x9000005C = 0x00000000        // sense ON
-2) usleep 10 мс
-3) IC reset: int_disable; GPIO158 0→1; usleep 5 мс; int_enable; usleep 50 мс
-4) ждать 0x900000A8 == 0x05 (до 4 раз по 10 мс; при неудаче — повторить §2.2/§2.3)
-5) на IRQ: burst (0x13=0x31, 0x0D=0x10) + чтение регистра 0x30, 56 байт
-6) разбор: points[10] по 4 Б (be16 x, be16 y) @0..39, majors @40..49,
-   num_points @52 (0xFF = нет точек), checksum @55
-   либо, до подтверждения раскладки: hexdump и сверка с §6
+0) прочитать touch info (RX/TX/max_pt/res) — из него размер кадра 56
+1) AHB_write 0x100072EC = 0x00000000        // addr_raw_out_sel — «обычный» вывод
+2) AHB_write 0x10007F04 = 0x00000000        // assign_sorting_mode (DSRAM)
+3) AHB_write 0x9000005C = 0x00000000        // sense ON (fw_data_clear)
+4) usleep 10 мс
+5) IC reset: int_disable; GPIO158 0→1; usleep 5 мс; int_enable; usleep 50 мс
+6) reload_to_active: писать AHB 0x90000048 = 0xEC, 1 мс, читать назад,
+   пока не (data[1] == 0x01 && data[0] == 0xEC) — до HIMAX_REG_RETRY_TIMES
+7) ждать 0x900000A8 == 0x05
+8) на IRQ: burst (0x13=0x31, 0x0D=0x10) + чтение регистра 0x30, 56 байт
+9) разбор по §3.2: points[10] be16 x/y @0..39, majors @40..49,
+   num_points @52 (0xFF = нет точек), checksum — сумма всех 56 ≡ 0
 ```
 
-Проверка, что sense-on действительно сработал (**новый диагностический шаг,
-которого не было в v1**): после шага 1 прочитать `AHB 0x9000005C` — в
-save-режиме там `0x87`, после sense-on ожидается `0x00` (симметрично тому, как
-sense_off проверяет `0x87`). Это дешёвый и однозначный индикатор состояния
-чипа.
+Проверка, что sense-on действительно сработал: после шага 3 прочитать
+`AHB 0x9000005C` — в save-режиме там `0x87` (см. §2.2), после sense-on
+ожидается `0x00`.
 
-Чего в mainline нет (обновлённый список):
+Чего в mainline нет (обновлённый список, по вендорскому коду):
 
-1. `AHB 0x9000005C = 0` + повторный сброс и ожидание FW reload — **главное**;
-2. запись `0x10007F04 = 0` (sorting mode) перед sense_on;
-3. `reload_disable` (адрес недоказан, §6) — вероятно, можно пропустить;
-4. чтение кадра из **регистра** `0x30` (8-битный суб-адрес), а не из AHB `0x30`;
-5. 16-битная сумма «до первого нуля» вместо суммы всех 56 байт;
+1. **`AHB 0x100072EC = 0`** (`addr_raw_out_sel`) — голая настройка вывода;
+   без неё чип может отдавать raw-данные вместо точек;
+2. **`AHB 0x10007F04 = 0`** (`assign_sorting_mode`, `fw_addr_sorting_mode_en`);
+3. **`AHB 0x9000005C = 0`** + повторный сброс + `reload_to_active`
+   (`0x90000048 = 0xEC`) — собственно sense-on;
+4. **проверка `0x900000A8 == 0x05`** после сброса (FW reload done);
+5. чтение кадра из **регистра** `0x30` (8-битный суб-адрес, burst), а не из
+   AHB `0x30`;
 6. `0x11 = 0x00` **не нужен** для 83102E (это generic-путь) — из v1 убрать.
+
+Дополнительно, если понадобится полный «вендорский» цикл (для отладки):
+`sense_off` = `0x9000005C = 0xA5` + `0x31=0x27`, `0x32=0x95` (×2), проверка
+`0x900000A8 == 0x0C`, затем `AHB 0x80020004 = 0` (reset TCON) — §2.2.
 
 ---
 
 ## 6. Что осталось недоказанным
 
-1. **Адрес в `himax_mcu_reload_disable`.** Берётся из `buf(0x2B)[0..3]`, но ни
-   `in_cmd_init`, ни `himax_hx83102e_reg_re_init` его не заполняют в статике
-   (возможно, заполняется путём, который не попал в разбор, либо это
-   неинициализированная область — вызов может быть no-op). На кадры не влияет.
-2. **Раскладка 56 байт именно для 83102E.** Совпадение размера (56) и формула
-   вендора `4*(MAX_PT+raw)+8` сходятся с `struct himax_event`, но вендорская
-   валидация использует другие смещения (`ts->touch_info_size-0xF` и `-3`), что
-   с mainline-раскладкой не сходится. Проверять эмпирически (§7).
-3. **Смысл `0x9000005C` и необходимость сброса после него.** По коду: запись
-   0 → 10 мс → IC reset. Сток подтверждает порядок, но не объясняет, почему
-   команда переживает сброс (возможно, это флаг во flash-конфиге FW).
-4. **Ветка `sense_on(arg != 0)`** (два строба `0x31=0`, `0x32=0` без сброса) — в
-   стоке не используется (там arg=0), назначение не проверено.
+1. **Почему кадр `14 × 00 03 00 00`.** По раскладке это «0 точек» с
+   неверной контрольной суммой; ни один из проверенных путей (регистр 0x30,
+   AHB 0x30) такого давать не должен. Гипотезы: (а) чип остаётся в
+   raw-out/ином режиме, потому что не сделаны шаги 1–3 из §5; (б) читается не
+   тот порт/длина; (в) буфер не заполняется, а сохраняет предыдущее
+   содержимое. Проверяется шагами §5 + hexdump.
+2. **Адрес в `himax_mcu_reload_disable`** (4.14-бинарь): берётся из
+   `buf(0x2B)[0..3]`, который в статике не заполняется. В v2-исходнике
+   `fp_reload_disable` есть, но к 83102E напрямую не привязан. На кадры,
+   по всем признакам, не влияет.
+3. **`reload_to_active`** (`0x90000048 = 0xEC`, ожидание `data[1]==0x01 &&
+   data[0]==0xEC`) — в нашем бинаре этой последовательности я не нашёл
+   (возможно, она есть в другой ветке кода). Стоит проверить на железе.
+4. **Ветка `sense_on(arg != 0)`** (FlashMode) — в стоке не используется.
+4. **Ветка `sense_on(arg != 0)`** (FlashMode: safe-mode release + `0x31/0x32`)
+   в стоке не используется (там arg=0), назначение не проверено.
 5. **Вендорский ISR** может отбрасывать часть прерываний по счётчику
    (`himax_ts_work` @0xA9C1A0, ветка «Skipit»); влияние на поведение при
    дребезге не разбиралось.
@@ -498,3 +522,192 @@ sense_off проверяет `0x87`). Это дешёвый и однознач�
 Если кадр пошёл, но раскладка не сходится с mainline — снять 3 дампа: покой,
 одно касание в известной точке (например, левый верхний угол), два касания.
 По смещению ненулевых байт раскладка определится однозначно.
+
+---
+
+## 8. Вендорский исходник (GPL): init-таблица и раскладка кадра
+
+### 8.1. Что найдено
+
+| | |
+|---|---|
+| репозиторий | `https://github.com/MorgenYang/himax_v2_common` |
+| коммит | `106bb9614d169e008565c013f7ce0ec110b9646a` (2019-08-09, «modify coding style») |
+| лицензия | GPL-2.0 (`SPDX-License-Identifier: GPL-2.0` в каждом файле) |
+| объём | 1.3 МБ, только `hxchipset/` |
+| файлы | `hxchipset/himax_ic_HX83102.c` (1915 строк), `himax_ic_HX83102.h`, `himax_ic_core.h` (карта адресов), `himax_ic_incell_core.c` (общее ядро), `himax_common.c` (разбор кадра) |
+
+Локальная копия двух ключевых файлов: `refs/himax-v2/himax_ic_HX83102.{c,h}`.
+
+Это **та же кодовая база**, что и в стоковом ядре: все константы совпадают с
+тем, что было восстановлено дизассемблером, — `hx83102e_fw_addr_raw_out_sel =
+0x100072EC`, `hx83102e_ic_adr_tcon_rst = 0x80020004`,
+`fw_data_safe_mode_release_pw_active = 0x53`, `fw_addr_ctrl_fw = 0x9000005C`,
+`fw_data_fw_stop = 0xA5`, `fw_addr_chk_fw_status = 0x900000A8`,
+`fw_addr_fw_dbg_msg_addr = 0x10007F40`, `fw_addr_sorting_mode_en = 0x10007F04`,
+`fw_addr_event_addr = 0x30`, пароль `0x31=0x27 / 0x32=0x95`.
+Отличие: в репозитории — «модульная» v2-раскладка (`kp_*`, `g_core_fp`), в
+нашем стоке — монолитная 4.14; логика и константы идентичны.
+
+### 8.2. Карта адресов (`himax_ic_core.h`, блок `CORE_FW`)
+
+```c
+#define fw_addr_system_reset         0x90000018
+#define fw_addr_safe_mode_release_pw 0x90000098   /* data 0x53 = release */
+#define fw_addr_ctrl_fw              0x9000005c   /* sense on/off, data_clear=0 / fw_stop=0xA5 */
+#define fw_addr_flag_reset_event     0x900000e4
+#define fw_addr_hsen_enable          0x10007F14
+#define fw_addr_raw_out_sel          0x800204b4   /* переопределяется для 83102e: 0x100072EC */
+#define fw_addr_program_reload_to    0x08000000
+#define fw_addr_reload_status        0x80050000
+#define fw_data_clear                0x00000000
+#define fw_data_fw_stop              0x000000A5
+#define fw_addr_icid_addr            0x900000d0
+#define fw_addr_fw_dbg_msg_addr      0x10007f40
+#define fw_addr_chk_fw_status        0x900000a8
+#define fw_addr_ahb_addr             0x11        /* ahb_dis=0x00, ahb_en=0x01 */
+#define fw_addr_event_addr           0x30        /* блок отчёта */
+#define fw_addr_sorting_mode_en      0x10007f04
+#define fw_addr_cs_central_state     0x900000a8  /* он же chk_fw_status */
+```
+
+`himax_ic_HX83102.h`: `hx83102e_fw_addr_raw_out_sel 0x100072EC`,
+`hx83102e_ic_adr_tcon_rst 0x80020004`.
+
+AHB-протокол в исходнике подтверждён дословно:
+
+```c
+int hx83102_flash_write_burst(uint8_t *reg_byte, uint8_t *write_data)  /* = запись */
+{
+	uint8_t data_byte[8];
+	for (i = 0; i < 4; i++) data_byte[i] = reg_byte[i];
+	for (j = 4; j < 8; j++) data_byte[j] = write_data[j-4];
+	return kp_himax_bus_write(0x00, data_byte, 8, ...);   /* одна i2c-запись 8 байт */
+}
+
+static int hx83102_register_read(uint8_t *read_addr, int len, uint8_t *out)  /* = чтение */
+{
+	if (len > 4) hx83102_burst_enable(1); else hx83102_burst_enable(0);
+	/* addr[3..0] -> LE word -> bus_write(0x00, tmp, 4) */
+	kp_himax_bus_write(0x00, tmp_data, 4, ...);
+	tmp_data[0] = 0x00; kp_himax_bus_write(0x0C, tmp_data, 1, ...);
+	kp_himax_bus_read(0x08, out, len, ...);
+	if (len > 4) hx83102_burst_enable(0);
+}
+```
+То есть §1 документа согласуется с исходником один-в-один.
+
+### 8.3. Последовательность перед первым кадром (`himax_mcu_power_on_init`, `himax_ic_incell_core.c:542`)
+
+```c
+static void himax_mcu_power_on_init(void)
+{
+	I("%s:\n", __func__);
+	g_core_fp.fp_touch_information();                 /* RX/TX/max_pt/x_res/y_res */
+	g_core_fp.fp_register_write(pfw_op->addr_raw_out_sel, 4, pfw_op->data_clear, 0);
+	g_core_fp.fp_assign_sorting_mode(pfw_op->data_clear);   /* 0x10007f04 = 0 */
+	g_core_fp.fp_sense_on(0x00);
+}
+```
+
+`himax_hx83102d_sense_on()` (`himax_ic_HX83102.c:1014`):
+
+```c
+I("Enter %s\n", __func__);
+fp_interface_on();
+fp_register_write(pfw_op->addr_ctrl_fw_isr, 4, pfw_op->data_clear, 0);  /* 0x9000005C = 0 */
+usleep_range(10000, 10001);
+if (!FlashMode) {
+	fp_ic_reset(false, false);        /* pin reset */
+	himax_hx83102d_reload_to_active();
+} else { ... }
+```
+
+`himax_hx83102d_reload_to_active()` (`:973`) — то, чего у нас нет вовсе:
+
+```c
+addr[3]=0x90; addr[2]=0; addr[1]=0; addr[0]=0x48;      /* 0x90000048 */
+do {
+	data = 0x000000EC;
+	fp_register_write(addr, 4, data, 0);
+	usleep_range(1000, 1100);
+	fp_register_read(addr, 4, data, 0);
+	retry_cnt++;
+} while ((data[1] != 0x01 || data[0] != 0xEC) && retry_cnt < HIMAX_REG_RETRY_TIMES);
+```
+
+`hx83102e_sense_off()` (`:796`) — совпадает с дизассемблером: `0x9000005C = 0xA5`,
+10 мс, читать `0x900000A8` (должно быть `0x05`), читать назад `0x9000005C`
+(ждём `0x87`), затем дважды `0x31=0x27`, `0x32=0x95`, проверка
+`0x900000A8 == 0x0C`, и `AHB 0x80020004 = 0` (reset TCON) + 1 мс.
+
+`hx83102e_read_event_stack()` (`:1587`) — ровно:
+
+```c
+kp_himax_bus_read((*kp_pfw_op)->addr_event_addr[0] /* 0x30 */, buf, length, retries);
+```
+
+### 8.4. Раскладка кадра (`himax_common.c`)
+
+Размер (`himax_report_data_init`, `:1331`):
+
+```c
+touch_info_size = (ic_data->HX_MAX_PT + raw_cnt_max + 2) * 4;   /* (10 + 2 + 2)*4 = 56 */
+```
+Номер байта со счётчиком точек (`calculate_point_number`, `:933`):
+
+```c
+HX_TOUCH_INFO_POINT_CNT = HX_MAX_PT * 4;                       /* 40 */
+if ((HX_MAX_PT % 4) == 0) += (HX_MAX_PT / 4) * 4;
+else                      += ((HX_MAX_PT / 4) + 1) * 4;        /* 40 + 12 = 52 */
+```
+
+Разбор точек (`himax_parse_report_points`, `:1998`):
+
+```c
+for (loop_i = 0; loop_i < ts->nFinger_support; loop_i++) {
+	base = loop_i * 4;
+	x = buf[base] << 8 | buf[base + 1];            /* big-endian */
+	y = buf[base + 2] << 8 | buf[base + 3];        /* big-endian */
+	w = buf[(ts->nFinger_support * 4) + loop_i];   /* majors[] */
+	...
+}
+...
+finger_num = buf[ts->coordInfoSize - 4] & 0x0F;      /* = buf[52] */
+ig_count   = buf[ts->coordInfoSize - 5];              /* = buf[51] */
+```
+
+Счётчик и `raw_data_sel` (`himax_parse_report_data`, `:2176`):
+
+```c
+EN_NoiseFilter = (buf[52] >> 3) & 0x01;
+ts->hx_point_num = (buf[52] == 0xff) ? 0 : (buf[52] & 0x0f);
+raw_data_sel = buf[52] >> 4 & 0x0F;                   /* 0x0F = обычные координаты */
+```
+
+Checksum (`himax_checksum_cal`, `:1660`):
+
+```c
+for (i = 0; i < length; i++) { check_sum_cal += buf[i]; if (buf[i] == 0x00) zero_cnt++; }
+if (check_sum_cal % 0x100 != 0)  ret_val = HX_CHKSUM_FAIL;      /* сумма всех байт */
+else if (zero_cnt == length)     ret_val = HX_CHKSUM_FAIL;      /* «All Zero event» */
+```
+
+Коды исключений (`himax_ts_event_check`) — `0xEB`/`0xEC`/`0xED` считаются
+счётчиками «exception» (ESD/шум/«shaking»), а не данными точки.
+
+### 8.5. Итог сравнения с нашим состоянием
+
+| шаг вендора | у нас | следствие |
+|---|---|---|
+| `0x100072EC = 0` (raw out sel) | нет | чип может отдавать не координаты |
+| `0x10007F04 = 0` (sorting mode) | нет | DSRAM/сортировка не сконфигурирована |
+| `0x9000005C = 0` (sense on) | нет | сенсинг выключен |
+| pin reset + 10/50 мс | есть (в probe) | порядок не тот: сброс до sense-on |
+| `0x90000048 = 0xEC` (reload_to_active) | нет | возможно, чип не выходит в active |
+| ожидание `0x900000A8 == 0x05` | есть (пассивно) | ок |
+| чтение регистра `0x30`, 56 Б | есть | ок |
+| раскладка/checksum | совпадает с mainline | ок |
+
+Именно поэтому кадр стабильно `14 × 00 03 00 00`: по раскладке это «0 точек» с
+битой суммой — то есть чип отвечает, но не отчётом.
