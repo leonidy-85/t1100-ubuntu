@@ -60,6 +60,10 @@ export HOME=/
 mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev 2>/dev/null
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t tmpfs none /dev/shm 2>/dev/null
+mount -t debugfs none /sys/kernel/debug 2>/dev/null
 echo ""
 echo "=== T1100-INITRAMFS-START ==="
 echo "kernel: \$(uname -a)"
@@ -94,6 +98,8 @@ if [ "$NET" = 1 ]; then
     ifconfig usb0 10.42.66.66 up 2>/dev/null
   echo "usb0: \$(ifconfig usb0 2>/dev/null | head -3)"
   telnetd -l /bin/sh -p 23 2>/dev/null && echo "telnetd started"
+  # запасной канал: часть busybox-сборок понимает nc -e
+  nc -l -p 2323 -e /bin/sh >/dev/null 2>&1 &
 fi
 
 sync
