@@ -10,7 +10,8 @@
 # Использование:
 #   scripts/build-kernel-remote.sh              # инкрементально (rsync + make)
 #   scripts/build-kernel-remote.sh --clean      # снести out/ на хосте
-#   scripts/build-kernel-remote.sh --config     # только конфиг, без сборки
+#   scripts/build-kernel-remote.sh --config     # только конфиг
+#   scripts/build-kernel-remote.sh --modules    # дополнительно собрать modules (cfg80211/mac80211/rfkill)
 #
 # Env:
 #   BUILD_HOST   (default l@172.17.141.172)
@@ -20,10 +21,13 @@
 #   JOBS         (default: nproc удалённого хоста)
 #   ARCH         (default arm64)
 #   FRAGMENT     (default <repo>/configs/t1100.fragment)
+#   EXTRA_FRAGMENTS (default: пусто) — доп. фрагменты через пробел, мержатся
+#                  после FRAGMENT (например configs/t1100-wifi.fragment)
 #
 # Что делает:
 #   1. rsync дерева ядра (без .git) и фрагмента конфига на хост;
-#   2. на хосте: defconfig -> merge_config(fragment) -> olddefconfig -> Image dtbs;
+#   2. на хосте: defconfig -> merge_config(fragment[, EXTRA_FRAGMENTS]) ->
+#      olddefconfig -> Image dtbs [modules];
 #   3. забирает Image + dtb в <repo>/build/remote/ и печатает версию/sha256.
 #
 # Кросс-компилятор на хосте: sudo apt-get install -y --no-install-recommends \
@@ -38,14 +42,23 @@ KERNEL_SRC="${KERNEL_SRC:-${REPO_ROOT}/../linux-t1100}"
 REMOTE_DIR="${REMOTE_DIR:-/home/l/t1100-ubuntu-build}"
 ARCH="${ARCH:-arm64}"
 FRAGMENT="${FRAGMENT-${REPO_ROOT}/configs/t1100.fragment}"
+# Дополнительные фрагменты (через пробел), мержатся после FRAGMENT.
+# Нужны, например, для образа с вендорским Wi-Fi-стеком: модули
+# wlan_drv_gen3/wmt_drv собраны с CONFIG_WEXT_PRIV=y + NL80211_TESTMODE=y, и
+# ядро, в которое их будут грузить, должно иметь те же header-visible
+# структуры (docs/wifi-port-log.md §16) — иначе cfg80211.ko из другого
+# out-дерева не совпадёт по ABI.
+EXTRA_FRAGMENTS="${EXTRA_FRAGMENTS:-}"
 LOCAL_OUT="${LOCAL_OUT:-${REPO_ROOT}/build/remote}"
 
 CLEAN=0
 CONFIG_ONLY=0
+WITH_MODULES=0
 for arg in "$@"; do
 	case "${arg}" in
 		-c|--clean)  CLEAN=1 ;;
 		--config)    CONFIG_ONLY=1 ;;
+		--modules)   WITH_MODULES=1 ;;
 		-h|--help)   sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "unknown argument: ${arg}" >&2; exit 2 ;;
 	esac
@@ -81,6 +94,14 @@ echo "== rsync: дерево ядра (без .git) и фрагмент конф
 if [ -n "${FRAGMENT}" ] && [ -f "${FRAGMENT}" ]; then
 	"${RSYNC[@]}" "${FRAGMENT}" "${BUILD_HOST}:${REMOTE_DIR}/fragment.config" 2>&1 | tee -a "${LOG}"
 fi
+EXTRA_LIST=""
+i=0
+for extra in ${EXTRA_FRAGMENTS}; do
+	[ -f "${extra}" ] || { echo "нет фрагмента: ${extra}" >&2; exit 1; }
+	i=$((i + 1))
+	EXTRA_LIST="${EXTRA_LIST} fragment-extra-${i}.config"
+	"${RSYNC[@]}" "${extra}" "${BUILD_HOST}:${REMOTE_DIR}/fragment-extra-${i}.config" 2>&1 | tee -a "${LOG}"
+done
 
 if [ "${CLEAN}" -eq 1 ]; then
 	echo "-- wiping remote out/"
@@ -121,6 +142,9 @@ echo "== defconfig + fragment + olddefconfig =="
 	if [ -f fragment.config ]; then
 		src/scripts/kconfig/merge_config.sh -m -O out out/.config fragment.config
 	fi
+	for extra in ${EXTRA_LIST}; do
+		src/scripts/kconfig/merge_config.sh -m -O out out/.config "\$extra"
+	done
 	${MAKE[*]} olddefconfig
 	${MAKE[*]} -s kernelversion" 2>&1 | tee -a "${LOG}"
 
@@ -131,10 +155,12 @@ if [ "${CONFIG_ONLY}" -eq 1 ]; then
 fi
 
 echo
-echo "== make Image dtbs (-j${JOBS}) =="
+echo "== make Image dtbs${WITH_MODULES:+ modules} (-j${JOBS}) =="
+TARGETS="Image dtbs"
+[ "${WITH_MODULES}" -eq 1 ] && TARGETS="${TARGETS} modules"
 "${SSH[@]}" "export CCACHE_DIR=\$HOME/.ccache-t1100 PATH=\$HOME/.ccache-bin:\$PATH; set -e
 	cd '${REMOTE_DIR}'
-	${MAKE[*]} -j${JOBS} Image dtbs" 2>&1 | tee -a "${LOG}"
+	${MAKE[*]} -j${JOBS} ${TARGETS}" 2>&1 | tee -a "${LOG}"
 
 echo
 echo "== забираю артефакты в ${LOCAL_OUT} =="
@@ -143,9 +169,21 @@ if "${SSH[@]}" "test -d '${REMOTE_DIR}/out/arch/arm64/boot/dts/mediatek'" 2>/dev
 	"${RSYNC[@]}" "${BUILD_HOST}:${REMOTE_DIR}/out/arch/arm64/boot/dts/mediatek/" \
 		"${LOCAL_OUT}/dtbs/" 2>&1 | tee -a "${LOG}"
 fi
+if [ "${WITH_MODULES}" -eq 1 ]; then
+	# Wireless core modules of *this* out-tree: they must come from the same
+	# config as the vendor modules (WEXT_PRIV/NL80211_TESTMODE change the
+	# header-visible cfg80211 structures, see docs/wifi-port-log.md §16).
+	mkdir -p "${LOCAL_OUT}/modules"
+	for ko in net/wireless/cfg80211.ko net/mac80211/mac80211.ko net/rfkill/rfkill.ko; do
+		"${RSYNC[@]}" "${BUILD_HOST}:${REMOTE_DIR}/out/${ko}" "${LOCAL_OUT}/modules/" 2>&1 | tee -a "${LOG}"
+	done
+fi
 
 echo
 echo "== результат =="
 ls -l "${LOCAL_OUT}/Image"
 sha256sum "${LOCAL_OUT}/Image" | tee "${LOCAL_OUT}/Image.sha256"
+if [ "${WITH_MODULES}" -eq 1 ]; then
+	sha256sum "${LOCAL_OUT}"/modules/*.ko
+fi
 "${SSH[@]}" "cat '${REMOTE_DIR}/out/include/config/kernel.release'" | sed 's/^/kernel release: /'
