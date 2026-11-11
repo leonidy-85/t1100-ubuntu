@@ -84,6 +84,18 @@ if mount -t ext4 -o rw /dev/mmcblk0p54 /mnt; then
   { chroot /mnt /usr/sbin/sshd -t; echo "sshd -t rc=$?"; } > /tmp/sshd_t 2>&1
   expdb_dump "pre-switch"
   mkdir -p /mnt/var/log/pstore
+  # Hand the kernel filesystems over to the new root: switch_root() leaves
+  # the rootfs with its own bare, empty /dev, /proc and /sys otherwise.
+  mkdir -p /mnt/dev /mnt/proc /mnt/sys
+  mount --move /dev /mnt/dev 2>/dev/null
+  mount --move /proc /mnt/proc 2>/dev/null
+  mount --move /sys /mnt/sys 2>/dev/null
+  # A raw fallback shell that needs no pty at all (works even if devpts is
+  # missing); harmless under systemd, which ignores /etc/inittab.
+  mkdir -p /mnt/dev/pts /mnt/dev/shm
+  if ! grep -q 'nc -l -p 2222' /mnt/etc/inittab 2>/dev/null; then
+    echo '::respawn:/bin/busybox nc -l -p 2222 -e /bin/sh' >> /mnt/etc/inittab
+  fi
   dmesg > /mnt/var/log/pstore/dmesg-initramfs.txt 2>/dev/null
   cp /sys/fs/pstore/* /mnt/var/log/pstore/ 2>/dev/null
   cp /proc/uptime /mnt/var/log/pstore/ 2>/dev/null
