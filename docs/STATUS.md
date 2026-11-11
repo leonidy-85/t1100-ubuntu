@@ -1826,3 +1826,36 @@ mainline-аналог), прежде чем что-то писать в желе
 отсутствие поддержки чипа. Поправка внесена в `docs/wifi-plan.md`.
 Следствие: для пути A есть **эталон рабочего поведения** — при отладке power-on
 искать последовательность в рабочем стоке, а не в этом логе.
+
+### 11.11 (5): Wi-Fi, майлстоун 2 — модули собираются под 6.12
+
+Build-only (устройство не трогали, `../linux-t1100` не менялся; правки — в копии
+на build-хосте, экспортированы в `patches/wifi/`, разбор — `docs/wifi-port-log.md` §18,
+скрипты `scripts/build-wifi-remote.sh`):
+
+| модуль | sha256 | размер | примечание |
+|---|---|---|---|
+| `wmt_drv.ko` | `0b4a2bfafc20…9162924b4` | 1 109 408 Б | 154 экспорта `mtk_wcn_*` |
+| `wlan_drv_gen3.ko` | `cfd182c52813…b0638b8` | 2 895 080 Б | `depends: cfg80211,wmt_drv` |
+
+`vermagic` — `6.12.114-g95e3b41b86-dirty SMP preempt mod_unload aarch64`, ошибок и
+unresolved символов 0, сборка «с нуля» воспроизводит те же байты.
+
+Что пришлось править (85 % механически): `proc_create`→`proc_ops`, time API,
+`ioremap_nocache`→`ioremap`, `platform_driver.remove`→`void`, `timer_setup`,
+`set_fs/get_fs`→`filp_open`/`kernel_read`, `netif_rx_ni`, `access_ok`,
+`ip6_ptr`→`__in6_dev_get`, cfg80211-сигнатуры (`link_id`, `mgmt_frame_register`→
+`update_mgmt_frame_registrations`, `current_bss`→`links[0]`, `roam_info.bss`).
+В `mt6771.c` — `clk_buf`→no-op (TODO), PMIC LDO-биты убраны (это делает MT6358).
+
+Stub'ы с `pr_warn_once` + TODO: AEE/AED, весь SDIO-транспорт (у нас AHB/WFDMA),
+STP-over-UART (BT), WMT STEP, Android-хуки wlan, `show_stack`, `gConEmiPhyBase`
+(нужно заполнить из DT — задача следующего шага). Не собираются осознанно:
+SDIO-ветка, `stp_uart.c`, `wmt_step.c`, чужие SoC, `ahb_pdma.c` (у нас CQDMA).
+
+**Следующий шаг (M3, power-on CONSYS)** — после того как закончим тач: DT-узлы
+`consys@18070000` + `wifi@180f0000` + `consys-reserve-memory` 2 МиБ +
+`<&infracfg CLK_INFRA_CQ_DMA>`, `gConEmiPhyBase` из DT, образ с этим ядром и
+модулями (vermagic должен совпасть), первый признак — `wmt: power on ok` и
+чтение WCIR `0x788`. Главный открытый риск — кто регистрирует STP-HIF для
+MT6631 до power-on (BTIF vs собственный initcall; публичного `wmt_loader` нет).
