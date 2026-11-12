@@ -86,3 +86,51 @@ write 0x100012a4 = 0x00006000   -> снова 0x00600000
 
 Что успело отработать до зависания (из предыдущего, «мёртвого» прогона) и что
 осталось непроверенным — см. `docs/wifi-port-log.md` §27.
+
+## 7. Живое окно после патча 0005/0006, stage=1 (без `wlanProbe`)
+
+Прогон: `modprobe wlan_drv_gen3 t1100_probe=1 t1100_probe_stage=1 t1100_no_reset=1`
+(питание через SPM, `wlanProbe` не вызывается; плата осталась жива).
+
+```
+0x1000632c = 0x0000010d    SPM: rst_b=1, iso=0, clk_dis=0, pwr_on=1, sram_pd=1
+0x10006180 = 0x408fff4e    top1 ack (bit1) и top2 ack (bit30) — оба есть
+0x100012a0 = 0x18600098    CONN AXI protect снят (bits 13/14 = 0)
+0x18070008 = 0x00000788    CONNSYS chip id
+0x18070038 = 0x00000000    WCIR (ready-бит прошивки) — не выставлен
+0x18070078 = 0x000055aa    D2H mailbox 0
+0x18070160 = 0x00001170    cpupcr (MCU исполняет код)
+0x180f0000 = 0x00000000    WFDMA
+0x180f000c = 0xa07f0000    WFDMA отвечает
+```
+
+### 7.1 Регуляторы (`/sys/kernel/debug/regulator/regulator_summary`)
+
+```
+vcn18   1 use  18070000.consys-vcn18      1800mV
+vcn28   1 use  18070000.consys-vcn28      2800mV
+vcn33   1 use  18070000.consys-vcn33_bt   3500mV
+               18070000.consys-vcn33_wifi    0mV   <- выключен (paldo под #if 0)
+```
+
+### 7.2 Клоки (`/sys/kernel/debug/clk/clk_summary`)
+
+```
+infra_cqdma       enable=0 prepare=0 156000000 Hz  deviceless
+infra_cqdma_fpc   enable=0           156000000 Hz  deviceless
+```
+
+Гейт `CLK_INFRA_CQ_DMA` (DTS: `wifi@180f0000.clocks`) не взят никем, а WFDMA
+при этом отвечает: для доступа к окну WFDMA он не нужен.
+
+### 7.3 Oops в `wlanNetCreate` (stage=2)
+
+```
+wlanNetCreate: net_device prDev(0x…) allocated
+Unable to handle kernel write to read-only memory at virtual address ffffff80d83cd008
+pc : netif_tx_stop_all_queues+0x2c/0x80
+lr : wlanProbe+0x138/0xeb0 [wlan_drv_gen3]
+```
+
+`modprobe` получил SIGSEGV (`rc=139`), ядро ушло в oops и перезагрузилось
+(`journalctl -k -b -1`).

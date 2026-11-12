@@ -2809,3 +2809,34 @@ USB-gadget, авторебута нет) — нужен Power 10 с. Устро�
 вслепую: сначала пошаговый параметр (`t1100_probe_stage=N`), затем смотреть,
 какой первый MMIO клока не имеет (WFDMA/`wifi-dma`, AFE `0x180b6000`,
 EMI-MPU). Подробности — `docs/wifi-port-log.md` §27.
+
+## 12.11 (20): Wi-Fi M7 взят — окно CONNSYS отвечает; драйвер доходит до прошивки
+
+**Рубеж M7 закрыт.** С патчем 0005 CONSYS реально включается:
+`consys_hw_power_ctrl_spm: CONN SPM power on: 0x10d/0x408fff4e/0x18600098`,
+`polling_consys_chipid: retry(8) consys chipId(0x00000788)`,
+`nicpmSetDriverOwn: DRIVER OWN, status=1 count=25` (HIF-хендшейк!),
+`nicInitializeAdapter: Chip ID[6771] Version[E1]`,
+`kalFirmwareOpen: WIFI_RAM_CODE_6759 success` → `FW download end` →
+`Waiting for Ready bit timeout, Device to Host MailBox 0x38`, `cpupcr:00015730`
+(MCU исполняет код). Не хватает только `WLAN_READY` от прошивки.
+
+**Причина «смерти ядра» после probe найдена**: `wlan_lib.c:633` на таймауте
+ready-бита вызывает `GL_RESET_TRIGGER` → `schedule_work(rst_trigger_work)`, а
+`INIT_WORK` для него делается в `glResetInit()`, который `initWlan()` вызывал
+**после** probe → вызов NULL в kworker. Патч **0006** переносит `glResetInit()`
+до probe, добавляет `t1100_no_reset=1` и `t1100_probe_stage` (1 = только
+питание, 2 = питание + probe). Прогон `stage=1` безопасен, плата жива.
+
+**Питание/клоки закрыты** (`refs/consys-regs-2026-11-12.md` §7):
+`vcn18`/`vcn28`/`vcn33_bt` включены консьюмерами `18070000.consys-*`;
+`vcn33_wifi` = 0 мВ (`consys_hw_wifi_vcn33_ctrl()` под `#if 0`) — нужен только
+для TX; гейт `infra_cqdma` (DTS `wifi-dma`) никем не взят и для окна WFDMA не
+нужен — правка DTS не потребовалась.
+
+**Новый блокер:** на `stage=2` oops в `wlanNetCreate` (`gl_init.c:1791`,
+`netif_tx_stop_all_queues`, запись в read-only адрес) → SIGSEGV и ребут, ядро
+не висит. Похоже на latent-порчу памяти, чувствительную к раскладке (на сборке
+0005 этот же шаг проходил). Следующий шаг: `slub_debug=U,F` + печать
+`dev/num_tx_queues/_tx` в `wlanNetCreate`, сверка `sizeof(GLUE_INFO_T)` с
+размером wiphy priv.
