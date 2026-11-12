@@ -3155,3 +3155,22 @@ READY=0, `wlan0` нет, oops нет, `wlan_drv_gen3.ko` `c0566930…63ed5ec3`.
 (`/home/l/wifi-src/rb/.../btif/`, 7 457 строк), нужен DT-узел `btif@1100c000`
 (сток `refs/stock-mt6771.dts:2198`), `stp_btif.o` в Kbuild и часы
 `btifc`/`apdmac`.
+
+## 13.11: решение по Wi-Fi — идём только внутренним чипом (BTIF/STP)
+
+**Дата/решение.** 13.11, владелец: продолжаем **только внутренний MT6631**;
+STP-транспорт (BTIF) — отдельный рубеж. Варианты «USB-донгл», «cutter»,
+«отложить в бэклог» **не рассматриваются**.
+
+**Обоснование.** MCIF-путь закрыт железом (ROM не обслуживает `PATCH_*`:
+`nicRxWaitResponse timeout` на CID 0x10/5 при живых `section-config`/`WIFI_START`),
+MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`). Единственный
+транспорт, который остался и подтверждён стоком (`CONFIG_MTK_BTIF=y`,
+`hifType=0x2`, `btif@1100c000`), — **BTIF**. Он же нужен для BT, то есть это
+не распыление, а общий кусок фазы 5.
+
+**Следствие.** Ближайшие рубежи: (1) BTIF как модуль (`mtk_btif` + плат-слой
+под MT6771: базы `apdma`, клоки `btifc`/`apdmac`), (2) `stp_btif.o` в `wmt_drv`
+и `hifType = WMT_HIF_BTIF`, (3) `mtk_wcn_soc_normal_patch_dwn()` с
+`ROMv4_be_patch_1_0_hdr.bin` (на планшете, sha256 `83f7e9bc…`), (4) `WIFI_START`
+→ `WLAN_READY` → `wlan0` → ассоциация/DHCP.
