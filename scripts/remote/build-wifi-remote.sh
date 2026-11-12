@@ -78,6 +78,20 @@ echo "work trees ready"
 	exit 1
 }
 
+# CONFIG_WIRELESS_EXT is not cosmetic here: it adds two pointers to
+# struct net_device (wireless_handlers/wireless_data), so a module built against
+# an out-tree without it sees every net_device field past that point shifted by
+# 16 bytes relative to the running kernel. The result is silent memory
+# corruption (num_tx_queues reads as garbage, netif_tx_stop_all_queues stores
+# into rodata, kernel oops) -- see docs/wifi-port-log.md §29. The out-tree must
+# therefore be the one that built the running kernel, WEXT included.
+if ! grep -q '^CONFIG_WIRELESS_EXT=y' "$KB/.config" 2>/dev/null; then
+	echo "$KB/.config has no CONFIG_WIRELESS_EXT=y -- refusing to build:" >&2
+	echo "  struct net_device would not match the running kernel" >&2
+	echo "  (running kernel: /home/l/t1100-merge2-out, see docs/wifi-port-log.md §29)" >&2
+	exit 1
+fi
+
 # LOCALVERSION is not cosmetic: every `make -C <kernel>` run regenerates
 # include/config/kernel.release (filechk + FORCE), and without the suffix the
 # release collapses to the bare version -- the module then gets the wrong
