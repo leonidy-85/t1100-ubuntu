@@ -2519,3 +2519,111 @@ build-хосте их нет (RPM-репозиторий не смонтиров
    `mtk_wcn_soc_patch_dwn()` для 0x788 (это `wmt_loader`, `srh_rom_patch`).
 3. Если STP-путь нереализуем без hif-заглушек — это единственный оставшийся
    блокер `WLAN_READY`; фиксировать как отдельный рубеж (STP over MCR).
+
+## 42. M21: ROMv4-патч — протокол разобран, но транспорт на MT6771 = BTIF, не MCR (13.11)
+
+### 42.1 Формат команд (цитаты из `common_main/core/wmt_ic_soc.c`)
+
+```c
+#define DEFAULT_PATCH_FRAG_SIZE (1000)     /* :53  — тело фрагмента */
+#define WMT_PATCH_FRAG_1ST (0x1) / _MID (0x2) / _LAST (0x3)   /* :54-56 */
+static UINT8 WMT_PATCH_CMD[] = { 0x01, 0x01, 0x00, 0x00, 0x00 };          /* :127 */
+static UINT8 WMT_PATCH_EVT[] = { 0x02, 0x01, 0x01, 0x00, 0x00 };          /* :128 */
+static UINT8 WMT_PATCH_ADDRESS_CMD[] = { 0x01, 0x08, 0x10, 0x00,
+	0x01, 0x01, 0x00, 0x01, 0x3c, 0x02, 0x09, 0x02,
+	0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff };               /* :145 */
+static UINT8 WMT_PATCH_ADDRESS_EVT[] = { 0x02, 0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01 }; /* :152 */
+static UINT8 WMT_PATCH_P_ADDRESS_CMD[] = { /* тот же каркас, адрес в [12..15] */ };        /* :154 */
+```
+
+WMT-пакет = 4-байтный заголовок `{eType, eOpCode, u2SduLen}` + payload; в
+`WMT_PATCH_CMD` `[4]` — флаг фрагмента, `[2..3]` — длина (1 + fragSize),
+перезаписывается на каждом фрагменте (`wmt_ic_soc.c:2908-2920`).
+
+Последовательность (`mtk_wcn_soc_normal_patch_dwn()`, `:2753-2980`):
+
+```c
+if (icId == 0x0507 || 0x0713 || 0x0788 || 0x0688) {        /* :2809 — наш 0x0788 */
+	/* ROMv4 patch RAM base */
+	WMT_PATCH_ADDRESS_CMD[8] = 0x18;  WMT_PATCH_ADDRESS_CMD[9] = 0x05;
+	WMT_PATCH_P_ADDRESS_CMD[8] = 0x7c; WMT_PATCH_P_ADDRESS_CMD[9] = 0x0b;
+}
+wmt_core_tx(WMT_PATCH_ADDRESS_CMD, 20)  -> ждём WMT_PATCH_ADDRESS_EVT (8 байт)
+WMT_PATCH_P_ADDRESS_CMD[12..15] = addressByte[0..3]   /* адрес из userspace */
+wmt_core_tx(WMT_PATCH_P_ADDRESS_CMD)    -> ждём WMT_PATCH_P_ADDRESS_EVT
+for (fragSeq...) { WMT_PATCH_CMD[4]=1ST/MID/LAST; wmt_core_tx(5+size); wmt_core_rx(WMT_PATCH_EVT, 5); }
+```
+
+`wmt_core_tx/rx` (`core/wmt_core.c:368/395`) — это `wmt_ctrl(WMT_CTRL_TX/RX)`,
+т.е. **транспорт STP**, не MCIF. Ретраи: при `WMT_CHIP_TYPE_SOC` и нулевом
+`writtenSize` — 3 попытки по 360 мс (`:378-390`).
+
+Имя файла и адрес в ядре **не выбираются**: `WMT_CTRL_GET_ROM_PATCH_INFO`
+(`wmt_ic_soc.c:3408`) спрашивает userspace (`wmt_loader`, `srh_rom_patch`), а
+fallback — `wmt_lib_def_patch_name()` (`wmt_lib.c:1639`, строка задаётся ioctl
+`WMT_IOCTL_SET_PATCH_NAME`, `wmt_dev.c:874`). Поэтому «1_0 или 1_1» по коду
+не определяется — это выбор демона; в нашем наборе есть оба файла
+(`/lib/firmware/ROMv4_be_patch_1_{0,1}_hdr.bin`, sha из `refs/aurora-5.2.1.200.md`).
+
+### 42.2 Транспорт: STP на MT6771 — это BTIF, а не окно `0x180f0000`
+
+Регистры STP-функции (`common_main/linux/include/stp_sdio.h:63-71`):
+`CCIR 0x00, CHLPCR 0x04, CSDIOCSR 0x08, CHCR 0x0c, CHISR 0x10, CHIER 0x14,
+CTDR 0x18, CRDR 0x1c, CTFSR 0x20` — те же смещения, что у WLAN-HIF
+(`WCIR 0x0 … WHIER 0x14, WASR 0x20`), и именно это путало: тот же блок, другая
+функция. Данные STP идут в `CTDR 0x18`/`CRDR 0x1c` с 4-байтным префиксом
+«длина+2» (`stp_sdio.c:1285`).
+
+Проверка на железе (патч 0009-wlan, `t1100_stp_probe()`, CMD53 с func=0/1/2):
+
+```
+func0: 00=00000043 04=00000003 08=00000017 10=00000000 14=00000007 18=00000000 1c=00000000
+func1: 00=00100788 04=00000100 08=0000000d 10=00000041 14=ffffff47 18=00000000 1c=00000000
+func2: 00=00100788 04=00000000 08=00000001 10=00000000 14=00000000 18=00000000 1c=00000000
+```
+
+Вывод: AHB-порт **не даёт отдельного пространства STP-функции** — `CTDR/CRDR`
+(0x18/0x1c) читаются нулями, `CHISR/CHLPCR` не отвечают, а func=2 по адресу 0
+возвращает тот же `WCIR`. Готового «STP over MCR» нет: в `mt6630_reg.h` нет ни
+`WCMDW/WCMDR`, ни `WTDR0/WRDR`-пары для STP, а `wmt_core_tx` умеет только
+`WMT_HIF_UART/SDIO/BTIF` (`wmt_core.h:119`).
+
+Что говорит сток, что транспорт — BTIF:
+- `refs/device/config-stock.gz`: `CONFIG_MTK_BTIF=y` (и `CONFIG_MTK_COMBO_CHIP_CONSYS_6771=y`);
+- `refs/stock-mt6771.dts:2198-2204`: `btif@1100c000`, `compatible="mediatek,btif"`,
+  три IRQ, клоки `btifc/apdmac`;
+- лог стока: `opfunc_wlan_probe(): hifType: 0x2` = `WMT_HIF_BTIF`;
+- `stp_btif.c:80` вызывает `mtk_wcn_btif_open()` — драйвер
+  `drivers/misc/mediatek/btif`, в mainline 6.12 его нет (`mediatek,btif`
+  не встречается в `drivers/`).
+
+**Итог:** ROMv4-патч нельзя доставить через MCR-порты, которыми работают
+`section-config`/`WIFI_START`. Не хватает драйвера BTIF (`mediatek,btif`,
+0x1100c000) либо полноценного STP-транспорта поверх него — это отдельный рубеж.
+
+### 42.3 Что сделано в коде и прогон
+
+- EMI-путь выключен по умолчанию: `consys_dl_rom_patch()` вызывается только
+  при `t1100_emi_rom_patch=1` (`0009-common-mt6771-consys-rompatch.patch`).
+- `0009-wlan-query-status-and-two-start.patch` дополнен `t1100_stp_probe()`
+  (`ahb.c`, read-only CMD53 по func 0/1/2) и параметром `t1100_stp_probe_en`.
+- Модули: `wmt_drv.ko` `71f9ffcc…c9020ef` (1 119 320 Б),
+  `wlan_drv_gen3.ko` `02764d83…6523bdc` (2 910 072 Б), vermagic
+  `6.12.114-g400cb6f-touch-rot`, против `/home/l/t1100-merge2-out`.
+- Прогон `t1100_probe=1 t1100_probe_stage=3 t1100_no_reset=1`
+  (`/root/m21.log`, `/root/m21-regs.txt`): в логе нет ни одной строки
+  `rompatch: ip_ver/EMI …` (EMI-запись не выполняется), `section-config`
+  `status=0` ×2, `wlanImageQueryStatus()=0`, `WIFI_START` c `0xa5800` и
+  `0x020a1000` — `status=0`, `cpupcr` `0x1170 → 0x473e/0x14ef8` и
+  `0x19e6 → …` (ROM), `WCIR=0x00100788`, READY=0, `wlan0` нет, oops нет.
+
+### 42.4 Следующий шаг
+
+Реализовать BTIF как транспорт WMT: `mediatek,btif` @ `0x1100c000` (три IRQ
+0x72/0x8b/0x8c, клоки `btifc`/`apdmac`) + минимальный `mtk_btif_open/tx/rx`,
+который ждёт `stp_btif.c`, и только затем позвать
+`mtk_wcn_soc_normal_patch_dwn()`-эквивалент с `ROMv4_be_patch_1_0_hdr.bin`.
+Альтернатива — протокол `INIT_CMD_ID_PATCH_START/WRITE/FINISH`
+(`include/nic_init_cmd_event.h:63-65`): он идёт по уже рабочему MCIF, но в
+наших исходниках есть только идентификаторы команд, без форматов структур,
+поэтому это будет угадывание.

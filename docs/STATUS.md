@@ -3090,6 +3090,28 @@ EMI-путь — механизм mt6765/6761, в `mt6771.c` такого шаг
 сброса и `PWRON_CONFG_EN`), добавлен `0009-wlan-query-status-and-two-start.patch`.
 Модули `f862e768…c91c63` / `6465d6b1…bcbe7262`, oops нет, плата жива, `wlan0` нет.
 Подробности и следующий шаг (STP over MCR `WTDR1 0x34`) — `docs/wifi-port-log.md` §41.
+
+## 12.11 (35): Wi-Fi M21 — ROMv4-протокол разобран, транспорт = BTIF (не MCR)
+
+Патч `ROMv4_be_patch_1_{0,1}_hdr.bin` доставлен быть не может через MCR-порты:
+STP на MT6771 идёт через **BTIF** (`CONFIG_MTK_BTIF=y`, `btif@1100c000`,
+`hifType=0x2` в логе стока, `stp_btif.c:80` → `mtk_wcn_btif_open()`), а
+AHB-порт `0x180f0000` отдельного пространства STP-функции не даёт — проверено
+read-only CMD53 по func 0/1/2: `CTDR/CRDR` (0x18/0x1c) = 0, `CHISR/CHLPCR` не
+отвечают, func=2 по адресу 0 возвращает тот же `WCIR`. Драйвера `mediatek,btif`
+в mainline 6.12 нет.
+
+Протокол из исходников зафиксирован: `WMT_PATCH_ADDRESS_CMD` (для `0x0788` —
+«ROMv4 patch RAM base», `[8..9]=0x18/0x05`), `WMT_PATCH_P_ADDRESS_CMD`
+(`0x7c/0x0b` + адрес из userspace), фрагменты `WMT_PATCH_CMD` по 1000 Б с
+флагами 1/2/3, ответы `WMT_PATCH_ADDRESS_EVT`/`WMT_PATCH_EVT`; имя файла
+(1_0 vs 1_1) выбирает `wmt_loader`, не ядро.
+
+EMI-путь (`soc3_0_ram_mcu_e1_hdr.bin` → `EMI+0`) выключен по умолчанию
+(`t1100_emi_rom_patch=0`). Прогон stage=3: EMI-записи в логе нет, `section-config`
+status=0 ×2, `wlanImageQueryStatus()=0`, `WIFI_START` c `0xa5800`/`0x020a1000`
+status=0, `WCIR=0x00100788` READY=0, `wlan0` нет, oops нет. Модули
+`71f9ffcc…c9020ef` / `02764d83…6523bdc`. Следующий рубеж — BTIF-транспорт WMT.
 ## 13.11 (1): GPU DVFS включён (0058/0059), high-OPP 698/743/800
 
 - `0058-soc-mediatek-regulator-coupler-support-MT6771-and-MT8788.patch`:
