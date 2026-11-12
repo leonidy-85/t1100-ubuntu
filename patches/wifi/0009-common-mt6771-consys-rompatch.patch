@@ -1,5 +1,5 @@
---- a/common_main/platform/mt6771.c
-+++ b/common_main/platform/mt6771.c
+--- a/common_main/platform/mt6771.c	2026-11-12 23:58:33.952006350 +0300
++++ b/common_main/platform/mt6771.c	2026-11-13 00:00:07.341896936 +0300
 @@ -42,6 +42,10 @@
  #include "osal_typedef.h"
  #include "mt6771.h"
@@ -19,7 +19,21 @@
  static UINT32 consys_emi_set_remapping_reg(VOID);
  static INT32 bt_wifi_share_v33_spin_lock_init(VOID);
  static INT32 consys_clk_get_from_dts(struct platform_device *pdev);
-@@ -561,10 +566,25 @@
+@@ -482,6 +487,13 @@
+ static VOID consys_hw_spm_clk_gating_enable(VOID)
+ {
+ 	/*turn on SPM clock gating enable PWRON_CONFG_EN 0x10006000 32'h0b160001 */
++	/*
++	 * T1100: left empty as in the vendor source. The value from the comment
++	 * (CONSYS_PWRON_CONFG_EN_VALUE) was tried and the hardware only kept
++	 * bit 0 of it, i.e. it is not the CONN main clock gate and changed
++	 * nothing (cpupcr 0x1170 -> 0x1572c, READY still 0): see
++	 * docs/wifi-port-log.md §36.
++	 */
+ }
+ 
+ /*
+@@ -561,10 +573,25 @@
  		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
  				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
  				 ~CONSYS_SPM_PWR_ISO_S_BIT);
@@ -45,7 +59,7 @@
  		/*disable AXI BUS protect: 0x100012a4 is write-1-to-clear */
  		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_CLR_OFFSET,
  				 CONSYS_PROT_MASK);
-@@ -650,6 +670,109 @@
+@@ -650,6 +677,109 @@
  	return 0;
  }
  

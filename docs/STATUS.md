@@ -3064,3 +3064,29 @@ ROM_DESEL и ROM-patch (патч 0010 пишет патч внутри `consys_h
 `0x18070008` ⇒ под вопросом сама идентификация окна WCIR для MT6631; проверять
 следующим узким шагом вместе с формой `WIFI_START` (seq/ack) и
 `wlanImageQueryStatus`.
+
+## 12.11 (34): Wi-Fi M20 — MCR-окно верное, вопрос был в дампе; ROMv4-патч идёт по STP
+
+Гипотеза «READY читается не из того регистра» **закрыта**. В `ahb_sdioLike`
+регистры MCU не memory-mapped: `sdio_cr_readl()` (`sdio_bus_driver.c:107`)
+пишет слово CMD53 в `0x180f0000+0x0` и читает ответ из `+0x1000`, а
+`HAL_MCR_RD` (`hal.h:214`) идёт именно этим путём. Поэтому `0x1000f004` из §40 —
+это leftover командного слова (func=1, `addr=0x78` = mailbox 0, count=4, read),
+а не chip-id. Замер в одном прогоне: настоящий `WCIR=0x00100788` (chipid 0x788,
+POR=1, READY=0), сырое `0x180f0000` = 0 ⇒ READY действительно не встаёт.
+
+`wlanImageQueryStatus()` (раскрыт из `#if !CFG_ENABLE_FW_DOWNLOAD_ACK`) вернул
+**0 = ok**: MCU считает образ принятым. `WIFI_START` с `0xa5800` и `0x020a1000` —
+оба `status=0`, `cpupcr` уходит с `0x1572a` в `0x700…0x18000` (ROM), READY=0
+⇒ адрес старта не блокер, MCU не уходит в RAM-код.
+
+Ключевое: для chip-id `0x788` вендор качает ROM-патч **по STP**
+(`mtk_wcn_soc_normal_patch_dwn()`, `wmt_ic_soc.c:2753`: для `0x0788` — «ROMv4
+patch RAM base» + фрагменты `WMT_PATCH_CMD` через `wmt_core_tx`), а не в EMI;
+EMI-путь — механизм mt6765/6761, в `mt6771.c` такого шага нет. Значит патч
+0009 (EMI+0) не вендорский; файла `ROMv4_be_patch_1_0_hdr.bin` (229 384 Б) в
+нашем наборе нет. Код: накопительные 0009…0012 заменены одним
+`0009-common-mt6771-consys-rompatch.patch` (убраны перезапись `ROM_DESEL` после
+сброса и `PWRON_CONFG_EN`), добавлен `0009-wlan-query-status-and-two-start.patch`.
+Модули `f862e768…c91c63` / `6465d6b1…bcbe7262`, oops нет, плата жива, `wlan0` нет.
+Подробности и следующий шаг (STP over MCR `WTDR1 0x34`) — `docs/wifi-port-log.md` §41.

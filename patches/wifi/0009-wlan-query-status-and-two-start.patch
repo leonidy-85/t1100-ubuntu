@@ -1,0 +1,193 @@
+--- a/common/wlan_lib.c	2026-11-12 23:58:33.995375290 +0300
++++ T/wlan/common/wlan_lib.c	2026-11-13 00:01:27.275364482 +0300
+@@ -161,6 +161,46 @@
+ 			r[i + 4], r[i + 5], r[i + 6], r[i + 7]);
+ }
+ 
++/*
++ * T1100 M20: the WCIR lives on the *MCU* side; the AP reaches it only through
++ * the SDIO-like command port of the AHB HIF (os/linux/hif/ahb_sdioLike/
++ * sdio_bus_driver.c: sdio_cr_readl() writes a CMD53 word to HifRegBaseAddr+0x0
++ * and reads the answer back from HifRegBaseAddr+0x1000). A plain load of
++ * 0x180f0000 therefore returns the *last command word*, not WCIR - that is
++ * where 0x1000f004 in §40.2 came from (addr=0x78, count=4, func=1, read =
++ * the D2H mailbox read of the READY timeout path). Print both so the two can
++ * never be confused again.
++ */
++static void t1100_hif_state(P_ADAPTER_T prAdapter, const char *tag)
++{
++	UINT_32 u4Wcir = 0, u4Wasr = 0, u4Mbox0 = 0, u4Cpupcr = 0;
++
++	HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Wcir);
++	HAL_MCR_RD(prAdapter, MCR_WASR, &u4Wasr);
++	HAL_MCR_RD(prAdapter, MCR_D2HRM0R, &u4Mbox0);
++	wlanGetCpupcr(&u4Cpupcr);
++
++	pr_info("t1100-hif[%s]: WCIR=0x%08x chipid=0x%04x rev=%u POR=%u READY=%u WASR=0x%08x mbox0=0x%08x cpupcr=0x%08x\n",
++		tag, u4Wcir, (UINT_16)(u4Wcir & WCIR_CHIP_ID),
++		(UINT_32)((u4Wcir & WCIR_REVISION_ID) >> 16),
++		!!(u4Wcir & WCIR_POR_INDICATOR), !!(u4Wcir & WCIR_WLAN_READY),
++		u4Wasr, u4Mbox0, u4Cpupcr);
++
++	/* the raw window: CMD_SETUP / CMD52_DATA / CMD53_DATA of the HIF */
++	if (prAdapter->prGlueInfo->rHifInfo.HifRegBaseAddr) {
++		UINT_8 *p = prAdapter->prGlueInfo->rHifInfo.HifRegBaseAddr;
++
++		pr_info("t1100-hif[%s]: raw hif phy=0x%lx setup=0x%08x cmd52=0x%08x cmd53=0x%08x (cmd word: func=%u addr=0x%x cnt=%u rw=%u)\n",
++			tag, prAdapter->prGlueInfo->rHifInfo.HifRegPhyBase,
++			readl((void __iomem *)(p + 0x0)), readl((void __iomem *)(p + 0x4)),
++			readl((void __iomem *)(p + 0x1000)),
++			(UINT_32)((readl((void __iomem *)(p + 0x0)) >> 28) & 0x7),
++			(UINT_32)((readl((void __iomem *)(p + 0x0)) >> 9) & 0x1ffff),
++			(UINT_32)(readl((void __iomem *)(p + 0x0)) & 0x1ff),
++			(UINT_32)((readl((void __iomem *)(p + 0x0)) >> 31) & 0x1));
++	}
++}
++
+ #if CFG_ENABLE_FW_DIVIDED_DOWNLOAD
+ static WLAN_STATUS
+ wlanImageDividDownloadByEntry(IN P_ADAPTER_T prAdapter,
+@@ -617,42 +657,81 @@
+ #endif
+ 		kalFirmwareImageUnmapping(prAdapter->prGlueInfo, NULL, prFwBuffer);
+ 		DBGLOG(INIT, INFO, "FW download end\n");
++
++		/*
++		 * T1100 M20: ask the MCU itself what it thinks about the image it
++		 * just received (INIT_CMD_ID_QUERY_PENDING_ERROR). With
++		 * CFG_ENABLE_FW_DOWNLOAD_ACK=1 the normal path never does this.
++		 */
++		{
++			WLAN_STATUS u4QueryStatus = wlanImageQueryStatus(prAdapter);
++
++			pr_info("t1100-query: wlanImageQueryStatus() -> %u (0=ok)\n",
++				(UINT_32)u4QueryStatus);
++		}
++		t1100_hif_state(prAdapter, "after-download");
+ #endif
+ 
+ 		/* 4. send Wi-Fi Start command */
+-#if CFG_OVERRIDE_FW_START_ADDRESS
+-		wlanConfigWifiFunc(prAdapter, TRUE, prRegInfo->u4StartAddress);
+-#else
+-		wlanConfigWifiFunc(prAdapter, FALSE, 0);
+-#endif
++		{
++			/*
++			 * T1100 M20: the image has two candidate entry points, one
++			 * per MCU memory of the divided image: section 1 (0xa5800,
++			 * MCU IRAM, what the vendor DT passes) and section 0
++			 * (0x020a1000, MCU DRAM). Try both and log cpupcr after
++			 * each, so the two can be compared in one run.
++			 */
++			static const UINT_32 au4Start[2] = { 0x000a5800, 0x020a1000 };
++			BOOLEAN fgReady = FALSE;
++			UINT_32 u4Try;
++
++			for (u4Try = 0; u4Try < 2 && fgReady == FALSE; u4Try++) {
++				UINT_32 u4Cpupcr = 0;
++
++				wlanGetCpupcr(&u4Cpupcr);
++				pr_info("t1100-start[%u]: addr=0x%08x cpupcr before 0x%08x\n",
++					u4Try, au4Start[u4Try], u4Cpupcr);
++
++				wlanConfigWifiFunc(prAdapter, TRUE, au4Start[u4Try]);
++
++				DBGLOG(INIT, TRACE, "Waiting for Ready bit..\n");
++				/* 4 <5> check Wi-Fi FW asserts ready bit */
++				i = 0;
++				while (1) {
++					HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Value);
++
++					if (u4Value & WCIR_WLAN_READY) {
++						DBGLOG(INIT, INFO, "Ready bit asserted\n");
++						fgReady = TRUE;
++						break;
++					} else if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE ||
++						   fgIsBusAccessFailed == TRUE) {
++						break;
++					} else if (i >= CFG_RESPONSE_POLLING_TIMEOUT) {
++						UINT_32 u4MailBox0;
+ 
+-		DBGLOG(INIT, TRACE, "Waiting for Ready bit..\n");
+-		/* 4 <5> check Wi-Fi FW asserts ready bit */
+-		i = 0;
+-		while (1) {
+-			HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Value);
++						nicGetMailbox(prAdapter, 0, &u4MailBox0);
++						DBGLOG(INIT, ERROR,
++						       "Waiting for Ready bit timeout, Device to Host MailBox 0x%x\n",
++						       (u4MailBox0 & 0x0000FFFF));
++						break;
++					}
+ 
+-			if (u4Value & WCIR_WLAN_READY) {
+-				DBGLOG(INIT, INFO, "Ready bit asserted\n");
+-				break;
+-			} else if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE || fgIsBusAccessFailed == TRUE) {
+-				u4Status = WLAN_STATUS_FAILURE;
+-				eFailReason = WAIT_FIRMWARE_READY_FAIL;
+-				break;
+-			} else if (i >= CFG_RESPONSE_POLLING_TIMEOUT) {
+-				UINT_32 u4MailBox0;
++					i++;
++					kalMsleep(10);
++				}
+ 
+-				nicGetMailbox(prAdapter, 0, &u4MailBox0);
+-				DBGLOG(INIT, ERROR, "Waiting for Ready bit timeout, Device to Host MailBox 0x%x\n",
+-				       (u4MailBox0 & 0x0000FFFF));
++				wlanGetCpupcr(&u4Cpupcr);
++				pr_info("t1100-start[%u]: addr=0x%08x cpupcr after 0x%08x ready=%u\n",
++					u4Try, au4Start[u4Try], u4Cpupcr, fgReady);
++				t1100_hif_state(prAdapter, "after-wifi-start");
++			}
++
++			if (fgReady == FALSE) {
+ 				u4Status = WLAN_STATUS_FAILURE;
+ 				eFailReason = WAIT_FIRMWARE_READY_FAIL;
+ 				GL_RESET_TRIGGER(prAdapter, RST_FLAG_DO_CORE_DUMP | RST_FLAG_PREVENT_POWER_OFF);
+-				break;
+ 			}
+-
+-			i++;
+-			kalMsleep(10);
+ 		}
+ 
+ 		if (u4Status == WLAN_STATUS_SUCCESS) {
+@@ -2922,7 +3001,13 @@
+ 	}
+ }
+ 
+-#if !CFG_ENABLE_FW_DOWNLOAD_ACK
++/*
++ * T1100: compiled unconditionally. With CFG_ENABLE_FW_DOWNLOAD_ACK=1 the
++ * driver never learns what the MCU thinks about the image it just received,
++ * which is exactly the information missing at the "READY never asserts" step
++ * (docs/wifi-port-log.md §32). wlanAdapterStart() calls it once for the log.
++ */
++#if 1 /* was: #if !CFG_ENABLE_FW_DOWNLOAD_ACK */
+ /*----------------------------------------------------------------------------*/
+ /*!
+ * @brief This function is called to confirm previously firmware download is done without error
+@@ -3042,7 +3127,8 @@
+ 	return u4Status;
+ }
+ 
+-#else
++#endif /* T1100: was #else - the ACK path below is independent of the query */
++#if CFG_ENABLE_FW_DOWNLOAD_ACK
+ /*----------------------------------------------------------------------------*/
+ /*!
+ * @brief This function is called to confirm the status of
+--- a/include/wlan_lib.h	2026-11-11 17:39:05.000000000 +0300
++++ T/wlan/include/wlan_lib.h	2026-11-12 23:59:20.166620971 +0300
+@@ -757,6 +757,8 @@
+ WLAN_STATUS wlanImageQueryStatus(IN P_ADAPTER_T prAdapter);
+ #else
+ WLAN_STATUS wlanImageSectionDownloadStatus(IN P_ADAPTER_T prAdapter, IN UINT_8 ucCmdSeqNum);
++/* T1100: kept on purpose, called once by wlanAdapterStart() for diagnostics */
++WLAN_STATUS wlanImageQueryStatus(IN P_ADAPTER_T prAdapter);
+ #endif
+ 
+ WLAN_STATUS wlanConfigWifiFunc(IN P_ADAPTER_T prAdapter, IN BOOLEAN fgEnable, IN UINT_32 u4StartAddress);
