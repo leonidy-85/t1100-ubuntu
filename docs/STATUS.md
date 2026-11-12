@@ -3211,3 +3211,33 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
   `wlan0` нет. Артефакты: `refs/m24-btif-bus-write-dead.md`,
   `tools/device/btif-probe.sh`; прогон — повторить на стоке Aurora и сравнить
   дамп infracfg/pericfg/SPM/DEVAPC.
+
+## 13.11 (5): USB host/OTG — флешка видна, динамический возврат нестабилен
+
+- Патч **0060** (`phy: mediatek: tphy: Add software role switching`,
+  adomerle `96fe48bed8`) заменяет старый 0020 `force-device-mode`: T-PHY
+  управляется workqueue по `usb_role_switch`, добавлены `usb-role-switch`,
+  `role-switch-default-mode = "peripheral"` и graph PHY↔ssusb.
+- Патч **0061** (`arm64: dts: t1100: enable USB role switch and OTG VBUS`):
+  `dr_mode = "otg"`, `mediatek,software-role-switch`, graph endpoints;
+  MT6370 OTG boost `mt6370_otg_vbus` подключён как `vbus-supply`.
+- `patches/series`: 0020 удалён, 0060/0061 добавлены в конец.
+- Образ `build/boot_usb_host.img` 33,554,432 B, sha256
+  `c79819ee2219d169204dfb957b38ffc5ff38340e0c28aa42bd72941e97713d9b`,
+  p29 md5 `d0d9bca926d8bf82e6a95732502b3c40`; Image `381f7e1b…`,
+  DTB `3de99997…`; cmdline `maxcpus=8`. Откат —
+  `/tmp/opencode/boot_a_before_usb_role.img`.
+- Проверено на `boot_usb_host`: role switch `device → host → device`,
+  dmesg `software role switch enabled`, `mtu3 dr_mode: 3`, VBUS
+  5050 мВ / 2400 мА. В host с флешкой: `usb-storage`, `sd 0:0:0:0`,
+  62.9 GB, `sda1 sda2` — **флешка определяется**.
+- Ограничение: возврат `host → device` при активном xHCI убивает контроллер
+  (`xHCI host not responding`, `HC died`). Kernel-фикс с
+  `ssusb_host_exit/host_init` вызывал перезагрузку при входе в host; unbind
+  xHCI из userspace тоже привёл к boot loop. Оба варианта откачены.
+- Текущее состояние: p29 = `boot_usb_host` (md5 `d0d9bca9…`), role `device`,
+  SSH/RNDIS работают, 8 ядер; failed только `accounts-daemon.service`.
+  Host включать можно, возврат — **только перезагрузкой**.
+- Следующее: не трогать dynamic role switch; при необходимости — корректный
+  останов xHCI/host controller перед сменой роли, затем оформить 0060/0061
+  в git и docs.

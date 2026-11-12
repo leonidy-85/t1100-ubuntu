@@ -5,7 +5,7 @@
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
 > **Статус (13.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
-> mainline 6.12.114 + патчи 0001–0059 (0035 отключён): ядро доходит до `systemd running`,
+> mainline 6.12.114 + патчи 0001–0061 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
 > заряжается** (`mt6370-charger`), **`poweroff` плату гасит** (0034).
@@ -16,9 +16,13 @@
 > `glmark2` Score 1409/1583, но в отдельных shader-сценах есть таймауты
 > panfrost — отдельный баг, не DVFS. KDE Plasma 6.6.4 + SDDM (autologin root).
 > Тач HX83102E работает (`boot_touch8`, native portrait; KWin сам поворачивает —
-> 0051). Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Дальше:
-> panfrost shader timeout, Wi-Fi/BT (фаза 5), USB host/OTG, suspend, задержка
-> выделения. Состояние и план — `docs/STATUS.md`, `docs/handover.md`.
+> 0051). Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS.
+> **USB host/OTG (0060/0061):** host-режим работает — флешка определяется
+> (`sda`, 62.9 GB), MT6370 выдаёт VBUS 5 В; динамический возврат host→device
+> нестабилен (xHCI), поэтому возврат — только перезагрузкой.
+> Дальше: panfrost shader timeout, Wi-Fi/BT (фаза 5), безопасный возврат
+> USB-роли, suspend, задержка выделения. Состояние и план — `docs/STATUS.md`,
+> `docs/handover.md`.
 >
 > ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
 > подтверждена косвенно (петли сбросов нет), лог подтверждения — следующий шаг.
@@ -148,7 +152,7 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | PMIC MT6358 / power domains | ✅ рельсы и домены поднимаются; зарядка и `poweroff` работают (0031–0034) |
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
 | Логи без UART/экрана | ✅ своя зона `ramoops@70000000` + чтение из рекавери (`/proc/last_kmsg`) |
-| USB (mtu3/UDC) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH по ключу; host/OTG — нет |
+| USB (mtu3/UDC + host) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH; host — флешка `sda` 62.9 GB, VBUS 5 В (0060/0061); возврат host→device — только reboot |
 | Ubuntu rootfs | ✅ Ubuntu 24.04.3 arm64 + systemd на `p54` (ext4, метка `ubuntu`), грузится |
 | DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ панель работает (0038), `modetest` выставляет режим; фаза 2 закрыта |
 | GPU panfrost (Mali-G72) | ✅ 0039 прошит: Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps, `glmark2` Score 452 |
