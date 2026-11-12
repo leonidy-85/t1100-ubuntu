@@ -2912,3 +2912,21 @@ mainline нет, а `mt_emi_api.h` в compat — пустая заглушка (
 `wlanImageSectionConfig()/Download()` и `wlanConfigWifiFunc()` (WIFI_START, его
 return игнорируется) реально доходят до MCU, затем ROM-patch по образцу
 `mt6765.c` с `soc3_0_ram_mcu_e1_hdr.bin`. `wlan0` нет.
+
+## 12.11 (24): Wi-Fi M10 — MCIF исправен, `WIFI_START` шёл без адреса старта
+
+Дамп MCR-страницы `0x180f0000` до/после команд и return-коды: `section-config`
+→ `status=0` дважды, причём этот статус = ответ MCU на `INIT_EVENT_ID_CMD_RESULT`
+(`CFG_ENABLE_FW_DOWNLOAD_ACK=1`), и `WASR (0x20)` меняется `0x10200 -> 0x200`.
+**Команды доходят до MCU, MCIF исправен.**
+
+`WCIR (0x00) = 0x00100788` — chip id `0x788` совпадает с DT, `WLAN_READY`
+(бит21) = 0 всегда. Причина: `include/config.h:569`
+`CFG_OVERRIDE_FW_START_ADDRESS 0` → `wlanConfigWifiFunc(prAdapter, FALSE, 0)`,
+т.е. чипу говорили «стартуй по умолчанию», а адрес из DT
+(`hardware-values[2] = 0xa5800`) не передавался. Патч **0008** включает
+override: теперь `WIFI_START override=1 addr=0x000a5800 seq=3 -> status=0`,
+но READY всё равно 0 (`cpupcr 0x1572a`) → нужен ROM-patch.
+
+Гейт `wifi-dma` (`infra_cqdma`) с патча 0007 включён (`enable=1`, 156 МГц).
+`wlan0` нет.
