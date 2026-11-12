@@ -14,6 +14,20 @@ KeyboardLayout {
     readonly property real functionKeyWidth: mapFromItem(normalKey, normalKey.width / 2, 0).x
     KeyboardRow {
         Layout.fillHeight: true
+        Key { Layout.minimumHeight: 0; key: Qt.Key_Escape; text: "Esc" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F1; text: "F1" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F2; text: "F2" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F3; text: "F3" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F4; text: "F4" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F5; text: "F5" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F6; text: "F6" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F7; text: "F7" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F8; text: "F8" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F9; text: "F9" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F10; text: "F10" }
+    }
+    KeyboardRow {
+        Layout.fillHeight: true
         Key { Layout.minimumHeight: 0; key: Qt.Key_1; text: "1"; alternativeKeys: "!1"; smallText: "!"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_2; text: "2"; alternativeKeys: "@2"; smallText: "@"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_3; text: "3"; alternativeKeys: "#3"; smallText: "#"; smallTextVisible: true }
@@ -27,6 +41,11 @@ KeyboardLayout {
     }
     KeyboardRow {
         Layout.fillHeight: true
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Tab
+            text: "Tab"
+        }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_Q
@@ -232,6 +251,13 @@ KeyboardLayout {
             weight: functionKeyWidth
             Layout.fillWidth: false
         }
+    }
+    KeyboardRow {
+        Layout.fillHeight: true
+        Key { Layout.minimumHeight: 0; key: Qt.Key_Left; text: "←"; weight: normalKeyWidth; Layout.fillWidth: false }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_Up; text: "↑"; weight: normalKeyWidth; Layout.fillWidth: false }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_Down; text: "↓"; weight: normalKeyWidth; Layout.fillWidth: false }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_Right; text: "→"; weight: normalKeyWidth; Layout.fillWidth: false }
     }
     KeyboardRow {
         Layout.fillHeight: true
