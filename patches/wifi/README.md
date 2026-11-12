@@ -25,6 +25,7 @@ wlan     github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectiv
 | `0001-common-port-6.12.patch` | `common` | порт WMT-ядра 4.14 → 6.12 (API, probe/driver_unregister, CCF-заглушки) |
 | `0002-common-consys-power-on-dt.patch` | `common` | питание CONSYS из mainline-DT (регуляторы/`of_iomap`/IRQ) |
 | `0004-common-export-wmt-plat-pwr-ctrl.patch` | `common` | `EXPORT_SYMBOL(wmt_plat_pwr_ctrl)` — чтобы WLAN мог питать чип в обход STP |
+| `0005-common-consys-spm-power-on.patch` | `common` | питание CONN по-настоящему: SPM-последовательность, когда клока `conn` нет (mainline), и корректная снятие AXI-protect (`0x100012a4` — write-1-to-clear) |
 | `0001-wlan-port-6.12.patch` | `wlan` | порт gen3 4.14 → 6.12 |
 | `0002-wlan-port-6.12-vendor-commands.patch` | `wlan` | выключены MTK vendor-команды (`wiphy_register` требует `.policy`) |
 | `0003-wlan-t1100-probe-param.patch` | `wlan` | модульный параметр `t1100_probe=1`: питание чипа + `wlanProbe()` из `initWlan` (M6) |
