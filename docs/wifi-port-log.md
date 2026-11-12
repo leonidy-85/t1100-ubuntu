@@ -2088,3 +2088,41 @@ EMI уже нет.
 `~CONSYS_SPM_PWR_ISO_S_BIT` (снятие изоляции) и `| CONSYS_SPM_PWR_RST_BIT`
 (снятие сброса), — тогда MCU прочитает патч при выходе из сброса. Альтернатива:
 после записи дёрнуть `mtk_wcn_consys_hw_rst()` (off/on), но это дороже.
+
+## 34. M12: ROM-patch пишется до снятия сброса — MCU всё равно в ROM (12.11)
+
+Порядок в `consys_hw_power_ctrl_spm()` (патч 0010):
+
+```c
+	/*9.release connsys ISO, conn_top1_iso_en=0 0x1000632C [1]  1'b0 */
+	CONSYS_REG_WRITE(... & ~CONSYS_SPM_PWR_ISO_S_BIT);
+	if (consys_dl_rom_patch(0))                      /* <-- патч в EMI+0 */
+		WMT_PLAT_PR_WARN("rompatch: not written, MCU boots unpatched\n");
+	/*10.release SW reset of connsys, conn_ap_sw_rst_b=1  0x1000632C[0] */
+	CONSYS_REG_WRITE(... | CONSYS_SPM_PWR_RST_BIT);
+	cpupcr right after reset / +50ms / +100ms
+```
+
+Замеры:
+
+```
+rompatch: addr=0xf0000000 off=0x0 type=0x4000000 total=165344 body=165296
+rompatch: EMI 0xbfc00000 readback 0000dbb0 00018830 000021a0 00002130   <- легло
+rompatch: cpupcr right after reset 0x00000000
+rompatch: cpupcr +50ms           0x00000000
+rompatch: cpupcr +100ms          0x00000000
+... позже в probe: cpupcr 0x15730 / 0x1572a    <- MCU всё-таки стартовал и ушёл в ROM-петлю
+```
+
+Прочее в этот момент: `0x18070008 = 0x788` (chip id), `WCIR 0x180f0000 =
+0x1000f004` (READY=0), `0x18070000/0x04 = 0x8a00`, MCU hang-debug
+`0x18070400/404/408 = 0` (пусто). К моменту probe `EMI+0` уже перезаписан
+секцией WLAN-прошивки (`0xbcaa6f3a…`).
+
+**Вывод:** порядок исправлен (патч гарантированно в EMI до выхода MCU из
+сброса), но MCU его не принимает: либо ожидает патч по другому смещению, либо
+проверяет `u2SwVer`/`u4PatchType`/`ucPLat` из заголовка и отвергает наш файл
+(заголовок в EMI вендор не кладёт — только тело), либо патч для MT6771 вообще
+не про MCU-ROM, а про BT/GPS-часть (файл `*_mcu_*` при этом единственный).
+Дальше без RE не продвинуться: нужно найти в стоковом `wmt_loader`/ROM таблицу
+`addRess[]` для `srh_rom_patch` (какое смещение и какая проверка версии).

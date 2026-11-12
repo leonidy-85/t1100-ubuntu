@@ -1,0 +1,157 @@
+--- a/common_main/platform/mt6771.c
++++ b/common_main/platform/mt6771.c
+@@ -42,6 +42,10 @@
+ #include "osal_typedef.h"
+ #include "mt6771.h"
+ #include "mtk_wcn_consys_hw.h"
++#include "wmt_core.h"
++#include <linux/fs.h>
++#include <linux/file.h>
++#include <linux/slab.h>
+ 
+ #ifdef CONFIG_MTK_EMI
+ #include <mt_emi_api.h>
+@@ -90,6 +94,7 @@
+ static INT32 consys_hw_bt_vcn33_ctrl(UINT32 enable);
+ static UINT32 consys_soc_chipid_get(VOID);
+ static INT32 consys_emi_mpu_set_region_protection(VOID);
++static INT32 consys_dl_rom_patch(UINT32 ip_ver);
+ static UINT32 consys_emi_set_remapping_reg(VOID);
+ static INT32 bt_wifi_share_v33_spin_lock_init(VOID);
+ static INT32 consys_clk_get_from_dts(struct platform_device *pdev);
+@@ -561,10 +566,25 @@
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
+ 				 ~CONSYS_SPM_PWR_ISO_S_BIT);
++		/*
++		 * T1100: the ROM patch has to be in EMI *before* the MCU leaves
++		 * reset, otherwise it boots with an empty patch area and parks in
++		 * its ROM loop (cpupcr 0x1572a) - measured in §33.
++		 */
++		if (consys_dl_rom_patch(0))
++			WMT_PLAT_PR_WARN("rompatch: not written, MCU boots unpatched\n");
+ 		/*10.release SW reset of connsys, conn_ap_sw_rst_b=1  0x1000632C[0]   1'b1 */
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
+ 				 CONSYS_SPM_PWR_RST_BIT);
++		WMT_PLAT_PR_INFO("rompatch: cpupcr right after reset 0x%08x\n",
++				 CONSYS_REG_READ(conn_reg.mcu_base + CONSYS_CPUPCR_OFFSET));
++		mdelay(50);
++		WMT_PLAT_PR_INFO("rompatch: cpupcr +50ms 0x%08x\n",
++				 CONSYS_REG_READ(conn_reg.mcu_base + CONSYS_CPUPCR_OFFSET));
++		mdelay(50);
++		WMT_PLAT_PR_INFO("rompatch: cpupcr +100ms 0x%08x\n",
++				 CONSYS_REG_READ(conn_reg.mcu_base + CONSYS_CPUPCR_OFFSET));
+ 		/*disable AXI BUS protect: 0x100012a4 is write-1-to-clear */
+ 		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_CLR_OFFSET,
+ 				 CONSYS_PROT_MASK);
+@@ -650,6 +670,109 @@
+ 	return 0;
+ }
+ 
++/*
++ * T1100 port: ROM patch for the CONNSYS MCU.
++ *
++ * This file (mt6771) has no ROM patch step at all, while the sibling platforms
++ * call consys_dl_rom_patch() -> mtk_wcn_soc_rom_patch_dwn() from
++ * polling_consys_chipid(), i.e. right after the MCU answers its chip id and
++ * *before* the WLAN driver downloads its own RAM code (mt6765.c:681,
++ * mt6761.c:682; the common downloader is wmt_ic_soc.c:3387).
++ *
++ * Nothing here is invented:
++ *  - the patch file starts with `struct wmt_rom_patch`
++ *    (common_main/core/include/wmt_core.h:427: ucDateTime[16], ucPLat[4],
++ *    u2HwVer, u2SwVer, u4PatchAddr, u4PatchType, u4CRC[4]) and the body
++ *    follows it - mtk_wcn_soc_rom_patch_dwn() strips exactly
++ *    sizeof(struct wmt_rom_patch) ("patchSize -= sizeof(struct wmt_rom_patch)");
++ *  - the destination is the file's own u4PatchAddr, which lives in the same
++ *    MCU/EMI address space the WLAN sections use (sections are 0xf0000000 and
++ *    0xf0055000, and wlan_lib.c indexes them with `& 0xfffff`), so the same
++ *    masking applies here;
++ *  - soc3_0_ram_mcu_e1_hdr.bin decodes as ucPLat="ALPS", u2HwVer=u2SwVer=0x8a10,
++ *    u4PatchAddr=0xf0000000, u4PatchType=0x04000000, body=165296 bytes; the
++ *    three *_mcu_*_hdr.bin files on the device are byte identical, so the eco
++ *    suffix in the name does not select different content.
++ *
++ * The vendor table (patch name + address) normally comes from the userspace
++ * wmt_loader daemon via wmt_ctrl_ul_cmd("srh_rom_patch"), which this port does
++ * not have - hence reading the file directly.
++ */
++static INT32 consys_dl_rom_patch(UINT32 ip_ver)
++{
++#define T1100_ROM_PATCH_FILE "/lib/firmware/soc3_0_ram_mcu_e1_hdr.bin"
++	struct wmt_rom_patch *hdr;
++	struct file *fp;
++	loff_t pos = 0;
++	PUINT8 buf = NULL;
++	UINT32 total, body, off;
++	void __iomem *dst;
++	ssize_t rd;
++	INT32 ret = -1;
++
++	fp = filp_open(T1100_ROM_PATCH_FILE, O_RDONLY, 0);
++	if (IS_ERR(fp)) {
++		WMT_PLAT_PR_ERR("rompatch: cannot open %s (%ld)\n",
++				T1100_ROM_PATCH_FILE, (long)PTR_ERR(fp));
++		return -1;
++	}
++
++	total = i_size_read(file_inode(fp));
++	if (total <= sizeof(struct wmt_rom_patch) || total > SZ_2M) {
++		WMT_PLAT_PR_ERR("rompatch: bad file size %u\n", total);
++		goto out;
++	}
++
++	buf = osal_malloc(total);
++	if (!buf) {
++		WMT_PLAT_PR_ERR("rompatch: out of memory (%u)\n", total);
++		goto out;
++	}
++
++	rd = kernel_read(fp, buf, total, &pos);
++	if (rd != (ssize_t)total) {
++		WMT_PLAT_PR_ERR("rompatch: short read %zd/%u\n", rd, total);
++		goto out;
++	}
++
++	hdr = (struct wmt_rom_patch *)buf;
++	body = total - sizeof(*hdr);
++	off = hdr->u4PatchAddr & 0xfffff;
++
++	WMT_PLAT_PR_INFO("rompatch: ip_ver=0x%x plat=%c%c%c%c hw=0x%x sw=0x%x addr=0x%08x off=0x%x type=0x%x total=%u body=%u\n",
++			 ip_ver, hdr->ucPLat[0], hdr->ucPLat[1], hdr->ucPLat[2], hdr->ucPLat[3],
++			 hdr->u2HwVer, hdr->u2SwVer, hdr->u4PatchAddr, off,
++			 hdr->u4PatchType, total, body);
++	WMT_PLAT_PR_INFO("rompatch: body head %08x %08x %08x %08x\n",
++			 ((PUINT32)(buf + sizeof(*hdr)))[0], ((PUINT32)(buf + sizeof(*hdr)))[1],
++			 ((PUINT32)(buf + sizeof(*hdr)))[2], ((PUINT32)(buf + sizeof(*hdr)))[3]);
++
++	if (!gConEmiPhyBase || off + body > gConEmiSize) {
++		WMT_PLAT_PR_ERR("rompatch: destination out of EMI (base 0x%llx size 0x%llx)\n",
++				(u64)gConEmiPhyBase, (u64)gConEmiSize);
++		goto out;
++	}
++
++	dst = ioremap(gConEmiPhyBase + off, body);
++	if (!dst) {
++		WMT_PLAT_PR_ERR("rompatch: ioremap failed\n");
++		goto out;
++	}
++	osal_memcpy_toio(dst, buf + sizeof(*hdr), body);
++	WMT_PLAT_PR_INFO("rompatch: EMI 0x%llx readback %08x %08x %08x %08x\n",
++			 (u64)(gConEmiPhyBase + off),
++			 readl(dst), readl(dst + 4), readl(dst + 8), readl(dst + 12));
++	iounmap(dst);
++
++	ret = 0;
++out:
++	if (buf)
++		osal_free(buf);
++	filp_close(fp, NULL);
++	return ret;
++#undef T1100_ROM_PATCH_FILE
++}
++
+ static INT32 polling_consys_chipid(VOID)
+ {
+ 	UINT32 retry = 10;
