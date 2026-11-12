@@ -14,9 +14,13 @@
 # docs/wifi-port-log.md «M3»):
 #   /lib/modules/<release>/updates/wifi/wmt_drv.ko         build/wifi/common/
 #   /lib/modules/<release>/updates/wifi/wlan_drv_gen3.ko   build/wifi/wlan/
-#   /lib/modules/<release>/updates/wifi/{cfg80211,mac80211,rfkill}.ko
-#                                                          build/remote/modules/
+#   /lib/modules/<release>/updates/wifi/{cfg80211,mac80211,rfkill,libarc4}.ko
+#                                                          build/wifi/kernel/
 #   /etc/systemd/system/t1100-wifi.service                 rootfs-overlay/
+#
+# cfg80211/mac80211/rfkill/libarc4 — ядерные модули, их release обязан совпадать
+# с ядром на планшете, поэтому они собираются и раскладываются тем же прогоном,
+# что и вендорские (build/wifi/kernel/, см. «M3: модули под -touch-rot»).
 #
 # Почему проверяется vermagic: ядро и модули должны быть из одной сборки,
 # иначе insmod откажет («version magic ... should be ...»). Скрипт сравнивает
@@ -55,10 +59,19 @@ UNIT="$REPO/rootfs-overlay/etc/systemd/system/t1100-wifi.service"
 KO_LIST="
 $REPO/build/wifi/common/wmt_drv.ko
 $REPO/build/wifi/wlan/wlan_drv_gen3.ko
-$REPO/build/remote/modules/cfg80211.ko
-$REPO/build/remote/modules/mac80211.ko
-$REPO/build/remote/modules/rfkill.ko
+$REPO/build/wifi/kernel/cfg80211.ko
+$REPO/build/wifi/kernel/mac80211.ko
+$REPO/build/wifi/kernel/rfkill.ko
+$REPO/build/wifi/kernel/libarc4.ko
 "
+
+# Vermagic of a .ko as a string. `strings` is used on purpose: kmod is not
+# installed on every box that drives this script, and all we need is the
+# .modinfo blob. The release is everything up to the first space, so a
+# LOCALVERSION suffix such as "-touch-rot" survives untouched.
+vermagic_of() {
+	strings "$1" | sed -n 's/^vermagic=\(.*\)$/\1/p' | head -n1
+}
 
 # --- локальные предпосылки -------------------------------------------------
 missing=0
@@ -72,9 +85,19 @@ done
 }
 
 # --- release из самих модулей (не из дерева) -------------------------------
-RELEASE=$(strings "$REPO/build/wifi/common/wmt_drv.ko" \
-	| sed -n 's/^vermagic=\([^ ]*\) .*/\1/p' | head -n1)
+RELEASE=$(vermagic_of "$REPO/build/wifi/common/wmt_drv.ko" | cut -d' ' -f1)
 [ -n "$RELEASE" ] || { echo "не нашёл vermagic в wmt_drv.ko" >&2; exit 1; }
+# Все .ko обязаны быть из одной сборки: ядро сверяет vermagic целиком, и один
+# старый модуль в наборе уронит insmod уже после раскладки. Проверяем каждый.
+bad=0
+for f in $KO_LIST; do
+	vm=$(vermagic_of "$f")
+	[ "$(echo "$vm" | cut -d' ' -f1)" = "$RELEASE" ] || {
+		echo "vermagic не совпадает: $(basename "$f"): '$vm' != '$RELEASE …'" >&2
+		bad=1
+	}
+done
+[ "$bad" -eq 0 ] || { echo "набор модулей разнопрошивочный, пересобери (scripts/build-wifi-remote.sh)" >&2; exit 4; }
 MODDIR="/lib/modules/$RELEASE/updates/wifi"
 
 echo "== t1100 wifi deploy =="
@@ -91,7 +114,7 @@ if [ "$MODE" = plan ]; then
 
 План (ничего не выполнено):
   1. ssh root@$HOST mkdir -p $MODDIR
-  2. scp wmt_drv.ko wlan_drv_gen3.ko cfg80211.ko mac80211.ko rfkill.ko -> $MODDIR
+  2. scp wmt_drv.ko wlan_drv_gen3.ko cfg80211.ko mac80211.ko rfkill.ko libarc4.ko -> $MODDIR
   3. ssh root@$HOST depmod -a $RELEASE
   4. scp t1100-wifi.service -> /etc/systemd/system/ && systemctl daemon-reload
   5. (--enable) systemctl enable t1100-wifi.service   # без start

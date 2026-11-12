@@ -20,9 +20,15 @@
 set -u
 
 WIFI_DIR=${WIFI_DIR:-/home/l/t1100-wifi-build}
-KB=${WIFI_DIR}/out
+# Kernel out-tree the modules are linked against. Defaults to the out-tree this
+# script's companion kernel build produced; KERNEL_OUT points it at somebody
+# else's tree (e.g. out-normal of the second developer, see docs/wifi-port-log.md
+# "M3: модули под -touch-rot"). It must have Module.symvers and the same
+# UTS_RELEASE as the kernel that runs on the device.
+KB=${KERNEL_OUT:-${WIFI_DIR}/out}
 LOG=${WIFI_DIR}/logs
 JOBS=${JOBS:-10}
+LOCALVERSION=${LOCALVERSION-}
 PREPARE_ONLY=0
 MODULES=""
 
@@ -72,6 +78,18 @@ echo "work trees ready"
 	exit 1
 }
 
+# LOCALVERSION is not cosmetic: every `make -C <kernel>` run regenerates
+# include/config/kernel.release (filechk + FORCE), and without the suffix the
+# release collapses to the bare version -- the module then gets the wrong
+# vermagic and insmod rejects it. Pass it explicitly, deriving it from the
+# out-tree's own release when the caller did not.
+if [ -z "$LOCALVERSION" ] && [ -f "$KB/include/config/kernel.release" ]; then
+	LOCALVERSION=$(sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+//' "$KB/include/config/kernel.release")
+fi
+REL_BEFORE=$(cat "$KB/include/config/kernel.release" 2>/dev/null || true)
+echo "kernel out : $KB"
+echo "release    : $REL_BEFORE (LOCALVERSION='$LOCALVERSION')"
+
 rc_all=0
 for m in $MODULES; do
 	echo "== $m: make -C $KB M=$WIFI_DIR/work/$m modules (-j$JOBS) =="
@@ -93,6 +111,7 @@ for m in $MODULES; do
 	# is kept here only to make the architecture choice visible in the log.
 	echo "-- CONFIG_MTK_COMBO_CHIP=\"CONSYS_6771\""
 	make -C "$KB" M="$WIFI_DIR/work/$m" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+		LOCALVERSION="$LOCALVERSION" \
 		$EXTRA CONFIG_MTK_COMBO_CHIP='"CONSYS_6771"' -j"$JOBS" modules \
 		> "$LOG/build-$m.log" 2>&1
 	rc=$?
@@ -101,6 +120,15 @@ warnings=$(grep -c 'warning:' "$LOG/build-$m.log") \
 undefined=$(grep -c 'undefined!' "$LOG/build-$m.log")"
 	[ $rc -ne 0 ] && rc_all=1
 done
+
+REL_AFTER=$(cat "$KB/include/config/kernel.release" 2>/dev/null || true)
+if [ "$REL_AFTER" != "$REL_BEFORE" ]; then
+	echo "ОШИБКА: release out-дерева изменился при сборке: '$REL_BEFORE' -> '$REL_AFTER'" >&2
+	echo "        (значит LOCALVERSION не передан; .ko получат чужой vermagic)" >&2
+	rc_all=1
+else
+	echo "release after build: $REL_AFTER (не изменился)"
+fi
 
 echo "== modules =="
 for f in "$WIFI_DIR"/work/*/*.ko; do
