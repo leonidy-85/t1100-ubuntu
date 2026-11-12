@@ -37,13 +37,14 @@ EGL/Wayland. Фазы 1–3 закрыты, фаза 4 в работе — ос�
 - **Сдвиг кадра: исправлен** (12.11, патч 0046): 212 строк перенесены из
   front porch в back porch (`vbp 240`, `vfp 8`), vblank/pixel clock не
   меняются; проверено на `build/boot_shift.img`, пользователь подтвердил.
-- **Тач: на `boot_ubuntu40` работал** (11.11, sha256 `986bce63…7938`).
-  Кадр читается через 1-байтный суб-адрес `0x30`; полный вендорский init
-  (патч 0047): `0x100072EC=0`, `0x10007F04=0`, `sense_on`, reset GPIO158,
-  `reload_to_active` (`0x90000048=0xEC`), поллинг `0xA8==0x05`. В `event1` идут
-  `ABS_MT_POSITION_X/Y`, `BTN_TOUCH`, SYN; тапы попадают в 1600×2176.
-  В текущем `boot_shift` `reload_to_active` удалён: ошибки checksum исчезли,
-  но события пока не идут (`A8` после reset 0x05 → 0) — идёт отладка cold init.
+- **Тач: работает** (12.11, `build/boot_touch4.img`, md5 p29
+  `f4af566e1361c7ad7744a3314433cc9b`). Кадр читается через 1-байтный
+  суб-адрес `0x30`; init: `sense_off`, burst, `0x100072EC=0`,
+  `0x10007F04=0`, `0x9000005C=0`, reset 20/50 мс, **без**
+  `reload_to_active`, poll `A8==0x05`. Отладочные чтения `A8` убраны — они
+  read-clear и «съедали» флаг. Ориентация исправлена патчем 0050
+  (`touchscreen-swapped-x-y` + `touchscreen-inverted-x`): углы видимой
+  области 2176×1600 попадают точно.
 - **Wi-Fi (фаза 5, путь A):** M1/M2 закрыты (`wmt_drv.ko` `0b4a2bfa…`,
   `wlan_drv_gen3.ko` `cfd182c5…`), M3 подготовлен (DT, `boot_ubuntu41`,
   `tools/host/wifi-deploy.sh`) — на железе **не проверялся**. Главный риск —
@@ -53,9 +54,9 @@ EGL/Wayland. Фазы 1–3 закрыты, фаза 4 в работе — ос�
 
 ## Текущее состояние платы
 
-- `boot_a` = `build/boot_shift.img` (md5 p29
-  `0f1ba550272fd049c92cb98dd2208116`): панель с исправленным сдвигом (0046),
-  GPU и KDE; тач в cold boot ещё отлаживается. Точки отката:
+- `boot_a` = `build/boot_touch4.img` (md5 p29
+  `f4af566e1361c7ad7744a3314433cc9b`): панель с исправленным сдвигом (0046),
+  рабочий тач (0050), GPU и KDE. Точки отката:
   `build/boot_ubuntu27.img` (`a89b264d…`, дисплей без GPU-патча),
   `build/boot_ubuntu28.img` (`0ae1c4b5…`, GPU включён),
   `build/recovery/boot_a_ubuntu27.img`; старый рабочий backup
