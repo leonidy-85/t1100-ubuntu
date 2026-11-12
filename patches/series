@@ -53,3 +53,4 @@
 0054-iio-add-inv-icm42607-driver-and-enable-the-imu.patch
 0055-iio-stk3310-add-stk3338-als-ps.patch
 0056-arm64-dts-t1100-enable-CONSYS-and-the-Wi-Fi-HIF.patch
+0057-sound-mt6771-mt6358-machine-driver.patch
