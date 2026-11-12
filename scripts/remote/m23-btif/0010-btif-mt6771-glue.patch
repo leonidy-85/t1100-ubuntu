@@ -1,0 +1,223 @@
+--- a/mtk_btif.c	2026-11-11 14:00:44.844151028 +0000
++++ b/mtk_btif.c	2026-11-12 23:02:54.737201726 +0000
+@@ -212,6 +212,8 @@
+ /*-----------Platform bus related structures----------------*/
+ #define DRV_NAME "mtk_btif"
+ 
++#include "m23_board.h"
++
+ #ifdef CONFIG_OF
+ const struct of_device_id apbtif_of_ids[] = {
+ 	{ .compatible = "mediatek,btif", },
+@@ -3270,6 +3272,14 @@
+ 
+ 	BTIF_DBG_FUNC("++\n");
+ 
++/*
++	 * M23: mainline MT6771 has no "mediatek,btif" node, so register a
++	 * board platform device first; the driver then binds by name.
++	 */
++	i_ret = m23_board_register();
++	if (i_ret)
++		goto err_exit1;
++
+ /*Platform Driver initialization*/
+ 	i_ret = platform_driver_register(&mtk_btif_dev_drv);
+ 	if (i_ret) {
+@@ -3477,6 +3487,8 @@
+ 	btif_chrdev_init();
+ #endif
+ 
++	m23_selftest_run();
++
+ 	return 0;
+ 
+ err_exit4:
+@@ -3507,6 +3519,7 @@
+ err_exit_unreg:
+ 	driver_remove_file(&mtk_btif_dev_drv.driver, &driver_attr_flag);
+ 	platform_driver_unregister(&mtk_btif_dev_drv);
++	m23_board_unregister();
+ 
+ err_exit1:
+ 	BTIF_DBG_FUNC("--\n");
+@@ -3546,6 +3559,7 @@
+ 
+ 	driver_remove_file(&mtk_btif_dev_drv.driver, &driver_attr_flag);
+ 	platform_driver_unregister(&mtk_btif_dev_drv);
++	m23_board_unregister();
+ 	BTIF_DBG_FUNC("--\n");
+ }
+ 
+@@ -3593,11 +3607,18 @@
+ 
+ int btif_rx_dma_has_pending_data(struct _mtk_btif_ *p_btif)
+ {
++	/* M23: p_rx_dma is NULL in PIO mode (ENABLE_BTIF_RX_DMA=0); the vendor
++	 * code dereferenced it unconditionally and oopsed in the WMT thread.
++	 */
++	if (!p_btif->p_rx_dma)
++		return 0;
+ 	return hal_dma_rx_has_pending(p_btif->p_rx_dma->p_dma_info);
+ }
+ 
+ int btif_tx_dma_has_pending_data(struct _mtk_btif_ *p_btif)
+ {
++	if (!p_btif->p_tx_dma)
++		return 0;
+ 	return hal_dma_tx_has_pending(p_btif->p_tx_dma->p_dma_info);
+ }
+ 
+--- a/btif_plat.c	2026-11-11 14:00:44.843844888 +0000
++++ b/btif_plat.c	2026-11-12 22:45:34.632662551 +0000
+@@ -13,6 +13,7 @@
+ #include "btif_pub.h"
+ #include "btif_priv.h"
+ #include "mtk_btif.h"
++#include "m23_board.h"
+ 
+ #define BTIF_USER_ID "btif_driver"
+ 
+@@ -218,7 +219,18 @@
+ 		BTIF_INFO_FUNC("get btif irq(%d),register base(0x%lx)\n",
+ 			mtk_btif_info.p_irq->irq_id, mtk_btif_info.base);
+ 	} else {
+-		BTIF_ERR_FUNC("get btif device node fail\n");
++		/*
++		 * M23: no "mediatek,btif" node (mainline MT6771 DTS is not
++		 * touched).  Use the stock DT values passed as module
++		 * parameters instead.
++		 */
++		mtk_btif_info.p_irq->irq_id = m23_irq_map(m23_btif_irq);
++		mtk_btif_info.p_irq->irq_flags = IRQF_TRIGGER_LOW;
++		mtk_btif_info.base =
++			(unsigned long)ioremap(m23_btif_pa, 0x1000);
++		BTIF_INFO_FUNC("m23: btif irq(%d), register base(0x%lx)\n",
++			       mtk_btif_info.p_irq->irq_id,
++			       (unsigned long)mtk_btif_info.base);
+ 	}
+ 
+ 	/* get the interrupt line behaviour */
+@@ -284,6 +296,15 @@
+ {
+ 		int i_ret = -1;
+ 
++		/*
++		 * M23: without a DT node there are no clock phandles, and
++		 * MT6771 has no clk-mt6771 driver that would resolve
++		 * "btifc"/"apdmac" anyway; the gates are driven directly in
++		 * INFRACFG_AO by m23_clk_enable().
++		 */
++		if (!pdev->dev.of_node)
++			return m23_clk_enable();
++
+ 		clk_btif = devm_clk_get(&pdev->dev, "btifc");
+ 		if (IS_ERR(clk_btif)) {
+ 			BTIF_ERR_FUNC("[CCF]cannot get clk_btif clock.\n");
+@@ -322,8 +343,11 @@
+  *****************************************************************************/
+ int hal_btif_clk_unprepare(void)
+ {
+-	clk_unprepare(clk_btif);
+-	clk_unprepare(clk_btif_apdma);
++	/* M23: both are NULL when the driver bound without a DT node. */
++	if (clk_btif)
++		clk_unprepare(clk_btif);
++	if (clk_btif_apdma)
++		clk_unprepare(clk_btif_apdma);
+ 	return 0;
+ }
+ #endif
+@@ -364,7 +388,7 @@
+ 			i_ret = enable_clock(MTK_BTIF_CG_BIT, BTIF_USER_ID);
+ #else
+ 			BTIF_DBG_FUNC("[CCF]enable clk_btif\n");
+-			i_ret = clk_enable(clk_btif);
++			i_ret = m23_clk_enable();
+ #endif /* defined(CONFIG_MTK_CLKMGR) */
+ 			if (i_ret) {
+ 				BTIF_WARN_FUNC
+@@ -381,7 +405,7 @@
+ 			}
+ #else
+ 			BTIF_DBG_FUNC("[CCF] clk_disable(clk_btif) calling\n");
+-			clk_disable(clk_btif);
++			m23_clk_disable();
+ #endif /* defined(CONFIG_MTK_CLKMGR) */
+ 		}
+ 	} else {
+@@ -402,7 +426,7 @@
+ 			i_ret = enable_clock(MTK_BTIF_CG_BIT, BTIF_USER_ID);
+ #else
+ 			BTIF_DBG_FUNC("[CCF]enable clk_btif\n");
+-			i_ret = clk_enable(clk_btif);
++			i_ret = m23_clk_enable();
+ #endif /* defined(CONFIG_MTK_CLKMGR) */
+ 			status = (i_ret == 0) ? flag : status;
+ 			if (i_ret) {
+@@ -419,7 +443,7 @@
+ 			}
+ #else
+ 			BTIF_DBG_FUNC("[CCF] clk_disable(clk_btif) calling\n");
+-			clk_disable(clk_btif);
++			m23_clk_disable();
+ #endif /* defined(CONFIG_MTK_CLKMGR) */
+ 		} else {
+ 			i_ret = ERR_INVALID_PAR;
+--- a/btif_dma_plat.c	2026-11-11 14:00:44.843844888 +0000
++++ b/btif_dma_plat.c	2026-11-12 22:45:34.632812806 +0000
+@@ -12,6 +12,7 @@
+ 
+ #include "btif_dma_priv.h"
+ #include "mtk_btif.h"
++#include "m23_board.h"
+ 
+ #define DMA_USER_ID "btif_driver"
+ 
+@@ -166,7 +167,14 @@
+ 					mtk_btif_rx_dma.p_irq->irq_id,
+ 					mtk_btif_rx_dma.base);
+ 		} else {
+-			BTIF_ERR_FUNC("get rx_dma device node fail\n");
++			/* M23: no DT node, use the stock DT values. */
++			mtk_btif_rx_dma.p_irq->irq_id = m23_irq_map(m23_btif_rxdma_irq);
++			mtk_btif_rx_dma.p_irq->irq_flags = IRQF_TRIGGER_LOW;
++			mtk_btif_rx_dma.base =
++				(unsigned long)ioremap(m23_btif_rxdma_pa, 0x100);
++			BTIF_INFO_FUNC("m23: rx_dma irq(%d), base(0x%lx)\n",
++				       m23_btif_rxdma_irq,
++				       (unsigned long)mtk_btif_rx_dma.base);
+ 		}
+ 		/* get the interrupt line behaviour */
+ 		if (of_property_read_u32_array(node, "interrupts", irq_info,
+@@ -195,7 +203,14 @@
+ 					mtk_btif_tx_dma.p_irq->irq_id,
+ 					mtk_btif_tx_dma.base);
+ 		} else {
+-			BTIF_ERR_FUNC("get tx_dma device node fail\n");
++			/* M23: no DT node, use the stock DT values. */
++			mtk_btif_tx_dma.p_irq->irq_id = m23_irq_map(m23_btif_txdma_irq);
++			mtk_btif_tx_dma.p_irq->irq_flags = IRQF_TRIGGER_LOW;
++			mtk_btif_tx_dma.base =
++				(unsigned long)ioremap(m23_btif_txdma_pa, 0x100);
++			BTIF_INFO_FUNC("m23: tx_dma irq(%d), base(0x%lx)\n",
++				       m23_btif_txdma_irq,
++				       (unsigned long)mtk_btif_tx_dma.base);
+ 		}
+ 		/* get the interrupt line behaviour */
+ 		if (of_property_read_u32_array(node, "interrupts", irq_info,
+--- a/inc/mtk_btif.h	2026-11-11 14:00:44.843844888 +0000
++++ b/inc/mtk_btif.h	2026-11-12 22:58:48.853924329 +0000
+@@ -73,8 +73,12 @@
+ };
+ #endif
+ 
++#ifndef ENABLE_BTIF_RX_DMA
+ #define ENABLE_BTIF_RX_DMA 1
++#endif
++#ifndef ENABLE_BTIF_TX_DMA
+ #define ENABLE_BTIF_TX_DMA 1
++#endif
+ 
+ #ifdef ENABLE_BTIF_TX_DMA
+ #define BTIF_TX_MODE BTIF_MODE_DMA

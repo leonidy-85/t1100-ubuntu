@@ -113,8 +113,17 @@ for m in $MODULES; do
 	for dep in common wlan; do
 		[ "$dep" = "$m" ] && continue
 		[ -f "$WIFI_DIR/work/$dep/Module.symvers" ] && \
-			EXTRA="KBUILD_EXTRA_SYMBOLS=$WIFI_DIR/work/$dep/Module.symvers"
+			EXTRA="$EXTRA $WIFI_DIR/work/$dep/Module.symvers"
 	done
+	# M23: wmt_drv's stp_btif.o calls the mtk_wcn_btif_* exports of the BTIF
+	# driver, which is built separately (scripts/remote/build-btif-remote.sh,
+	# tree $BTIF_DIR). Its Module.symvers has to be on the modpost path too;
+	# KBUILD_EXTRA_SYMBOLS takes a space separated list, so the value is
+	# quoted for make (the quotes survive the unquoted $EXTRA below).
+	if [ "$m" = "common" ] && [ -f "${BTIF_DIR:-/home/l/m23-btif}/Module.symvers" ]; then
+		EXTRA="$EXTRA ${BTIF_DIR:-/home/l/m23-btif}/Module.symvers"
+	fi
+	[ -n "$EXTRA" ] && EXTRA="KBUILD_EXTRA_SYMBOLS=\"$EXTRA\""
 	# Chip selection. In the vendor build glue this was
 	# CONFIG_MTK_COMBO_CHIP="CONSYS_6771" - and it *must* be quoted there:
 	# the vendor Makefile compares against "CONSYS_6771" with the quotes
