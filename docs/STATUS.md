@@ -2867,10 +2867,11 @@ OK, FW download end, reset подавлен `t1100_no_reset=1`. `wlan0` **нет
 
 ## 12.11 (22): Wi-Fi M8 — READY не встаёт: MCU сидит в ROM, MPU и ROM-patch не реализованы
 
-Диагноз уточнён (см. `docs/wifi-port-log.md` §30). `MCR_WCIR` — это
-**0x18070000** (`include/nic/mt6630_reg.h:79`), `WCIR_WLAN_READY = BIT(21)`;
-измерено `0x18070000 = 0x00008a00` → READY действительно 0, poll был по
-правильному регистру (число `0x38` в логе — значение mailbox, не адрес).
+Диагноз уточнён (см. `docs/wifi-port-log.md` §30). Окно MCR —
+`of_iomap(of_node, 0)` = **0x180f0000** (`ahb.c:293`), `MCR_WCIR = 0`
+(`mt6630_reg.h:79`), `WCIR_WLAN_READY = BIT(21)`; измерено
+`0x180f0000 = 0x1000f004` → READY = 0 (а `0x180f0004 = 0x38` — это то самое
+«MailBox 0x38» из лога, не адрес).
 
 Главное: **MCU не исполняет прошивку**. `cpupcr` (`0x18070160`) стоит в tight
 loop `0x1572a…0x15730`, а `0xbfca5800` (EMI base + `0xA5800` = fw load addr из
