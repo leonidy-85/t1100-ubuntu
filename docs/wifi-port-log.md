@@ -2962,3 +2962,58 @@ GATE_INFRA0(INFRACFG_AO_BTIF_CG, "infra_btif", "axi_sel", 31),
 (DEVAPC-права, GALS-мост CONN2AP, ещё один гейт). Если и на стоке окно
 write-dead — BTIF на этой плате не используется, и WMT-транспорт надо искать
 не здесь.
+
+## 46. M25: DEVAPC MT6771 найден, но из Linux недоступен (13.11)
+
+### 46.1 Раскладка (источник: Hadenix `android_kernel_alps-4.4`, `4.4.146`)
+
+`drivers/misc/mediatek/devapc/mt6771/devapc.{c,h}` + стоковый DT
+(`refs/stock-mt6771.dts:1599`):
+
+```dts
+devapc@10207000 { reg = <0 0x10207000 0x1000 0 0x1000e000 0x1000>;
+	interrupts = <0 0x91 8>; clocks = <&infracfg_ao 0x2d>; };  /* SPI 145, DEVICE_APC */
+```
+
+Регистры (`devapc.h:73-96`): `VIO_MASK = base+0x4*index`,
+`VIO_STA = base+0x400+0x4*index`, `DBG0/1 = +0x900/0x904`,
+`APC_CON = +0xF00`, `VIO_SHIFT_{STA,SEL,CON} = +0xF10/+0xF14/+0xF20`.
+Индексация VIO — 32 слейва на слово (`devapc.c:640-656`).
+
+Номер слейва BTIF (порядок `devapc_infra_devices[]`, 379 записей):
+`PERISYS_BTIF = 102` (рядом `PERISYS_APDMA = 90`, `PERISYS_UART0 = 92`);
+⇒ для BTIF смотреть слово `0x1020740c`, бит 6. IRT X в таблице MT6771 нет.
+
+Права ставит **LK/ATF**, не ядро (`devapc.c:659-666`):
+`mt_reg_sync_writel(0x80000000, APC_CON); /* SMC call is called to set Device APC in LK instead */`
+и `#define MTK_SIP_LK_DAPC 0x82000101`.
+
+### 46.2 Что на устройстве
+
+```
+APC_CON  0x10207f00 = 0  (запись 0x80000000 не держится)
+VIO_MASK/STA/DBG      = 0 (VIO_STA слово 3 = 0x1020740c, бит6 = 0)
+VIO_SHIFT_STA 0x10207f10 = 0x4000  (жив)
+APC 0x1000e000, DMPU_AO 0x10015000 = 0
+```
+
+Гейт `DEVICE_APC` (INFRA1[20], вендор `clk-mt6771.c:1210`): `SET 0x10001088 ←
+0x00100000` **не меняет** статус (`0x10001094` остаётся `0xc78f7df6`), тогда как
+соседние биты того же регистра пишутся (бит18 `apdma` снялся и вернулся).
+После этого запись в BTIF по-прежнему не проходит
+(`IER: пишем 0xa5a5a5a5 → читаем 0`).
+
+### 46.3 Вывод
+
+DEVAPC найден и распознан (базы, offsets, номер слейва BTIF = 102), но в нашем
+буте контроллер **недоступен**: `APC_CON` не пишется, APC-таблицы и DMPU читаются
+нулями, гейт `DEVICE_APC` защищён от записи. Открыть права AP для BTIF из Linux
+нельзя; права на MT6771 задаёт LK/ATF (`MTK_SIP_LK_DAPC`). Denied-write не оставил
+VIO-записи (`VIO_STA` слово 3 = 0), т.е. либо DEVAPC в этом состоянии не работает
+(и блокирует не он), либо не логирует — различить из AP нельзя.
+
+Следующий шаг: на **стоковой** Aurora прогнать те же чтения (`0x10207f00`,
+`0x1020740c`, `0x1000e000`, `0x10001094`) и write-тест BTIF. Разница покажет,
+настраивает ли LK DEVAPC по-разному в зависимости от образа, и стоит ли идти
+через SMC-интерфейс (`MTK_SIP_LK_DAPC`) или искать другого «открывателя»
+(DMPU/ATF secure-регионы).
