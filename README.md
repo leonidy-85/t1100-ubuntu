@@ -4,19 +4,18 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус (12.11.2026): фазы 1–3 закрыты; на панели работает Wayland (Weston).**
-> mainline 6.12.114 + патчи 0001–0051 (0035 отключён): ядро доходит до `systemd running`,
-> eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, USB-RNDIS (`1d6b:0104`) и
-> `ssh root@10.42.66.66` по ключу, **батарея заряжается** (`mt6370-charger`:
-> `online=1`, `Charging`, `vbus 4940 мВ`), **`poweroff` плату гасит** (0034).
-> Дисплей: `card0-DSI-1` `connected/enabled`, режим `1600x2176@60`, на панели
-> консоль и `t1100 login:` (патч 0038 — убрана запись `TX 0x06` bit2).
-> GPU: panfrost (патч 0039) — **Mesa 25.0.7, GLES 3.1**, `kmscube` 56.4 fps,
-> `glmark2` Score 452. Weston 13 (DRM/atomic) показывает панель, EGL-клиенты
-> 56.4 fps. **Сдвиг кадра на панели исправлен** (0046: `vbp 240`, `vfp 8`).
-> Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Тач HX83102E
-> работает (`boot_touch6`, native portrait; KWin сам поворачивает — 0051).
-> Дальше: задержка выделения, DVFS GPU, rootfs 26.04. Состояние и план —
+> **Статус (12.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
+> mainline 6.12.114 + патчи 0001–0052 (0035 отключён): ядро доходит до `systemd running`,
+> eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
+> USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
+> заряжается** (`mt6370-charger`), **`poweroff` плату гасит** (0034).
+> Дисплей: `card0-DSI-1` `connected/enabled`, режим `1600x2176@58.93`; сдвиг
+> кадра убран окончательно (0046 + 0052: `vbp 284`, `vfp 8`).
+> GPU: panfrost (0039) — **Mesa 26.0.3**; KDE Plasma 6.6.4 + SDDM
+> (autologin root) на панели.
+> Тач HX83102E работает (`boot_touch8`, native portrait; KWin сам поворачивает —
+> 0051). Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Дальше:
+> задержка выделения, DVFS GPU, Wi-Fi/BT (фаза 5). Состояние и план —
 > `docs/STATUS.md`, `docs/handover.md`.
 >
 > ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка

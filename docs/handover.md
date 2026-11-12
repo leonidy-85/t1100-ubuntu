@@ -1,9 +1,8 @@
-# Передача проекта (обновлено 10.11.2026, конец сессии)
+# Передача проекта (обновлено 12.11.2026, конец сессии)
 
-Кратко: **mainline 6.12 грузится на T1100 до Ubuntu 24.04 (systemd), панель
-показывает консоль, KMS закрыт (`modetest`), panfrost даёт GLES 3.1
-(`kmscube` 56.4 fps, `glmark2` Score 452), Weston 13 выводит панель через
-EGL/Wayland. Фазы 1–3 закрыты, фаза 4 в работе — остался тач и десктоп.**
+Кратко: **mainline 6.12 грузится на T1100 до Ubuntu 26.04 LTS с KDE Plasma
+6.6.4; панель 1600×2176@58.93 (сдвиг убран 0046+0052), тач HX83102E работает,
+8 ядер, panfrost/Mesa 26.0.3; Wi-Fi/BT — фаза 5.**
 
 ## Где остановились (11.11 — продолжать отсюда)
 
@@ -32,20 +31,27 @@ EGL/Wayland. Фазы 1–3 закрыты, фаза 4 в работе — ос�
    или mainline-аналог), только потом правки железа. Без USB доступа к планшету
    нет.
 
-## Состояние на конец 11.11 (продолжать отсюда)
+## Состояние на конец 12.11 (продолжать отсюда)
 
-- **Сдвиг кадра: исправлен** (12.11, патч 0046): 212 строк перенесены из
-  front porch в back porch (`vbp 240`, `vfp 8`), vblank/pixel clock не
-  меняются; проверено на `build/boot_shift.img`, пользователь подтвердил.
-- **Тач: работает** (12.11, `build/boot_touch6.img`, md5 p29
-  `0325328c7a5fe68f9780c61f7b5bbff4`). Кадр читается через 1-байтный
+- **Rootfs/десктоп:** p54 — Ubuntu 26.04 LTS + KDE Plasma 6.6.4 + SDDM
+  autologin root; Konsole, Dolphin, Kate, Ark, Gwenview, Okular, KCalc,
+  Spectacle, Plasma Keyboard, Mesa 26.0.3. Старый 24.04 —
+  `/home/l/t1100-rootfs2404-backup.tar.gz` (sha256 `29f440bd…`), 26.04
+  desktop tar — `/home/l/t1100-rootfs2604-desktop.tar.gz` (sha256 `b75a40c4…`).
+- **Ядра:** `maxcpus=8`, `nproc=8`.
+- **Сдвиг кадра: убран** (0046 + **0052**): `vbp 284`, `vfp 8`, `vtotal 2476`,
+  refresh 58.93 Hz; проверено на `build/boot_touch8.img` (sha256 `757f7e03…`,
+  md5 p29 `75aff08106e36c5ba207081c8cfc77ad`), пользователь подтвердил.
+- **Тач: работает** (`boot_touch8`). Кадр читается через 1-байтный
   суб-адрес `0x30`; init: `sense_off`, burst, `0x100072EC=0`,
   `0x10007F04=0`, `0x9000005C=0`, reset 20/50 мс, **без**
   `reload_to_active`, poll `A8==0x05`. Отладочные чтения `A8` убраны — они
   read-clear и «съедали» флаг. Ориентация: KWin сам поворачивает портретные
-  координаты 1600×2176, поэтому патч 0051 убрал `inverted-x`/`swapped-x-y`;
-  углы видимой области 2176×1600 попадают правильно. Осталась задержка
-  выделения в приложениях (evdev ~112 Гц, kernel не тормозит).
+  координаты 1600×2176, поэтому патч 0051 убрал `inverted-x`/`swapped-x-y`.
+  Осталась задержка выделения в приложениях (evdev ~112 Гц, kernel не тормозит).
+- **Plasma Keyboard:** добавлен ряд цифр 1–0 в
+  `/usr/share/plasma/keyboard/layouts/fallback/main.qml` и `en_US/main.qml`
+  (настройка rootfs, не патч ядра).
 - **Wi-Fi (фаза 5, путь A):** M1/M2 закрыты (`wmt_drv.ko` `0b4a2bfa…`,
   `wlan_drv_gen3.ko` `cfd182c5…`), M3 подготовлен (DT, `boot_ubuntu41`,
   `tools/host/wifi-deploy.sh`) — на железе **не проверялся**. Главный риск —
@@ -55,9 +61,9 @@ EGL/Wayland. Фазы 1–3 закрыты, фаза 4 в работе — ос�
 
 ## Текущее состояние платы
 
-- `boot_a` = `build/boot_touch6.img` (md5 p29
-  `0325328c7a5fe68f9780c61f7b5bbff4`): панель с исправленным сдвигом (0046),
-  рабочий тач (0051, native portrait), GPU и KDE. Точки отката:
+- `boot_a` = `build/boot_touch8.img` (md5 p29
+  `75aff08106e36c5ba207081c8cfc77ad`): панель 1600×2176@58.93 (0046+0052),
+  рабочий тач (0051, native portrait), 8 ядер, GPU и KDE 6.6.4. Точки отката:
   `build/boot_ubuntu27.img` (`a89b264d…`, дисплей без GPU-патча),
   `build/boot_ubuntu28.img` (`0ae1c4b5…`, GPU включён),
   `build/recovery/boot_a_ubuntu27.img`; старый рабочий backup
