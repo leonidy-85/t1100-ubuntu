@@ -188,7 +188,7 @@ KeyboardLayout {
         Layout.fillHeight: true
         ShiftKey {
             Layout.minimumHeight: 0
-            weight: functionKeyWidth
+            weight: normalKeyWidth
             Layout.fillWidth: false
         }
         Key {
@@ -229,11 +229,6 @@ KeyboardLayout {
             key: Qt.Key_M
             text: "m"
         }
-        ShiftKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-        }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_Period
@@ -243,6 +238,11 @@ KeyboardLayout {
             alternativeKeys: ","
             smallText: ","
             smallTextVisible: true
+        }
+        ShiftKey {
+            Layout.minimumHeight: 0
+            weight: normalKeyWidth
+            Layout.fillWidth: false
         }
     }
     KeyboardRow {
