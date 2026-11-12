@@ -1015,3 +1015,146 @@ tools/host/wifi-deploy.sh --load wmt   # modprobe wmt_drv + dmesg (M3)
 
 Ядро менять не нужно: на планшете уже `6.12.114-g400cb6f-touch-rot`; нужны
 только модули из таблицы 22.3.
+
+## 23. M4: объединённое дерево, включённые consys/wifi (12–13.11)
+
+Цель M4 — пара «ядро + модули», в которой DTB уже описывает CONSYS и HIF
+MT6631 **включёнными**, чтобы `wmt_drv` при загрузке начинал power-on. Всё
+сделано на build-хосте; устройство не трогали, `boot_a` не писали,
+`../linux-t1100` и `t1100-ubuntu-build/src` не менялись.
+
+### 23.1 Из чего собрано дерево
+
+Источник — наш git, а не чужой каталог на хосте:
+
+- `../linux-t1100`, HEAD `675178729` («arm64: dts: t1100: finish the touch
+  wiring», 51 коммит = патчи 0001–0048), rsync **без `.git`** в **новый**
+  каталог `/home/l/t1100-merge-src` (старый `t1100-ubuntu-build/src`
+  не использовался и не изменялся);
+- поверх — `patch -p1` для 0046 и 0049–0052, плюс новый 0056 (включение
+  узлов; номера 0054/0055 к моменту коммита занял upstream под iio, поэтому
+  наш патч идёт последним).
+
+| патч | sha256 | как легло |
+|---|---|---|
+| 0046 `drm/panel: it6112: fix the frame shift…` | `d2a012e2437b9ba2100473743e4a7ccfd389371312ee5217c08c47274f35e4eb` | чисто (offset −1) |
+| 0049 `arm64: dts: t1100: describe CONSYS…` | `ed239c71202e815ce1da69a6ee5aeeef198f97d29a1210459b94118b7333cf96` | чисто (offset 26) |
+| 0050 `…swap the touch axes for the landscape panel` | `efdd25d29c02de9322f7809153c7794763399ec8db5818c2b384f054edfe1068` | чисто |
+| 0051 `…use native portrait touch coordinates` | `f288534fac75a720ea988dfa426535eb7e57dc4222d044d95127ce881bc6e443` | чисто, fuzz 1 (offset 10) |
+| 0052 `drm/panel: it6112: move 44 more vblank lines…` | `67507045b8c16b61a5e47c8f85a482cdf199a297b8e775d27f7997512f99d4fd` | чисто, после перебазирования (см. ниже) |
+| 0056 `arm64: dts: t1100: enable CONSYS and the MT6631 Wi-Fi HIF` | `469282c010e96104cdb3e8a99022f2e8e21ce7ba7af32cd2ade9d786775faa93` | чисто (новый) |
+
+Три вещи, которые пришлось решать по ходу (и почему):
+
+1. **0046 в дереве отсутствовал.** `patches/series` опережает `../linux-t1100`
+   на 0046–0056: в HEAD есть 0001–0048, но сдвига кадра (0046) в
+   `panel-it6112-*.c` нет — там vendor-пори (`vbp 28 / vfp 220`). Без 0046
+   патч 0052 не накладывается, а панель получила бы сдвинутый на 212 строк
+   кадр. Поэтому 0046 применён как часть merge (проверено: после него в файле
+   `vsync_end = 2176 + 8 + 240`, `vtotal = … + 240 + 8`).
+2. **0052 перебазирован.** В дереве второго разработчика 0046 писал другой
+   текст комментария («EXPERIMENT: the image comes out shifted…»), у нас —
+   свой («The panel shows the frame ~212 lines early…»); `patch` не находил
+   контекст (изменяемая часть хунка — как раз комментарий). Функциональная
+   часть (vbp 240→284, refresh 58.93 Гц) не менялась, переписаны только
+   `-`-строки комментария. sha256 файла поэтому новый: `d27ddcb7…` →
+   `67507045…`; патч после правки проверен отдельным прогоном на состоянии
+   «после 0046» — накладывается чисто и даёт тот же файл.
+3. **0051 применился с fuzz 1** (у нас между 0050 и 0051 чуть иные
+   комментарии). Результат сверен: `touchscreen-inverted-x` и
+   `touchscreen-swapped-x-y` удалены, координаты native portrait 1600×2176 —
+   ровно то, что 0051 и делает.
+
+Включение узлов (0056): `consys@18070000` и `wifi@180f0000` →
+`status = "okay"`; больше ничего в них не менялось. `consys-reserve-memory`
+осталась в форме `alloc-ranges` (2 МиБ, выравнивание 2 МиБ,
+0x40000000–0xc0000000), т.е. фиксированного `reg` нет и
+`reserved_memory_conflict_check()` LK эту запись не проверяет. В mblock-ах
+этого устройства окно 0xbfc00000–0xbfe00000 (то, что выбрал сток) свободно,
+сосед — `mblock-5-atf-log` 0xbfe00000–0xbfe40000, так что аллокатор ядра
+повторит выбор стока или возьмёт другое свободное окно.
+
+### 23.2 Конфиг и сборка
+
+- `/home/l/t1100-merge-out/.config` = копия `out-normal/.config` (проверенный
+  конфиг второго разработчика) + `configs/t1100-wifi.fragment` через
+  `scripts/kconfig/merge_config.sh` + `olddefconfig`;
+- **каждый** `make` — с `LOCALVERSION=-g400cb6f-touch-rot`
+  (`make -s kernelrelease` → `6.12.114-g400cb6f-touch-rot`);
+- собиралось полностью: `make -j12 Image dtbs modules` (rc=0, `error:` 0),
+  поэтому `Module.symvers` полный (20 274 символа) и трюк `--kernel-mods`
+  из 22.5 не понадобился;
+- в конфиге появились `CONFIG_NL80211_TESTMODE=y`, `CONFIG_CFG80211_WEXT=y`,
+  `CONFIG_WEXT_{CORE,PRIV,SPY}=y`, `CONFIG_IPW2200=m`: это уже «полный
+  паритет» из 22.6, поэтому `CONFIG_WEXT_CORE=y` есть в `vmlinux`,
+  `wireless_send_event` резолвится из ядра, а `stubs/wext_stub.o` в
+  `wlan_drv_gen3.ko` **не** попал (ветка `ifeq ($(CONFIG_WEXT_CORE),)` в
+  `wlan.Kbuild` не сработала).
+
+### 23.3 Артефакты
+
+| файл | размер, Б | sha256 |
+|---|---|---|
+| `build/merge/Image` | 40 083 968 | `a4a1fe09990118f1e74c1d9769ff271e4de6d85763a1b8c173b8a2b867f42e40` |
+| `build/merge/Image.gz` | 14 602 227 | `05650764a27894422d9df9accf9e218724ec533f8e5566263263254ae03c75ee` |
+| `build/merge/mt6771-fplus-t1100.dtb` | 53 667 | `0dd7e5ae498e5a0dd413d42c15bfeee5690cb55e7dfb774b6139e23c16025faa` |
+| `build/wifi/common/wmt_drv.ko` | 1 111 976 | `8228dd5c28700eea37cf8c8bb4ad833ef30ce406b75c4b381879a9ef849bbead` |
+| `build/wifi/wlan/wlan_drv_gen3.ko` | 2 895 080 | `be1df2ac0c263f5c30cd75c3b49e01f45540224cd6aa18ad890eb1fd1540da98` |
+| `build/wifi/kernel/cfg80211.ko` | 614 888 | `76a90f08e8c0bb023bf0ff7c5ab9778edb888554016835649be22793880bd44b` |
+| `build/wifi/kernel/mac80211.ko` | 812 160 | `050602fe7398c7b9a4a78e6ed550e02d2a497dd151919dbc47264755025e46f8` |
+| `build/wifi/kernel/rfkill.ko` | 48 272 | `e6bbcb7b510314457aea0b946aed862ae490ee25a7a33b19ee3a37e8a1308ab1` |
+| `build/wifi/kernel/libarc4.ko` | 5 192 | `a38b5be1648431f86a5ed406004837b3ced668f6f49a0b9d5de190af922e9ef3` |
+
+`vermagic` у всех шести — `6.12.114-g400cb6f-touch-rot SMP preempt mod_unload
+aarch64`, сверен не только с `kernel.release`, но и с `strings` **ядра внутри
+готового boot-образа**. `wmt_drv.ko` побайтово совпал с M3 (`8228dd5c…`);
+`cfg80211.ko`/`mac80211.ko` от M3 отличаются — теперь они собраны с
+`CFG80211_WEXT=y` + `NL80211_TESTMODE=y` из полного `make modules`, а не
+одноцелевой сборкой в чужом конфиге.
+
+### 23.4 `build/boot_merge_wifi.img`
+
+- **ref — `build/boot_merged12.img`, а не `build/xfer/cur_boot_2026-11-12.img`.**
+  В `cur_boot…` лежит ядро `6.12.114-g95e3b41b86-dirty` (наша сборка от 11.11
+  16:26), cmdline **без** `maxcpus=8` и `kernel_addr = 0x40080000` (не 2 МиБ) —
+  это образ *до* merge12, он не описывает текущую конфигурацию. В
+  `boot_merged12` — `kernel_addr = 0x40200000`, cmdline с `maxcpus=8`, а
+  ramdisk (1 033 291 Б) в обоих образах один и тот же (`rsize` совпал),
+  поэтому ramdisk берётся из ref;
+- сборка: `gzip -9 -n` + `scripts/repack_boot.py --ref build/boot_merged12.img
+  --kernel build/merge/Image.gz --dtb build/merge/mt6771-fplus-t1100.dtb --out
+  build/boot_merge_wifi.img`;
+- результат: 33 554 432 Б, sha256
+  `a99be59b1676029d06a47b603fa058f5e640c5ce52b8b578fb638fe9ed7ff703`,
+  md5 `a85f2d848ea9840feb93ff7ecf99705f` (рядом `.sha256` и `.md5`);
+- обратная распаковка (`scripts/bootimg_extract.py`): kernel и DTB внутри
+  побайтово совпали с исходными, cmdline — с `maxcpus=8`.
+
+### 23.5 Проверки (build-хост, без устройства)
+
+- `tools/lk/verify-dtb.sh` на DTB из дерева **и** на DTB, вынутом из готового
+  образа: `RESULT: validator passed -> LK should accept this DTB`
+  (18 mblock-ов, overlay применяется, `merged size 88 841 <= 524 288`);
+- `dtc -I dtb -O dts`: у `consys@18070000` и `wifi@180f0000` `status = "okay"`,
+  `consys-reserve-memory` — `alloc-ranges`, фиксированного `reg` нет;
+- символьное замыкание: для каждого из шести `.ko` множество `nm -u`
+  покрывается `Module.symvers` (20 274) + экспортами самих модулей →
+  **неразрешённых 0**;
+- `kernel.release` до/после сборки вендорских модулей не изменился
+  (`6.12.114-g400cb6f-touch-rot`), rc=0, `undefined=0` у common и wlan.
+
+### 23.6 Деплой (после прошивки; устройство у лида)
+
+```sh
+tools/host/wifi-deploy.sh --apply     # 6 .ko -> /lib/modules/6.12.114-g400cb6f-touch-rot/updates/wifi + depmod + unit
+tools/host/wifi-deploy.sh --load wmt  # modprobe wmt_drv + dmesg
+dmesg | grep -i wmt
+```
+
+Признак M4: `wmt: power on ok` и chip id `0x788` в dmesg, `/proc/wmt*` жив,
+панель/тач не пострадали. Прошивки Wi-Fi (`WIFI_RAM_CODE_6759`, `WMT_SOC.cfg`)
+в rootfs по-прежнему нет, `wlan0` в M4 не ожидается.
+
+Откат: `build/boot_merged12.img` (sha256 `651ab53c…`, проверен на устройстве);
+модули M3/M4 взаимозаменяемы только вместе с ядром своей сборки — vermagic
+одинаков, но `cfg80211.ko` M3 и M4 собраны с разным конфигом.

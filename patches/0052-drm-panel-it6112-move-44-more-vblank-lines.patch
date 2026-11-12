@@ -12,21 +12,19 @@ The vblank total grows from 2432 to 2476 lines; the pixel clock is
 unchanged, so the refresh rate becomes 58.93 Hz instead of 60 Hz.
 ---
  drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c | 14 +++++++-------
- 1 file changed, 7 insertions(+), 7 deletions(-)
+ 1 file changed, 8 insertions(+), 7 deletions(-)
 
-diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
-index e23dc35..2c635b3 100644
 --- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
 +++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
-@@ -903,15 +903,15 @@ static const struct drm_display_mode boe_tv110xum_lb2_mode = {
+@@ -902,15 +902,15 @@
  	.htotal = 1600 + 14 + 44 + 44,
  	.vdisplay = 2176,
  	/*
--	 * EXPERIMENT: the image comes out shifted towards the start of the
--	 * frame - a ~10% black band on the portrait top edge, content cut off
--	 * on the opposite edge - so move ~212 lines from the front porch into
--	 * the back porch.  The vblank total (and the pixel clock) is unchanged,
--	 * so this only moves the active window inside the frame.
+-	 * The panel shows the frame ~212 lines early: a ~10% black band on the
+-	 * portrait top edge, content cut off on the opposite edge.  Keep the
+-	 * vblank total (and the pixel clock) unchanged and move those lines
+-	 * from the front porch into the back porch, which moves the active
+-	 * window inside the frame.  Verified on the Fplus T1100.
 +	 * The panel shows the frame early: after moving 212 lines from the
 +	 * front porch into the back porch a ~2% black band remained on the
 +	 * portrait top edge, so move another 44 lines there.  The vblank
@@ -41,6 +39,3 @@ index e23dc35..2c635b3 100644
  	.width_mm = 166,
  	.height_mm = 226,
  };
--- 
-2.54.0
-
