@@ -19,6 +19,14 @@ obj-m += wlan_drv_gen3.o
 # Our stubs (see scripts/remote/wifi-stubs/README.md)
 wlan_drv_gen3-y += stubs/wlan_stubs.o
 
+# wireless_send_event() lives in vmlinux only with CONFIG_WEXT_CORE (built-in
+# bool, selected by CONFIG_CFG80211_WEXT). Our own kernel has it; a foreign
+# out-tree without the option gets this no-op instead of a modpost failure.
+# See scripts/remote/wifi-stubs/wext_stub.c.
+ifeq ($(CONFIG_WEXT_CORE),)
+wlan_drv_gen3-y += stubs/wext_stub.o
+endif
+
 wlan_drv_gen3-y += \
 	common/dump.o \
 	common/wlan_lib.o \
@@ -111,6 +119,30 @@ ccflags-y += -I$(src)/../compat/include
 # 4.14 -> 6.12 API shims (struct timeval, do_gettimeofday, rtc_time_to_tm,
 # rtc_gpio_enable_32k) are force-included into every vendor TU.
 ccflags-y += -include $(src)/../compat/include/mtk_port_414.h
+
+# --- kernel-config assumptions of the vendor glue ---------------------------
+# The vendor code hard-requires two kernel-side options and refuses to compile
+# without them:
+#   * CONFIG_NL80211_TESTMODE - gl_cfg80211.h/gl_p2p_ioctl.h have #error without
+#     it, and it gates the testmode_cmd/testmode_dump fields of
+#     `struct cfg80211_ops` (include/net/cfg80211.h), a struct the driver fills
+#     and cfg80211.ko walks -> the module and cfg80211.ko MUST agree on it.
+#   * CONFIG_WEXT_PRIV - gl_wext.c initialises `struct iw_handler_def`
+#     .num_private/.private/.private_args, which only exist under that option.
+#     This one is local to the driver (it only stores the struct in a variable;
+#     wiphy->wext is written out only under CONFIG_CFG80211_WEXT), so defining
+#     it for this module alone cannot desynchronise any kernel-side layout.
+# Our own kernel gets both from configs/t1100-wifi.fragment, so the ifeqs below
+# are no-ops there. They only fire when building against a foreign out-tree
+# whose .config does not select them (the second developer's -touch-rot kernel,
+# docs/wifi-port-log.md "M3: модули под -touch-rot"); such a build is only
+# valid together with the cfg80211.ko from the same run.
+ifeq ($(CONFIG_NL80211_TESTMODE),)
+ccflags-y += -DCONFIG_NL80211_TESTMODE=1
+endif
+ifeq ($(CONFIG_WEXT_PRIV),)
+ccflags-y += -DCONFIG_WEXT_PRIV=1
+endif
 
 # --- driver identity --------------------------------------------------------
 ccflags-y += -DLINUX

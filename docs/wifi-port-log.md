@@ -4,6 +4,10 @@
 `wlan_drv_gen3.ko` линкуются под 6.12.114 (см. §14). Майлстоун 1 (каталог
 API-долга) — §§1–13.
 
+Отдельно: набор модулей пересобран под ядро второго разработчика
+`6.12.114-g400cb6f-touch-rot` (планшет переведён на него 12.11) — §22; пара
+«ядро + модули» готова к деплою, на устройстве ничего не выполнялось.
+
 **Устройство не трогали** (на планшете параллельно идёт работа по тачу), ничего
 не прошивали, дерево `../linux-t1100` не меняли — вся работа на build-хосте
 `172.17.141.172` в `/home/l/t1100-wifi-build` и в `patches/wifi/` этого репозитория.
@@ -821,3 +825,193 @@ tools/host/wifi-deploy.sh --status     # что лежит/загружено
 появится; (в) `clk_buf`/32k (`rtc_gpio_enable_32k` — заглушка) может понадобиться
 для стабильного XO_WCN; (г) `power on ok` — это про WMT-слой, а не про рабочий
 Wi-Fi.
+
+## 22. M3: модули под `-touch-rot` (12.11)
+
+Планшет перевели на **ядро второго разработчика**: `uname -r` =
+`6.12.114-g400cb6f-touch-rot`, `Image` внутри прошитого
+`build/boot_merged12.img` (sha256 самого boot-образа `651ab53c…`). Наши модули
+от 11.11 собраны под `-g675178729a-dirty` и на этом ядре не загрузятся, поэтому
+набор `ядро + модули` пересобран **против того же out-дерева**, что и ядро.
+Устройство не трогали: всё на build-хосте, `../linux-t1100` не менялось.
+
+### 22.1 Что с чем сверяли
+
+| | |
+|---|---|
+| src (чужое дерево, без `.git`) | `/home/l/t1100-ubuntu-build/src` |
+| out-дерево второго разработчика | `/home/l/t1100-ubuntu-build/out-normal` (`kernel.release` = `6.12.114-g400cb6f-touch-rot`, `Image` 39 873 024 Б) |
+| vermagic ядра (из `Image`) | `6.12.114-g400cb6f-touch-rot SMP preempt mod_unload aarch64` |
+| наша рабочая копия out-дерева | `/home/l/t1100-wifi-build/out-norm` (rsync-копия, чужое дерево **не** модифицировали) |
+
+`CONFIG_MODVERSIONS` в конфиге **не выставлен**, поэтому CRC символов не
+сверяются — совпасть должны только vermagic и наличие экспортов. Это упрощает
+задачу, но не отменяет её: `include/config/kernel.release` перегенерируется
+**на каждом** запуске `make` (filechk + FORCE), и без `LOCALVERSION` релиз
+схлопывается в голый `6.12.114`, а модули получают чужой vermagic:
+
+```
+$ make -s -C src O=out-norm kernelrelease                        -> 6.12.114
+$ make -s -C src O=out-norm LOCALVERSION=-g400cb6f-touch-rot kernelrelease
+                                                                 -> 6.12.114-g400cb6f-touch-rot
+```
+
+Поэтому `scripts/build-wifi-remote.sh` теперь принимает `KERNEL_OUT` и
+`LOCALVERSION` и передаёт суффикс в **каждый** `make` (включая сборку внешних
+модулей), а host-скрипт после сборки сверяет `kernel.release` до/после и падает,
+если он изменился.
+
+### 22.2 Чего в чужом конфиге не хватало (и почему это не косметика)
+
+`out-normal/.config` собран **без** `configs/t1100-wifi.fragment`, поэтому
+`wlan_drv_gen3.ko` сначала не компилировался вовсе:
+
+```
+gl_p2p_ioctl.h:447:2: error: #error "Please ENABLE kernel config (CONFIG_NL80211_TESTMODE)"
+gl_cfg80211.h:60:9: error: unknown type name ‘NL80211_DRIVER_TEST_MODE_PARAMS’
+```
+
+Разбор по опциям (что реально влияет на ABI, а что только на компиляцию):
+
+| Опция | Где | Влияние |
+|---|---|---|
+| `CONFIG_NL80211_TESTMODE` | `struct cfg80211_ops` (`include/net/cfg80211.h:4855`) | **ABI**: добавляет `testmode_cmd/testmode_dump`. Драйвер заполняет эту структуру, `cfg80211.ko` её обходит по смещениям -> модуль и `cfg80211.ko` обязаны совпадать |
+| `CONFIG_CFG80211_WEXT` | `struct wiphy` (`:5889`), `struct wireless_dev` (`:6509`) | **ABI**, но `wiphy` аллоцирует `cfg80211.ko` -> включать только если `cfg80211.ko` собран так же. Мы **не** включали (см. ниже) |
+| `CONFIG_WEXT_PRIV` | `struct iw_handler_def` (`include/net/iw_handler.h:334`) | только компиляция `gl_wext.c` (`.num_private/.private/.private_args`); на ядре без wext эту структуру никто не читает |
+| `CONFIG_WEXT_CORE` | `net/socket.c` -> `wext_handle_ioctl` | built-in bool, живёт в **vmlinux**; в чужом ядре отсутствует |
+
+Рецепт, который не трогает чужое дерево и не ломает ABI:
+
+- в копии out-дерева включена **одна** опция — `CONFIG_NL80211_TESTMODE=y`
+  (`diff` конфига = 1 строка), после чего из этого же дерева пересобраны
+  `cfg80211.ko`, `mac80211.ko`, `rfkill.ko`, `libarc4.ko` (в чужом конфиге они
+  `=m`, значит на планшете их взять неоткуда — их тоже надо класть);
+- `wlan.Kbuild` при отсутствии этих опций в конфиге ядра добавляет
+  `-DCONFIG_NL80211_TESTMODE=1` и `-DCONFIG_WEXT_PRIV=1` (в нашем собственном
+  ядре условия не срабатывают — там опции уже есть);
+- `CONFIG_CFG80211_WEXT` **не** включался: он меняет раскладку `struct wiphy`/
+  `wireless_dev`, а `cfg80211.ko` с `wext-compat.o` потянул бы символы
+  `wext-core.o`, которые в чужом vmlinux отсутствуют (это built-in в vmlinux,
+  модулем их не поставить). Итог: у вендорского драйвера `wiphy->wext` не
+  заполняется (`#ifdef` в `gl_init.c:1665`), приватные ioctl (`iwconfig`/`iwpriv`)
+  на этом ядре недоступны, всё остальное идёт через nl80211;
+- `wireless_send_event()` — единственный неразрешённый символ (он тоже из
+  `wext-core.o`). Добавлена заглушка `scripts/remote/wifi-stubs/wext_stub.c`
+  (`pr_warn_once` + дроп события), подключается только при
+  `CONFIG_WEXT_CORE` != y.
+
+### 22.3 Артефакты
+
+База: чужое дерево `/home/l/t1100-ubuntu-build/src` + `out-normal`,
+`LOCALVERSION=-g400cb6f-touch-rot`, копия out-дерева
+`/home/l/t1100-wifi-build/out-norm` (+1 опция `NL80211_TESTMODE=y`),
+`DRIVER_BUILD_DATE=20261111` (сборка воспроизводима: повторный прогон даёт те же
+sha256).
+
+| Файл | Размер | sha256 |
+|---|---|---|
+| `build/wifi/common/wmt_drv.ko` | 1 111 976 | `8228dd5c28700eea37cf8c8bb4ad833ef30ce406b75c4b381879a9ef849bbead` |
+| `build/wifi/wlan/wlan_drv_gen3.ko` | 2 895 440 | `4bbdb1d51f2c4dc6277bc1c5117a0af4317b03aa1c8d36d93bcd302a4e5f2b91` |
+| `build/wifi/kernel/cfg80211.ko` | 576 448 | `ae891d542036dd436b539c7837e268725dc563b4669566437a7b07935c2ef2e0` |
+| `build/wifi/kernel/mac80211.ko` | 811 792 | `b4ad9b62349fdebf2fc9917437a8d628221ad3751b986f3d86c8691777caee38` |
+| `build/wifi/kernel/rfkill.ko` | 48 272 | `e6bbcb7b510314457aea0b946aed862ae490ee25a7a33b19ee3a37e8a1308ab1` |
+| `build/wifi/kernel/libarc4.ko` | 5 192 | `a38b5be1648431f86a5ed406004837b3ced668f6f49a0b9d5de190af922e9ef3` |
+
+`vermagic` у всех шести — ровно как у прошитого ядра:
+
+```
+6.12.114-g400cb6f-touch-rot SMP preempt mod_unload aarch64
+```
+
+`wmt_drv.ko` побайтово совпал с версией 11.11 (`8228dd5c…`, 1 111 976 Б) — его
+код от конфига не зависит, меняется только встроенный vermagic, но он же и
+собран из того же исходника; `wlan_drv_gen3.ko` = `4bbdb1d5…` (2 895 440 Б,
++360 Б к версии 11.11 за счёт stub'а `wext_stub.o` и флагов).
+
+### 22.4 Проверки (build-хост, без устройства)
+
+- `vermagic` всех `.ko` сравнён **с ядром** (`strings Image | grep -m1 "6.12.114"`),
+  а не только с `kernel.release`: совпадение посимвольное.
+- Замыкание символов: для каждого `.ko` множество `nm -u` покрывается
+  `out-normal/vmlinux.symvers` (15 271 экспорт ядра) + экспортами остальных
+  модулей набора. Неразрешённых — **0** у всех шести.
+- `depmod -b <root> 6.12.114-g400cb6f-touch-rot` + `modprobe --show-depends`
+  дают ожидаемый граф (собран из реальных ссылок, `depends=` в `.modinfo` при
+  одноцелевой in-tree сборке пустой — см. 22.5):
+
+  ```
+  wlan_drv_gen3 -> rfkill, cfg80211, wmt_drv, wlan_drv_gen3
+  mac80211      -> rfkill, cfg80211, libarc4, mac80211
+  ```
+- Обе сборки вендорских модулей: `errors=0 undefined=0` (warnings 65/376 — как в
+  M2), `release` до/после не изменился.
+
+### 22.5 Как воспроизвести
+
+```sh
+# 1. копия чужого out-дерева (чужое не трогаем) + один прогон ядерных модулей
+rsync -a /home/l/t1100-ubuntu-build/out-normal/ /home/l/t1100-wifi-build/out-norm/
+KERNEL_OUT=/home/l/t1100-wifi-build/out-norm LOCALVERSION=-g400cb6f-touch-rot \
+    scripts/build-wifi-remote.sh --kernel-mods     # +Module.symvers, cfg80211/mac80211/rfkill/libarc4
+
+# 2. вендорские модули против того же out-дерева (достаточно KERNEL_OUT)
+KERNEL_OUT=/home/l/t1100-wifi-build/out-norm LOCALVERSION=-g400cb6f-touch-rot \
+    scripts/build-wifi-remote.sh
+```
+
+`--kernel-mods` (`scripts/remote/build-kmods-remote.sh`) делает три вещи, без
+которых внешние модули не собрать:
+
+1. `make Image` не создаёт `Module.symvers` вовсе (в 6.12 есть только
+   `vmlinux.symvers`) — таблица собирается как `vmlinux.symvers` + экспорты
+   собранных модулей;
+2. в 6.12 in-tree `modpost` берёт вход из `vmlinux.o` и **не** читает
+   `Module.symvers`, поэтому одноцелевая сборка (`make net/wireless/cfg80211.ko`)
+   видит межмодульные символы как undefined -> `KBUILD_MODPOST_WARN=1`
+   (с `MODVERSIONS=n` на код это не влияет; граф зависимостей всё равно
+   пересчитывает `depmod` на планшете);
+3. `--enable-testmode` включает `CONFIG_NL80211_TESTMODE` (wrapper включает его
+   сам, если в целевом конфиге опции нет).
+
+### 22.6 Ограничения и риски
+
+- **Нет WEXT**: `CONFIG_CFG80211_WEXT`/`WEXT_*` в этом ядре не включить без
+  пересборки самого ядра, а `wext-core.o` — built-in. `iwconfig`/`iwpriv` и
+  приватные ioctl MTK на этом ядре работать не будут; `wpa_supplicant`/
+  NetworkManager (nl80211) — будут. Полный паритет с нашим ядром = пересобрать
+  ядро второго разработчика с `configs/t1100-wifi.fragment` (тогда
+  `wext_stub.c` и `-D`-флаги автоматически выключаются).
+- **Прошитый `Image` ≠ `out-normal/Image`**: в `boot_merged12.img` лежит gzip
+  от 07:44 (`Image` после распаковки — sha256 `4ae0061f…`), а в `out-normal` —
+  от 08:45 (`58af9c93…`). Релиз/vermagic одинаковые, `MODVERSIONS` выключен,
+  но набор экспортов у этих двух сборок мы сверить не можем (symvers 07:44 не
+  сохранился). Если на планшете `insmod` скажет `Unknown symbol` — ядро и
+  модули надо пересобрать парой из одного состояния дерева.
+- **`cfg80211.ko` обязателен свой**: пара `wlan_drv_gen3.ko` + `cfg80211.ko`
+  связана раскладкой `struct cfg80211_ops` (testmode). Чужой/системный
+  `cfg80211.ko` (без `NL80211_TESTMODE`) с этим `wlan_drv_gen3.ko` использовать
+  нельзя — рассинхрон layout.
+- Прошивки `WIFI_RAM_CODE_6759`/`WMT_SOC.cfg` в rootfs по-прежнему нет (см.
+  §21.6), так что `wlan0` после загрузки модулей не появится.
+
+### 22.7 Деплой (не выполнялся — устройство у лида)
+
+`tools/host/wifi-deploy.sh` обновлён под этот релиз:
+
+- `cfg80211/mac80211/rfkill/libarc4` берутся из `build/wifi/kernel/` (а не из
+  `build/remote/modules/`, где лежали модули старого ядра);
+- release извлекается из `vermagic` `wmt_drv.ko` (`strings`, без зависимости от
+  kmod — его нет на локальной машине), суффикс `-touch-rot` сохраняется целиком;
+- **проверяется vermagic каждого `.ko` набора**, а не только `wmt_drv.ko`:
+  разнопрошивочный набор отбрасывается с кодом 4 до всякой сети;
+- сверка с `uname -r` планшета осталась прежней (сравнение полной строки релиза).
+
+```sh
+tools/host/wifi-deploy.sh              # план
+tools/host/wifi-deploy.sh --apply      # .ko -> /lib/modules/6.12.114-g400cb6f-touch-rot/updates/wifi, depmod, unit
+tools/host/wifi-deploy.sh --status
+tools/host/wifi-deploy.sh --load wmt   # modprobe wmt_drv + dmesg (M3)
+```
+
+Ядро менять не нужно: на планшете уже `6.12.114-g400cb6f-touch-rot`; нужны
+только модули из таблицы 22.3.
