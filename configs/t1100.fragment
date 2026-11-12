@@ -160,3 +160,8 @@ CONFIG_IIO_BUFFER=y
 CONFIG_IIO_KFIFO_BUF=y
 CONFIG_IIO_TRIGGERED_BUFFER=y
 CONFIG_INV_ICM42607_I2C=y
+
+# --- sensors: Sensortek STK3338 light + proximity (i2c1 0x57) ----------------
+# mainline stk3310 knows STK3013/3310/3311/3335 but not the STK3338 (PID 0x5B
+# at register 0x3E); patch 0055 adds the ID and the DT compatible.
+CONFIG_STK3310=y
