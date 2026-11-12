@@ -29,3 +29,4 @@ wlan     github.com/MotorolaMobilityLLC/vendor-mediatek-kernel_modules-connectiv
 | `0001-wlan-port-6.12.patch` | `wlan` | порт gen3 4.14 → 6.12 |
 | `0002-wlan-port-6.12-vendor-commands.patch` | `wlan` | выключены MTK vendor-команды (`wiphy_register` требует `.policy`) |
 | `0003-wlan-t1100-probe-param.patch` | `wlan` | модульный параметр `t1100_probe=1`: питание чипа + `wlanProbe()` из `initWlan` (M6) |
+| `0006-wlan-probe-stage-and-no-reset.patch` | `wlan` | пошаговый прогон: `t1100_probe_stage` (1 = только питание), `t1100_no_reset` (не дёргать whole-chip reset) и `glResetInit()` **до** probe — иначе `GL_RESET_TRIGGER` планирует неинициализированный work (NULL-вызов в kworker = смерть ядра) |
