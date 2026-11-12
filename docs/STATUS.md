@@ -2209,3 +2209,26 @@ UPower видит `battery_mt6370_battery` (50 %, 3.805 В, charging), PowerDevi
 **Осторожно:** с PowerDevil снова действует гашение экрана по простою, а после
 DPMS off/on панель ломается (см. 12.11 (4)) — в System Settings → Энергия
 выставить «Гасить экран: Никогда» (сон тоже). Иначе снова полосы.
+
+### 12.11 (9): PowerDevil — гашение экрана и автосон отключены через `powerdevilrc`
+
+PowerDevil вернули (нужен для значка батареи), но убрали гашение экрана и
+автосон — иначе после DPMS off/on панель снова ломается (12.11 (4)).
+Ключи в Plasma 6.6 — CamelCase и группы `[Профиль][Display]` /
+`[Профиль][SuspendAndShutdown]` (см. `PowerDevilProfileSettings.kcfg`):
+
+```
+[AC][Display]
+DimDisplayWhenIdle=false
+TurnOffDisplayWhenIdle=false
+LockBeforeTurnOffDisplay=false
+
+[AC][SuspendAndShutdown]
+AutoSuspendAction=0
+AutoSuspendIdleTimeoutSec=0
+```
+
+то же для профиля `[Battery]`. Проверка: в журнале PowerDevil пропадают
+строки `DPMS: registering idle timeout …` и `DimDisplay: registering idle
+timeout …` (при неверных ключах он регистрирует дефолтные 600/300 с).
+Файл зафиксирован в `rootfs-overlay/root/.config/powerdevilrc`.
