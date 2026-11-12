@@ -1,0 +1,65 @@
+--- a/drivers/iio/light/stk3310.c
++++ b/drivers/iio/light/stk3310.c
+@@ -42,6 +42,7 @@
+ #define STK3311S34_CHIP_ID_VAL			0x1E
+ #define STK3311X_CHIP_ID_VAL			0x12
+ #define STK3335_CHIP_ID_VAL			0x51
++#define STK3338_CHIP_ID_VAL			0x5B
+ #define STK3310_PSINT_EN			0x01
+ #define STK3310_PS_MAX_VAL			0xFFFF
+ 
+@@ -92,6 +93,7 @@
+ 	STK3311X_CHIP_ID_VAL,
+ 	STK3311_CHIP_ID_VAL,
+ 	STK3335_CHIP_ID_VAL,
++	STK3338_CHIP_ID_VAL,
+ };
+ 
+ /* Estimate maximum proximity values with regard to measurement scale. */
+@@ -786,6 +788,7 @@
+ 	{ .compatible = "sensortek,stk3310", },
+ 	{ .compatible = "sensortek,stk3311", },
+ 	{ .compatible = "sensortek,stk3335", },
++	{ .compatible = "sensortek,stk3338", },
+ 	{}
+ };
+ MODULE_DEVICE_TABLE(of, stk3310_of_match);
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -478,6 +478,19 @@
+  * through mediatek-sensor hub nodes.  Enable the bus first so the chips can be
+  * probed from userspace before the mainline drivers are wired in.
+  */
++&pio {
++	/*
++	 * ALS/PS interrupt line: GPIO6, the stock pinctrl keeps it pulled up
++	 * (alspspincfg: pinmux 0x600, bias-pull-up).
++	 */
++	alsps_irq_pins: alsps-irq-pins {
++		pins-eint {
++			pinmux = <PINMUX_GPIO6__FUNC_GPIO6>;
++			bias-pull-up;
++		};
++	};
++};
++
+ &i2c1 {
+ 	vbus-supply = <&i2c_vbus>;
+ 	/* the vendor bus runs in fast/high-speed mode */
+@@ -501,6 +514,16 @@
+ 			       "0", "-1", "0",
+ 			       "0", "0", "1";
+ 	};
++
++	/* Sensortek STK3338 light + proximity sensor (PID 0x5B at reg 0x3E) */
++	light-sensor@57 {
++		compatible = "sensortek,stk3338";
++		reg = <0x57>;
++		interrupt-parent = <&pio>;
++		interrupts = <6 IRQ_TYPE_EDGE_FALLING>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&alsps_irq_pins>;
++	};
+ };
+ 
+ &i2c6 {

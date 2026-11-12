@@ -51,3 +51,4 @@
 0052-drm-panel-it6112-move-44-more-vblank-lines.patch
 0053-power-supply-mt6370-expose-a-battery-with-ocv-capacity.patch
 0054-iio-add-inv-icm42607-driver-and-enable-the-imu.patch
+0055-iio-stk3310-add-stk3338-als-ps.patch
