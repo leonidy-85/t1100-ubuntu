@@ -2864,3 +2864,28 @@ ready-бита вызывает `GL_RESET_TRIGGER` → `schedule_work(rst_trigge
 OK, FW download end, reset подавлен `t1100_no_reset=1`. `wlan0` **нет** —
 единственный блокер остался прежний: прошивка не выставляет `WLAN_READY`
 (`WCIR 0x18070038 = 0`, mailbox `0x18070078 = 0x55aa`, `cpupcr` живой).
+
+## 12.11 (22): Wi-Fi M8 — READY не встаёт: MCU сидит в ROM, MPU и ROM-patch не реализованы
+
+Диагноз уточнён (см. `docs/wifi-port-log.md` §30). `MCR_WCIR` — это
+**0x18070000** (`include/nic/mt6630_reg.h:79`), `WCIR_WLAN_READY = BIT(21)`;
+измерено `0x18070000 = 0x00008a00` → READY действительно 0, poll был по
+правильному регистру (число `0x38` в логе — значение mailbox, не адрес).
+
+Главное: **MCU не исполняет прошивку**. `cpupcr` (`0x18070160`) стоит в tight
+loop `0x1572a…0x15730`, а `0xbfca5800` (EMI base + `0xA5800` = fw load addr из
+DT) читается нулями; `CPUPCR` не в диапазоне прошивки. `FW download end`
+ничего не доказывает: `CFG_ENABLE_FW_DOWNLOAD_ACK=1` отключает
+`wlanImageQueryStatus()`.
+
+Не реализованы два куска: (1) EMI MPU — обе реализации
+(`plat_priv.c:70`, `mt6771.c:991`) под `#ifdef CONFIG_MTK_EMI`, которого в
+mainline нет, а `mt_emi_api.h` в compat — пустая заглушка (политика регионов
+25/26 известна из вендорских исходников, неизвестна раскладка регистров);
+(2) ROM-patch — в `mt6771.c` его нет вовсе, тогда как `mt6765.c`/`mt6761.c`
+зовут `consys_dl_rom_patch()` → `mtk_wcn_soc_rom_patch_dwn()`, и данные патча
+кладутся в EMI через `osal_memcpy_toio()` (не по STP).
+
+`wlan0` нет. Модули: `wlan_drv_gen3.ko` `4de6e1d9…92ed69`, `wmt_drv.ko`
+`de80dcce…b3817` (собраны против `merge2-out`). Прогоны — только с
+`t1100_no_reset=1 t1100_probe_stage=3`, плата жива.
