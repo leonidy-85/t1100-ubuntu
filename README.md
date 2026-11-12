@@ -14,8 +14,9 @@
 > GPU: panfrost (патч 0039) — **Mesa 25.0.7, GLES 3.1**, `kmscube` 56.4 fps,
 > `glmark2` Score 452. Weston 13 (DRM/atomic) показывает панель, EGL-клиенты
 > 56.4 fps. **Сдвиг кадра на панели исправлен** (0046: `vbp 240`, `vfp 8`).
-> Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Дальше: тач
-> (cold init), DVFS GPU. Состояние и план — `docs/STATUS.md`,
+> Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Тач HX83102E
+> работает (`boot_touch4`, ориентация исправлена патчем 0050). Дальше:
+> DVFS GPU, обновление rootfs до 26.04. Состояние и план — `docs/STATUS.md`,
 > `docs/handover.md`.
 >
 > ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка

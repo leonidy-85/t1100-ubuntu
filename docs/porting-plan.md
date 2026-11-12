@@ -71,7 +71,9 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
   через panfrost, `weston-simple-egl` 56.4 fps (kiosk-shell, `card1`).
 - **Сдвиг кадра:** исправлен патчем 0046 (vbp 240, vfp 8; vblank не изменён),
   проверено на `boot_shift.img` 12.11.
-- **Осталось:** ввод с тача (Himax, evdev/libinput), десктоп KDE Plasma/GNOME.
+- **Тач:** HX83102E работает на `boot_touch4.img`; ориентация исправлена
+  патчем 0050 (`touchscreen-swapped-x-y`), холодный init проходит.
+- **Осталось:** десктоп KDE Plasma/GNOME, DVFS GPU.
 - **Готово:** рабочий стол на дисплее, ввод с тача.
 
 ## Фаза 5 — периферия
