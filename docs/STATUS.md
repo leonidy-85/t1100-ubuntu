@@ -2748,3 +2748,33 @@ rootfs     : Ubuntu 26.04 LTS + KDE Plasma 6.6.4 (SDDM active)
 → `wlan0` → wpa_supplicant/DHCP; (2) `libinput` + проверка тача в Plasma;
 (3) DVFS GPU; (4) закрепить порядок загрузки модулей Wi-Fi юнитом
 (`t1100-wifi.service` уже есть, не включён).
+
+## 12.11 (18): Wi-Fi M6 — nl80211 интерфейс не создаёт; probe упирается в окно CONNSYS
+
+Рубеж M6 (`wlan0` + скан) **не взят**. Сделано и проверено на железе:
+
+- **`iw` собран** статически (`scripts/build-iw-aarch64.sh`: libnl 3.11.0 + iw 6.9),
+  `build/tools-aarch64/iw`, sha256 `c4d68b70…b81374`, 1 267 888 Б, `NEEDED` = 0;
+  на планшете `/usr/local/bin/iw`, `iw version 6.9`.
+- **nl80211-путь закрыт драйвером**: `iw phy phy0 interface add wlan0 type managed`
+  → `Operation not supported (-95)`, потому что в `mtk_wlan_ops` (`gl_init.c:261`)
+  нет `.add_virtual_intf` (у P2P закомментирован). Вывод 12.11 (15) «интерфейс
+  создаёт userspace через nl80211» — неверен; его создаёт `wlanProbe()` из
+  колбэка WMT «func on (WIFI)».
+- **Колбэк недостижим без STP**: `opfunc_pwr_on` → `wmt_core_stp_init` требует
+  `WMT_OP_HIF_BIT` и STP-транспорт, а uart/sdio — заглушки (`-ENOSYS`), отсюда
+  `-3` и `func(3) pwr_on fail`.
+- **Обход (патчи `0003-wlan-t1100-probe-param`, `0004-common-export-wmt-plat-pwr-ctrl`)**:
+  `modprobe wlan_drv_gen3 t1100_probe=1` сам питает чип (`wmt_plat_pwr_ctrl(FUNC_ON)`,
+  `CONSYS-HW-PWR-ON, finish(0)`) и зовёт `wlanProbe()`. netdev создаётся, но
+  обмена с HIF нет: `sdio_open: Enable function failed, error -62`,
+  `nicpmSetDriverOwn: LP fail … cpupcr:00000000` → `wlanProbe failed`, драйвер
+  остаётся загруженным (`phy0`/`phy1` есть), `wlan0` не регистрируется.
+- **Осторожно:** вариант с `HifAhbProbe()` (с rollback `pfWlanRemove()` на ошибке)
+  **вешает ядро** (sshd не отвечает, ping идёт) — лечится только Power 10 с.
+  Поэтому rollback убран: провал probe теперь только пишется в лог.
+
+Итог: следующий шаг — регистровая видимость окна CONNSYS (`mmap`-`/dev/mem`,
+`0x18070008`/`0x180f0000` до и после power-on) и сверка SPM-последовательности
+`mt6771.c:consys_hw_power_ctrl()` с вендорской (вопрос к `bringup`);
+подробности — `docs/wifi-port-log.md` §26.
