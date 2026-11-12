@@ -69,7 +69,7 @@
  }
  
 --- a/btif_plat.c	2026-11-11 14:00:44.843844888 +0000
-+++ b/btif_plat.c	2026-11-12 23:09:28.247173032 +0000
++++ b/btif_plat.c	2026-11-12 23:16:23.916015884 +0000
 @@ -13,6 +13,7 @@
  #include "btif_pub.h"
  #include "btif_priv.h"
@@ -164,10 +164,26 @@
  #endif /* defined(CONFIG_MTK_CLKMGR) */
  		} else {
  			i_ret = ERR_INVALID_PAR;
-@@ -535,6 +559,20 @@
+@@ -497,6 +521,9 @@
+ 	int i_ret = -1;
+ 	unsigned long base = p_btif->base;
+ 
++	/* M24: before -> after, so the UART configuration is on the record. */
++	m23_btif_dump("hw_init:before");
++
+ #if NEW_TX_HANDLING_SUPPORT
+ 	_btif_tx_fifo_reset(p_btif);
+ #endif
+@@ -534,6 +561,26 @@
+ 	hal_btif_tx_ier_ctrl(p_btif, false);
  /*enable Rx IER by default*/
  	hal_btif_rx_ier_ctrl(p_btif, true);
- 
++	/* M24: read back the mask instead of trusting the write */
++	BTIF_INFO_FUNC("m23: IER readback 0x%08x (RX=%d TX=%d)\n",
++		       readl((void __iomem *)BTIF_IER(base)),
++		       !!(readl((void __iomem *)BTIF_IER(base)) & BTIF_IER_RXFEN),
++		       !!(readl((void __iomem *)BTIF_IER(base)) & BTIF_IER_TXEEN));
++
 +	/*
 +	 * M23 knobs, used to tell "the AP never put the bytes on the wire" from
 +	 * "the chip does not answer": a WAK pulse asks the CONNSYS BTIF side to
@@ -181,10 +197,10 @@
 +		btif_reg_sync_writel(BTIF_WAK_BIT, BTIF_WAK(base));
 +		BTIF_INFO_FUNC("m23: wak pulse sent\n");
 +	}
-+
++	m23_btif_dump("hw_init:after");
+ 
  	i_ret = 0;
  	return i_ret;
- }
 --- a/btif_dma_plat.c	2026-11-11 14:00:44.843844888 +0000
 +++ b/btif_dma_plat.c	2026-11-12 22:45:34.632812806 +0000
 @@ -12,6 +12,7 @@
