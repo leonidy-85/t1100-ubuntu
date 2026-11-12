@@ -127,7 +127,8 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
 Проверенные и отвергнутые гипотезы:
 - клоки/гейты MT6771 ≠ MT8183 — **неверно**, совпадают побитно;
 - IPPC/`IP version 0x0` — вторично, на картинку не влияет;
-- T-PHY не выходит в device-сессию — **верно для USB** (патч 0020), к дисплею не относится;
+- T-PHY не выходит в device-сессию — **верно для USB** (патч 0020 заменён
+  на 0060, software role switch), к дисплею не относится;
 - неверные тайминги/порядок питания панели — исправлено (0030), не помогло;
 - неверная формула TX-PLL моста — исправлено (0029), не помогло;
 - полный побайтный повтор вендорской последовательности на живом мосте — **не помогло**;
@@ -178,8 +179,12 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
    `glmark2` Score 1409/1583; в сценах `conditionals`/`function`/`loop`/`logic`
    есть `panfrost gpu sched timeout` и при 698, и при 800 — это отдельный
    shader-баг panfrost, не DVFS. Откат — `/tmp/opencode/boot_a_before_gpudvfs.img`
-   md5 `886c86cb…`. **Дальше:** panfrost shader timeout, Wi-Fi/BT, USB host/OTG,
-   suspend, задержка выделения тача.
+   md5 `886c86cb…`. **USB host/OTG (0060/0061):** `boot_usb_host.img`
+   (md5 p29 `d0d9bca9…`) — T-PHY software role switch, `dr_mode=otg`,
+   MT6370 OTG VBUS; флешка определяется (`sda`, 62.9 GB), VBUS 5050 мВ.
+   Динамический возврат host→device ломает xHCI, поэтому host — до
+   перезагрузки. **Дальше:** panfrost shader timeout, Wi-Fi/BT, безопасный
+   возврат USB-роли, suspend, задержка выделения тача.
 4. **Мелочи:** `constant_charge_current` = 2 А теперь поднимает
    `t1100-power-guard` (драйвер сам ставит 900 мА); вернуть `tcpc`, когда
    понадобится OTG/host (сейчас отключён, `tcpci` не находит узел `connector`);

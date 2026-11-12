@@ -17,7 +17,6 @@
 0017-arm64-dts-t1100-give-MSDC0-MSDC1-their-pinctrl-state.patch
 0018-usb-mtu3-log-the-UDC-name-once-it-is-registered.patch
 0019-arm64-dts-t1100-own-non-nomap-ramoops-region-at-0x70.patch
-0020-phy-mediatek-tphy-force-the-MT6771-U2-PHY-into-a-dev.patch
 0021-drm-panel-add-the-ITE-IT6112-BOE-TV110XUM-LB2-panel-.patch
 0022-drm-mediatek-dsi-take-the-per-lane-rate-limit-from-t.patch
 0023-arm64-dts-t1100-keep-the-LCM-DVDD-rail-and-its-I2C-s.patch
@@ -56,3 +55,5 @@
 0057-sound-mt6771-mt6358-machine-driver.patch
 0058-soc-mediatek-regulator-coupler-support-MT6771-and-MT8788.patch
 0059-arm64-dts-t1100-enable-GPU-DVFS-with-a-safe-OPP-subset.patch
+0060-phy-mediatek-tphy-software-role-switch-for-MT6771.patch
+0061-arm64-dts-t1100-enable-USB-role-switch-and-OTG-VBUS.patch
