@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Thu, 12 Nov 2026 07:05:00 +0300
+Subject: [PATCH] drm/panel: it6112: move 44 more vblank lines into the back
+ porch
+
+The first frame-shift fix moved 212 lines from the front porch into the
+back porch, but a ~2% black band remained on the portrait top edge (the
+left edge in landscape).  Move another 44 lines there.
+
+The vblank total grows from 2432 to 2476 lines; the pixel clock is
+unchanged, so the refresh rate becomes 58.93 Hz instead of 60 Hz.
+---
+ drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index e23dc35..2c635b3 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -903,15 +903,15 @@ static const struct drm_display_mode boe_tv110xum_lb2_mode = {
+ 	.htotal = 1600 + 14 + 44 + 44,
+ 	.vdisplay = 2176,
+ 	/*
+-	 * EXPERIMENT: the image comes out shifted towards the start of the
+-	 * frame - a ~10% black band on the portrait top edge, content cut off
+-	 * on the opposite edge - so move ~212 lines from the front porch into
+-	 * the back porch.  The vblank total (and the pixel clock) is unchanged,
+-	 * so this only moves the active window inside the frame.
++	 * The panel shows the frame early: after moving 212 lines from the
++	 * front porch into the back porch a ~2% black band remained on the
++	 * portrait top edge, so move another 44 lines there.  The vblank
++	 * total grows by 44 lines; the pixel clock is unchanged, giving
++	 * 58.93 Hz instead of 60 Hz.
+ 	 */
+ 	.vsync_start = 2176 + 8,
+-	.vsync_end = 2176 + 8 + 240,
+-	.vtotal = 2176 + 8 + 240 + 8,
++	.vsync_end = 2176 + 8 + 284,
++	.vtotal = 2176 + 8 + 284 + 8,
+ 	.width_mm = 166,
+ 	.height_mm = 226,
+ };
+-- 
+2.54.0
+
