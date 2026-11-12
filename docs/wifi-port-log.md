@@ -2396,3 +2396,126 @@ WCIR_WLAN_READY (BIT(21))  = 0
 другое (в логе драйвер печатает «MailBox 0x38», а `0x180f0004 = 0x38`).
 Проверять надо сравнением с `mt6630_reg.h` + дампом вендорского стока — это
 следующий узкий шаг, отдельно от порядка сбросов.
+
+## 41. M20: MCR-окно идентифицировано — READY читается верно, вопрос был в дампе; ROMv4-патч идёт по STP, не в EMI (13.11)
+
+### 41.1 `0x180f0000` — не WCIR, а командный порт HIF
+
+Вендорский AHB-HIF (`hif/ahb_sdioLike`) обращается к регистрам MCU **не**
+memory-mapped, а через SDIO-подобный командный порт
+(`os/linux/hif/ahb_sdioLike/sdio_bus_driver.c:107`):
+
+```c
+UINT_32 sdio_cr_readl(volatile UINT_8 *prHifBaseAddr, UINT_32 addr)
+{
+	info.field.rw_flag = SDIO_GEN3_READ;   /* бит31 */
+	info.field.func_num = func->num;       /* [30:28] = 1 (WIFI) */
+	info.field.addr = addr;                /* [25:9]  */
+	info.field.count = 4;                  /* [8:0]   */
+	writel(info.word, prHifBaseAddr + SDIO_GEN3_CMD_SETUP);   /* +0x0    */
+	value = readl(prHifBaseAddr + SDIO_GEN3_CMD53_DATA);      /* +0x1000 */
+```
+
+`HAL_MCR_RD` (`include/nic/hal.h:214`) → `kalDevRegRead` (`ahb.c:547`) →
+`HIF_REG_READL` = `sdio_cr_readl`, т.е. **WCIR читается через CMD53**, а прямая
+загрузка `0x180f0000` возвращает последнее записанное командное слово. Размер
+окна в DT это подтверждает: `<0x180f0000 0x1100>` (стоковый `wifi@180f0000`)
+— ровно под `+0x1000`.
+
+Разложение `0x1000f004` из §40.2 как слова CMD53: `func=1`, `addr=0x78`
+(`MCR_D2HRM0R` — mailbox 0), `count=4`, `rw=0` (read) — это **последнее чтение
+mailbox'а в таймауте READY** (`nicGetMailbox()` в `wlan_lib.c:641`), а не chip-id.
+
+Замер в одном прогоне (патч 0009-wlan, `t1100_hif_state()`):
+
+```
+t1100-hif[after-download]:    WCIR=0x00100788 chipid=0x0788 rev=0 POR=1 READY=0 WASR=0x00010200 mbox0=0x02000020 cpupcr=0x00001170
+t1100-hif[after-download]:    raw hif phy=0x180f0000 setup=0x1000f004 cmd52=0x00000020 cmd53=0x00000000
+(mempeek 0x180f0000 = 0x00000000, 0x18070008 = 0x00000788, 0x18070160 = 0x0000078a)
+```
+
+Итог M20: окно выбрано верно (`of_iomap(node,0)` = `0x180f0000`, `MCR_WCIR=0`,
+`mt6630_reg.h:79`), chip-id `0x788` совпадает с DT, `POR_INDICATOR(BIT20)=1`,
+`WLAN_READY(BIT21)=0`. **Гипотеза «READY читается не оттуда» закрыта** — READY
+действительно не встаёт. Заодно: `0x180f0004`/`0x180f000c` в дампах — это
+`CMD52_DATA`/`CMD5_DATA`, не mailbox/WFDMA.
+
+### 41.2 `wlanImageQueryStatus()` — MCU говорит «образ в порядке»
+
+Снят `#if !CFG_ENABLE_FW_DOWNLOAD_ACK` с `wlanImageQueryStatus()`
+(`wlan_lib.c:2925`) и добавлен один явный вызов после `FW download end`:
+`t1100-query: wlanImageQueryStatus() -> 0 (0=ok)`. Т.е. MCU принял обе секции
+(`0x020a1000`, `0x000a5800`) и подтвердил статус образа; проблема не в приёме
+образа.
+
+### 41.3 Два адреса `WIFI_START` — оба приняты, READY не встаёт
+
+Патч 0009-wlan шлёт `WIFI_START` дважды и печатает `cpupcr`
+(`wmt_plat_read_cpupcr()` = `0x18070160`):
+
+```
+start[0] addr=0x000a5800 cpupcr before 0x00001170 -> after 1.8 s 0x00005608, 0x00014eea (ready=0)
+start[1] addr=0x020a1000 cpupcr before 0x0000474a -> after 1.7 s 0x00000f76, 0x00000720 (ready=0)
+WCIR после обоих: 0x00100788 (READY=0), WASR 0x300 (RX0/RX1 underflow), mbox0 0x02000020
+```
+
+`cpupcr` больше не «стоит в 0x1572a»: он гуляет в диапазоне `0x700…0x18000`
+(ROM), т.е. MCU исполняет ROM и реагирует на команды, но в RAM-код не уходит.
+Ни один из двух адресов не переключает его в `0xa5800+`.
+
+### 41.4 ROM-патч: для `0x0788` вендор шлёт его **по STP**, а не в EMI
+
+`wmt_ic_soc.c:2753` `mtk_wcn_soc_normal_patch_dwn()`:
+
+```c
+if (icId == 0x0507 || icId == 0x0713 || icId == 0x0788 || icId == 0x0688) {
+	/* ROMv4 patch RAM base */
+	WMT_PATCH_ADDRESS_CMD[8] = 0x18;  WMT_PATCH_ADDRESS_CMD[9] = 0x05;
+	WMT_PATCH_P_ADDRESS_CMD[8] = 0x7c; WMT_PATCH_P_ADDRESS_CMD[9] = 0x0b;
+}
+...
+iRet = wmt_core_tx(&WMT_PATCH_ADDRESS_CMD[0], sizeof(...), &u4Res, ...);  /* ожидание WMT_PATCH_ADDRESS_EVT */
+... фрагменты по DEFAULT_PATCH_FRAG_SIZE: 5-байтный WMT_PATCH_CMD + тело, wmt_core_tx/wmt_core_rx
+```
+
+То есть для нашего chip-id патч ROMv4 идёт **через транспорт WMT (`wmt_core_tx`,
+STP) на patch RAM base**, а EMI-путь (`mtk_wcn_soc_rom_patch_dwn()`) — это
+механизм mt6765/mt6761 (`addressByte` из userspace + `osal_memcpy_toio`), и в
+`mt6771.c` такого шага нет вообще. Значит патч 0009-common (запись
+`soc3_0_ram_mcu_e1_hdr.bin` в `EMI+0`) — не вендорский механизм для 0x788; этим
+объясняется, что MCU его «не подхватывает» (§34–§35).
+
+Сам файл ROM-патча для ROMv4 в нашем наборе отсутствует:
+`ROMv4_be_patch_1_0_hdr.bin` 229 384 Б (`83f7e9bc…`), `ROMv4_be_patch_1_1_hdr.bin`
+314 120 Б (`2203d8b7…`) — `refs/aurora-5.2.1.200.md:76-77`; на планшете и на
+build-хосте их нет (RPM-репозиторий не смонтирован). Вендор берёт имена/адреса
+из userspace (`wmt_loader`, `srh_rom_patch`), в `WMT_SOC.cfg` их нет.
+
+### 41.5 Что сделано в коде
+
+- `0009-common-mt6771-consys-rompatch.patch` — вместо четырёх накопительных
+  (`0009`…`0012`, каждый содержал предыдущие и не накладывался в цепочке):
+  один консолидированный. Из него убрана перезапись `ROM_DESEL` уже после
+  снятия AP_RGU (не вендорская последовательность, §40.1) и убран вызов
+  `consys_hw_spm_clk_gating_enable()` с `PWRON_CONFG_EN` — гипотеза §36
+  закрыта, функция снова пустая, как у вендора.
+- `0009-wlan-query-status-and-two-start.patch` — `t1100_hif_state()` (WCIR/WASR/
+  mailbox/cpupcr + сырое окно HIF), явный `wlanImageQueryStatus()`, два
+  `WIFI_START`.
+- Модули: `wmt_drv.ko` `f862e768…c91c63` (1 118 680 Б),
+  `wlan_drv_gen3.ko` `6465d6b1…bcbe7262` (2 907 544 Б), vermagic
+  `6.12.114-g400cb6f-touch-rot`, сборка против `/home/l/t1100-merge2-out`.
+  Прогон: `t1100_probe=1 t1100_probe_stage=3 t1100_no_reset=1`, oops нет,
+  плата жива, `wlan0` нет.
+
+### 41.6 Следующий шаг
+
+1. Достать `ROMv4_be_patch_1_0_hdr.bin` (RPM-репозиторий Aurora) и проверить,
+   можно ли отдать его по тому же пути, что `WIFI_START`/`section-config`
+   (MCR `WTDR1 0x34` + `WRDR0/1 0x50/0x54`), т.е. без полного STP: команда
+   `WMT_PATCH_ADDRESS_CMD` + `WMT_PATCH_CMD`-фрагменты, ответ
+   `WMT_PATCH_ADDRESS_EVT`/`WMT_PATCH_EVT` (5–8 байт).
+2. Параллельно — сравнить с `mt6771.c` вендора 4.14: кто и когда зовёт
+   `mtk_wcn_soc_patch_dwn()` для 0x788 (это `wmt_loader`, `srh_rom_patch`).
+3. Если STP-путь нереализуем без hif-заглушек — это единственный оставшийся
+   блокер `WLAN_READY`; фиксировать как отдельный рубеж (STP over MCR).
