@@ -3255,3 +3255,19 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
   `start_devapc()` пишет только APC_CON и комментирует «SMC call is called to
   set Device APC in LK»). Запись в BTIF после всех попыток по-прежнему
   отбрасывается ⇒ открыть права из Linux нельзя. Факты — `refs/m25-devapc-mt6771.md`.
+
+## 13.11 (7): M26 — LK зовёт ATF по SMC; DTB совпадает со стоком; DEVAPC нарушений не даёт
+
+- Из дампа `lk_a` (md5 `fab6c0a7…`): `[DEVAPC] platform_sec_post_init - SMC call
+  to ATF from LK`; LK ищет узлы `devapc@10207000`, `devapc_mpu_ao@10015000`,
+  `btif@1100c000`, `irtx@1100d000` по compatible в **нашем** DTB (строки 0xaf7dc,
+  0xae904, 0xb2764, 0xb2920). Права ставит ATF; `gz_a` упакован, офлайн не разобрать.
+- Сравнение живого DTB со стоком: по всем этим узлам (reg/int/clocks/status) —
+  **идентично** ⇒ DTS не меняли, boot не прошивали.
+- DEVAPC-блок жив (`VIO_MASK0=0xffffffff`), но отброшенный write в BTIF не даёт
+  ни `VIO_STA` (слово 3 = 0), ни `DBG0/1` ⇒ DEVAPC как блокиратор не подтверждён.
+  `APC_CON` не пишется, гейт `INFRA_DEVICE_APC` (IFR1[20]) не включается; попытка
+  вендорского `start_devapc()` добавлена в код (`m23_devapc_open`).
+- Запись в BTIF по-прежнему отбрасывается (`IER` 0xa5a5a5a5 → 0), ROM молчит,
+  ROMv4-патч не доставлен, `wlan0` нет. Массовое включение всех гейтов INFRACFG_AO
+  вешает плату (ребут) — метод запрещён. Факты — `refs/m26-lk-devapc.md`.
