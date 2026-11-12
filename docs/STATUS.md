@@ -2992,3 +2992,18 @@ CONN main. `cpupcr` без изменений: `0x1170` (+20 мс) → `0x1572c`
 
 EMI MPU (гипотеза B) не делал: нужна публичная раскладка регистров, это
 следующий шаг.
+
+## 12.11 (29): Wi-Fi M15 — клок CONN main = тот же `SPM+0x32C`, гипотеза A закрыта
+
+По публичному дереву (`Hadenix/android_kernel_alps-4.4` @ `e73397b5…`,
+`drivers/clk/mediatek/clk-mt6771-pg.c`, выдержка в `refs/mt6771-scpsys/`):
+`CONN_PWR_CON = SPM_REG(0x32C)` (pg.c:189), `CONN_PWR_STA_MASK = BIT(1)`
+(pg.c:379) — т.е. вендорский `clk_prepare_enable("conn")` пишет **ровно
+`0x1000632c`** и читает статус в `0x10006180` бит1, как и наш
+`consys_hw_power_ctrl_spm()`. Отдельного infracfg/scpsys-гейта у CONN нет
+(`bus_prot_mask = 0`, `sram_pdn_bits = 0`); bus protect — отдельный API
+`spm_topaxi_protect()` (наши биты 13/14 в `0x100012a0`).
+
+Значит недостающего клока CONN нет, гипотеза A закрыта; `cpupcr` по-прежнему
+`0x1170` → `0x1572c`, `WCIR = 0x1000f004` (READY=0), `wlan0` нет. Следующая —
+гипотеза B (EMI MPU) с публичной раскладкой регистров.

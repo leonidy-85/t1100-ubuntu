@@ -2241,3 +2241,32 @@ spm_clk_gating: PWRON_CONFG_EN 0x10006000 0x00000003 -> 0x00000001
 Гипотеза A **не проверяема нашими исходниками**: чтобы включить CONN main,
 нужен либо downstream `clk-mt6771.c`/`mt_scpsys.c` (не публичен в нашем дропе),
 либо публичный MT6771-клон с таблицей `CLK_SCP_CONN_MAIN`. Регистр не выдумываем.
+
+## 37. M15: клок CONN main найден в публичном дереве — это тот же SPM-регистр (12.11)
+
+Источник: `github.com/Hadenix/android_kernel_alps-4.4` @
+`e73397b57ac6200cb0ed3104ece921e6dc357b65`,
+`drivers/clk/mediatek/clk-mt6771-pg.c` (+ `clk-mt6771-pg.h`), копия выдержки —
+`refs/mt6771-scpsys/`.
+
+```
+pg.h:19    SYS_CONN = 1,
+pg.c:189   #define CONN_PWR_CON    SPM_REG(0x32C)     /* spm_base + 0x32c */
+pg.c:379   #define CONN_PWR_STA_MASK  (0x1 << 1)
+pg.c:504   [SYS_CONN] = { .name = "SYS_CONN", .sta_mask = CONN_PWR_STA_MASK,
+                          .sram_pdn_bits = 0, .sram_pdn_ack_bits = 0,
+                          .bus_prot_mask = 0, .ops = &CONN_sys_ops },
+pg.c:3543  PGATE(SCP_SYS_CONN, pg_conn, NULL, NULL, SYS_CONN),
+pg.c:3583  syss[SYS_CONN].ctl_addr = CONN_PWR_CON;
+```
+
+**Вывод:** вендорский `clk_prepare_enable(clk_scp_conn_main)` — это power-gate
+`SYS_CONN`, который пишет **`SPM + 0x32C`**, т.е. ровно `0x1000632c`, который
+наш `consys_hw_power_ctrl_spm()` уже программирует (pwr_on/pwr_on_s/iso/clk_dis/
+rst), и статус он читает по `PWR_STATUS(0x180)` бит1 — тоже наш `0x10006180`.
+Отдельного infracfg/scpsys-гейта у CONN **нет** (`bus_prot_mask = 0`,
+`sram_pdn_bits = 0`; bus protect вендор делает отдельным API
+`spm_topaxi_protect()` — это и есть наши биты 13/14 в `0x100012a0`).
+
+Значит гипотеза A **уже реализована** нашим SPM-путём: недостающего клока нет,
+и это не причина ROM-петли. Идём в гипотезу B (EMI MPU).

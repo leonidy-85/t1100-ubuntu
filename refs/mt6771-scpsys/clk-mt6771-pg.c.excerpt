@@ -1,0 +1,50 @@
+# excerpt: drivers/clk/mediatek/clk-mt6771-pg.c
+# repo github.com/Hadenix/android_kernel_alps-4.4 @ e73397b57ac6200cb0ed3104ece921e6dc357b65
+
+#define MFG_CORE1_PWR_CON       SPM_REG(0x0310)
+#define AUDIO_PWR_CON     SPM_REG(0x0314)
+#define MD1_PWR_CON      SPM_REG(0x320)
+#define VPU_TOP_PWR_CON       SPM_REG(0x324)
+#define CONN_PWR_CON       SPM_REG(0x32C)
+#define VPU_CORE2_PWR_CON       SPM_REG(0x330)
+#define MFG_ASYNC_PWR_CON       SPM_REG(0x334)
+#define MFG_PWR_CON       SPM_REG(0x338)
+#define VPU_CORE0_PWR_CON       SPM_REG(0x33C)
+#define VPU_CORE1_PWR_CON       SPM_REG(0x340)
+#define CAM_PWR_CON       SPM_REG(0x344)
+
+
+/* Define MTCMOS Power Status Mask */
+#define MD1_PWR_STA_MASK                 (0x1 << 0)
+#define CONN_PWR_STA_MASK                (0x1 << 1)
+#define DPY_PWR_STA_MASK                 (0x1 << 2)
+#define DIS_PWR_STA_MASK                 (0x1 << 3)
+#define MFG_PWR_STA_MASK                 (0x1 << 4)
+
+		     .ops = &MD1_sys_ops,
+		     },
+	[SYS_CONN] = {
+		      .name = __stringify(SYS_CONN),
+		      .sta_mask = CONN_PWR_STA_MASK,
+		     /* .ctl_addr = NULL,  */
+		      .sram_pdn_bits = 0,
+		      .sram_pdn_ack_bits = 0,
+		      .bus_prot_mask = 0,
+		      .ops = &CONN_sys_ops,
+		      },
+
+/* FIXME: all values needed to be verified */
+struct mtk_power_gate scp_clks[] __initdata = {
+	PGATE(SCP_SYS_MD1, pg_md1, NULL, NULL, SYS_MD1),
+	PGATE(SCP_SYS_CONN, pg_conn, NULL, NULL, SYS_CONN),
+	PGATE(SCP_SYS_DIS, pg_dis, NULL, mm_sel, SYS_DIS),
+	PGATE(SCP_SYS_MFG_ASYNC, pg_mfg_async, NULL, mfg_sel, SYS_MFG_ASYNC),
+	PGATE(SCP_SYS_MFG, pg_mfg, pg_mfg_async, NULL, SYS_MFG),
+
+	infra_base = infra_reg;
+	smi_larb6_base = smi_larb6_reg;
+	smi_common_base = smi_common_reg;
+
+	syss[SYS_MD1].ctl_addr = MD1_PWR_CON;
+	syss[SYS_CONN].ctl_addr = CONN_PWR_CON;
+	syss[SYS_DIS].ctl_addr = DIS_PWR_CON;
