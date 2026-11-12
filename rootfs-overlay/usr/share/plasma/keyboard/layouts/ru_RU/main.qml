@@ -2,17 +2,55 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
 
 import QtQuick
+import QtQuick.Window
 import QtQuick.VirtualKeyboard
 import QtQuick.VirtualKeyboard.Components
 import QtQuick.Layouts
 
 KeyboardLayout {
+    inputMode: InputEngine.InputMode.Cyrillic
     sharedLayouts: ['symbols']
     keyWeight: 160
     readonly property real normalKeyWidth: normalKey.width
     readonly property real functionKeyWidth: mapFromItem(normalKey, normalKey.width / 2, 0).x
+    Connections {
+        target: keyboard
+        function onActiveChanged() {
+            if (keyboard.active)
+                resetShiftTimer.restart()
+        }
+    }
+    Timer {
+        id: resetShiftTimer
+        interval: 0
+        onTriggered: {
+            InputContext.priv.shiftHandler.shiftActive = false
+            InputContext.priv.shiftHandler.capsLockActive = false
+        }
+    }
+    Component.onCompleted: {
+        InputContext.priv.shiftHandler.shiftActive = false
+        InputContext.priv.shiftHandler.capsLockActive = false
+    }
     KeyboardRow {
         Layout.fillHeight: true
+        Key { Layout.minimumHeight: 0; key: Qt.Key_Escape; displayText: "Esc" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F1; displayText: "F1" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F2; displayText: "F2" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F3; displayText: "F3" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F4; displayText: "F4" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F5; displayText: "F5" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F6; displayText: "F6" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F7; displayText: "F7" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F8; displayText: "F8" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F9; displayText: "F9" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F10; displayText: "F10" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F11; displayText: "F11"; visible: Screen.width >= Screen.height }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F12; displayText: "F12"; visible: Screen.width >= Screen.height }
+    }
+    KeyboardRow {
+        Layout.fillHeight: true
+        Key { Layout.minimumHeight: 0; text: "~" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_1; text: "1"; alternativeKeys: "!1"; smallText: "!"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_2; text: "2"; alternativeKeys: "@2"; smallText: "@"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_3; text: "3"; alternativeKeys: "#3"; smallText: "#"; smallTextVisible: true }
@@ -23,9 +61,21 @@ KeyboardLayout {
         Key { Layout.minimumHeight: 0; key: Qt.Key_8; text: "8"; alternativeKeys: "*8"; smallText: "*"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_9; text: "9"; alternativeKeys: "(9"; smallText: "("; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_0; text: "0"; alternativeKeys: ")0"; smallText: ")"; smallTextVisible: true }
+        Key { Layout.minimumHeight: 0; text: "-" }
+        Key { Layout.minimumHeight: 0; text: "+"; alternativeKeys: "=+"; smallText: "="; smallTextVisible: true }
+        BackspaceKey {
+            Layout.minimumHeight: 0
+            weight: normalKeyWidth
+            Layout.fillWidth: false
+        }
     }
     KeyboardRow {
         Layout.fillHeight: true
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Tab
+            displayText: "Tab"
+        }
         Key {
             Layout.minimumHeight: 0
             key: 0x0419
@@ -83,13 +133,35 @@ KeyboardLayout {
             key: 0x0425
             text: "х"
         }
+        Key {
+            Layout.minimumHeight: 0
+            text: "\\"
+            alternativeKeys: "|\\"
+            smallText: "|"
+            smallTextVisible: true
+        }
     }
     KeyboardRow {
         Layout.fillHeight: true
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0424
-            text: "ф"
+        KeyboardRow {
+            Layout.fillHeight: true
+            Layout.preferredWidth: functionKeyWidth
+            Layout.fillWidth: false
+            Key {
+                Layout.minimumHeight: 0
+                displayText: "Caps"
+                functionKey: true
+                noKeyEvent: true
+                onClicked: InputContext.priv.shiftHandler.capsLockActive = !InputContext.priv.shiftHandler.capsLockActive
+                highlighted: InputContext.priv.shiftHandler.capsLockActive
+            }
+            Key {
+                Layout.minimumHeight: 0
+                key: 0x0424
+                text: "ф"
+                weight: normalKeyWidth
+                Layout.fillWidth: false
+            }
         }
         Key {
             Layout.minimumHeight: 0
@@ -141,11 +213,18 @@ KeyboardLayout {
             key: 0x042D
             text: "э"
         }
+        EnterKey {
+            Layout.minimumHeight: 0
+            weight: normalKeyWidth
+            Layout.fillWidth: false
+        }
     }
     KeyboardRow {
         Layout.fillHeight: true
         ShiftKey {
             Layout.minimumHeight: 0
+            weight: normalKeyWidth * 1.2
+            Layout.fillWidth: false
         }
         Key {
             Layout.minimumHeight: 0
@@ -193,15 +272,44 @@ KeyboardLayout {
             key: 0x042E
             text: "ю"
         }
-        BackspaceKey {
+        Key {
             Layout.minimumHeight: 0
+            key: Qt.Key_Period
+            weight: normalKeyWidth * 0.7
+            Layout.fillWidth: false
+            text: "."
+            alternativeKeys: ","
+            smallText: ","
+            smallTextVisible: true
+        }
+        Key {
+            Layout.minimumHeight: 0
+            weight: normalKeyWidth * 0.7
+            Layout.fillWidth: false
+            text: "/"
+            alternativeKeys: "?/"
+            smallText: "?"
+            smallTextVisible: true
+        }
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Up
+            displayText: "↑"
+            repeat: true
+            weight: normalKeyWidth * 0.55
+            Layout.fillWidth: false
+        }
+        ShiftKey {
+            Layout.minimumHeight: 0
+            weight: normalKeyWidth * 1.3
+            Layout.fillWidth: false
         }
     }
     KeyboardRow {
         Layout.fillHeight: true
         SymbolModeKey {
             Layout.minimumHeight: 0
-            weight: functionKeyWidth
+            weight: normalKeyWidth
             Layout.fillWidth: false
         }
         ChangeLanguageKey {
@@ -209,38 +317,36 @@ KeyboardLayout {
             weight: normalKeyWidth
             Layout.fillWidth: false
         }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Comma
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-            text: ","
-            smallText: "\u2699"
-            smallTextVisible: keyboard.isFunctionPopupListAvailable()
-            highlighted: true
-        }
         SpaceKey {
             Layout.minimumHeight: 0
         }
         Key {
             Layout.minimumHeight: 0
-            key: Qt.Key_Period
-            weight: normalKeyWidth
+            key: Qt.Key_Left
+            displayText: "←"
+            repeat: true
+            weight: normalKeyWidth * 0.55
             Layout.fillWidth: false
-            text: "."
-            alternativeKeys: "!.?"
-            smallText: "!?"
-            smallTextVisible: true
-            highlighted: true
+        }
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Down
+            displayText: "↓"
+            repeat: true
+            weight: normalKeyWidth * 0.55
+            Layout.fillWidth: false
+        }
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Right
+            displayText: "→"
+            repeat: true
+            weight: normalKeyWidth * 0.55
+            Layout.fillWidth: false
         }
         HideKeyboardKey {
             Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-        }
-        EnterKey {
-            Layout.minimumHeight: 0
-            weight: functionKeyWidth
+            weight: normalKeyWidth * 0.7
             Layout.fillWidth: false
         }
     }
