@@ -2491,3 +2491,26 @@ context.objects = [
 **Инструменты** (`rawplay`, `ctlroute`, `ctlenum`) лежат в `/usr/local/bin`;
 исходники — `tools/device/` (статическая сборка на build-хосте:
 `aarch64-linux-gnu-gcc -O2 -static <src>.c -o <bin>`).
+
+### 12.11 (15): микрофон — путь найден (AIN1), сигнал пока нулевой
+
+Захват заводится как отдельный узел PipeWire (`api.alsa.pcm.source` на `hw:0,1`,
+`/etc/pipewire/pipewire.conf.d/52-alsa-mic.conf`), Source виден в `wpctl`.
+Маршрут для аналогового микрофона: `Mic Type Mux=ACC`, `PGA L/R Mux=AIN1`,
+`ADC L/R Mux=Left/Right Preamplifier`, `AIF Out Mux=Normal Path`,
+`UL1_CH1/CH2 ADDA_UL=on`, `PGA Volume=4` (+24 дБ).
+
+**Факты с железа.** Перебор входов (по 9 с, пользователь говорил):
+`ACC+AIN0` peak 1345, **`ACC+AIN1` peak 23100 (реальный сигнал)**, `ACC+AIN2`
+peak 1024, `DMIC+AIN0` peak 0. То есть микрофон сидит на **AIN1**.
+
+**Проблема.** Повторить успешный замер не удаётся: все последующие записи
+(3×7 с, 15 с с переключением mux на ходу) дают `peak 0, rms 0`, при этом
+dmesg показывает корректный `mt6358_amic_enable(), mux, mic 1, pga l 1, pga r 1`.
+Гипотеза: в mainline `mt6358.c` ветка ACC не поднимает MICBIAS/`mtkaif` так,
+как это делает ветка DMIC (`mt6358_dmic_enable()` ставит MICBIAS0=1P9V), либо
+порядок `mt6358_restore_pga()`/`AFE_UL_SRC_CON0` не совпадает с вендорским.
+Нужен разбор `mt6358_amic_enable()` против вендорского `mt6358_codec.c`.
+
+**Инструменты:** `/usr/local/bin/{rawplay,ctlroute,ctlenum,ctlset}` (исходники —
+`tools/device/`), запись `pw-record --target <mic-node> --rate 48000 --channels 2`.
