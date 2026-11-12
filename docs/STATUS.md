@@ -2778,3 +2778,34 @@ rootfs     : Ubuntu 26.04 LTS + KDE Plasma 6.6.4 (SDDM active)
 `0x18070008`/`0x180f0000` до и после power-on) и сверка SPM-последовательности
 `mt6771.c:consys_hw_power_ctrl()` с вендорской (вопрос к `bringup`);
 подробности — `docs/wifi-port-log.md` §26.
+
+## 12.11 (19): Wi-Fi M7 — окно CONNSYS ожило, причина найдена (bringup)
+
+**Диагноз доказан, `wlan0` пока нет.** Окно `0x18070000`/`0x180f0000` молчало
+не из-за питания/регулятора, а из-за двух вещей в вендорском коде
+(`refs/consys-regs-2026-11-12.md` — сырые дампы до/после):
+
+1. `CONSYS_PWR_ON_OFF_API_AVAILABLE` для mt6771 равно **1**, а не 0 (как было
+   записано в §26.4): единственное действие power-on —
+   `clk_prepare_enable(clk_scp_conn_main)`; клока `conn` в mainline нет
+   (патч 0002 сделал lookup необязательным), а `clk_enable(NULL)` — успешный
+   no-op. Поэтому `CONSYS-HW-PWR-ON, finish(0)` ничего не включал:
+   `0x1000632c = 0x112` (iso=1, clk_dis=1, pwr_on=0), `0x10006180 = 0x008fff4c`.
+2. Ручная SPM-ветка вендора снимает CONN AXI-protect через «read & ~mask» по
+   `0x100012a4`, а это **write-1-to-clear** зеркало `0x100012a0` — protect
+   остаётся, окно читается нулями, а запись в него встаёт намертво.
+
+Сделан патч **`patches/wifi/0005-common-consys-spm-power-on.patch`**:
+SPM-последовательность с таймаутами как fallback при отсутствии клока `conn` +
+корректное снятие protect (`0x100012a0` RW / `0x100012a4` W1C). После неё:
+`0x18070008 = 0x00000788` (chip id!), `0x180f000c = 0xa07f0000` (WFDMA),
+запись ROM-deselect проходит. Модули собраны и лежат на планшете
+(`wmt_drv.ko` `de80dcce…`, `wlan_drv_gen3.ko` `2a6d8c5b…`).
+
+**Новый риск, важный для следующего шага:** с живым доменом
+`modprobe wlan_drv_gen3 t1100_probe=1` **вешает ядро наглухо** (нет ping/sshd/
+USB-gadget, авторебута нет) — нужен Power 10 с. Устройство на момент отчёта
+недоступно. Лог прогона — `/root/wifi-test.log` на планшете. Не запускать probe
+вслепую: сначала пошаговый параметр (`t1100_probe_stage=N`), затем смотреть,
+какой первый MMIO клока не имеет (WFDMA/`wifi-dma`, AFE `0x180b6000`,
+EMI-MPU). Подробности — `docs/wifi-port-log.md` §27.
