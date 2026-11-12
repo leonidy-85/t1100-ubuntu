@@ -1798,3 +1798,104 @@ wlanProbe failed; initcall initWlan returned 0
 `kalSetEmiMpuProtection()` — заглушка («EMI MPU function is not defined»), без
 неё прошивка может не получить доступ к своему EMI; (3) адреса загрузки/старта
 из DT `hardware-values = <0x788 0xa5800 0xa5800>`.
+
+## 30. M8: READY-бит не встаёт — MCU не уходит из ROM; MPU и ROM-patch не реализованы (12.11)
+
+`wlan0` пока нет. Ниже — что измерено и что из этого следует, чтобы не
+переоткрывать.
+
+### 30.1 READY-бит: где он на самом деле
+
+`include/nic/mt6630_reg.h`:
+
+```
+79:  #define MCR_WCIR          0x0000
+249: #define WCIR_WLAN_READY   BIT(21)
+252: #define WCIR_CHIP_ID      BITS(0, 15)
+```
+
+То есть `wlan_lib.c:616` (`HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Value)`) читает
+**`0x18070000`**, а не `0x38`. Число `0x38` в сообщении
+`Waiting for Ready bit timeout, Device to Host MailBox 0x38` — это значение
+**mailbox 0** (`nicGetMailbox` → `MCR_D2HRM0R 0x0078`), а не адрес. Вывод из
+§29.5 («poll не того регистра») отменяется: регистр верный.
+
+Измерено (`mempeek --mmap 0x18070000`):
+
+```
+0x18070000 = 0x00008a00   bit21 (WLAN_READY) = 0
+0x18070004 = 0x00008a00
+0x18070008 = 0x00000788   <- chip id, который ждёт polling_consys_chipid()
+```
+
+Значит READY действительно не выставлен, а не «читаем не там».
+
+### 30.2 MCU не исполняет загруженную прошивку
+
+```
+0x18070160 = 0x0001572a / 0x0001572c / 0x00015730   (cpupcr, три выборки — tight loop)
+0xbfca5800 = 0x00000000 …                          (EMI base + 0xA5800 = fw load addr из DT)
+0xbfc80000 = 0x00000000 …                          (EMI + 0x80000, coredump-зона)
+0x18070400/404/40c = 0x00000000                    (hang debug MCU)
+```
+
+`hardware-values = <0x788 0xa5800 0xa5800>` (load = start = 0xA5800), а PC
+крутится на `0x15730` — это **не** адрес прошивки, т.е. MCU сидит в ROM/ловушке
+и к загруженному коду не переходил. В EMI по адресу загрузки — нули.
+
+При этом `FW download end` печатается без проверки: `include/config.h:561`
+`CFG_ENABLE_FW_DOWNLOAD_ACK=1` отключает `wlanImageQueryStatus()`, поэтому
+«скачали» драйвер не подтверждает ничем; файл — контейнер
+`CFG_ENABLE_FW_DIVIDED_DOWNLOAD=1` (magic `MTK_WIFI_SIGNATURE` = `'MTKE'`,
+`include/wlan_lib.h:649`), и раскладку секций задаёт его заголовок, а не DT.
+
+### 30.3 EMI MPU действительно не настроен (но это не единственная причина)
+
+Обе реализации выключены на этапе компиляции:
+
+```
+wlan:   os/linux/plat/mt6771/plat_priv.c:70   #ifdef CONFIG_MTK_EMI
+          VOID kalSetEmiMpuProtection(...)    -> emi_mpu_set_protection(&region_info)
+common: common_main/platform/mt6771.c:991     #ifdef CONFIG_MTK_EMI
+          consys_emi_mpu_set_region_protection()  (region 26, apc LOCK/…/NO_PROTECTION)
+```
+
+`CONFIG_MTK_EMI` в mainline не существует, поэтому вызывается weak-заглушка
+`os/linux/gl_kal.c:5534` → «EMI MPU function is not defined». Сама
+`emi_mpu_set_protection()`/`SET_ACCESS_PERMISSION()` — из MTK-внутреннего
+`mt_emi_api.h`, а наш compat-файл `scripts/remote/wifi-compat/mt_emi_api.h` —
+**пустая заглушка**. Политика регионов при этом известна из вендорских исходников
+(регион 25 в wlan, регион 26 в common), неизвестна только раскладка регистров
+EMI MPU.
+
+Логика подсказывает, что MPU сам по себе не мешает *переходу* на адрес старта
+(он мешает чтению EMI уже после перехода), поэтому как первопричина «READY не
+встаёт» он слабее, чем отсутствующий шаг ROM-patch/bootstrap.
+
+### 30.4 ROM-patch: у MT6771 его нет вовсе
+
+```
+common_main/platform/mt6771.c     : 0 вхождений "rom_patch" (grep)
+common_main/platform/mt6765.c:1096: consys_dl_rom_patch() -> mtk_wcn_soc_rom_patch_dwn(ip_ver)
+common_main/platform/mt6761.c:1081: то же
+common_main/core/wmt_ic_soc.c:3387: mtk_wcn_soc_rom_patch_dwn()
+    ... osal_memcpy_toio(patchAddr, pPatchBuf, patchSize);   <- данные кладутся в EMI
+```
+
+Т.е. у соседних SoC патч ROM кладёт в EMI сам WMT-драйвер (`osal_memcpy_toio`),
+а не STP; в mt6771-ветке этого шага нет. В `/lib/firmware` уже лежат
+`soc3_0_ram_mcu_e1_hdr.bin` (165 344 Б, eco E1 — совпадает с
+`Version[E1]`), `_1_1_`/`_1a_1_`, `soc3_0_ram_bt_*`.
+
+### 30.5 Следующий шаг
+
+1. Распечатать в `wlanImageDividDownload()` реальные (address, length) каждой
+   секции и сверить EMI по этим адресам: если секции легли не на `0xA5800` —
+   править `hardware-values`/выбор ветки загрузки; если легли, а MCU всё равно в
+   ROM — включать ROM-patch.
+2. Реализовать `emi_mpu_set_protection()` для MT6771 (нужна раскладка регистров
+   EMI MPU; политику взять из `mt6771.c:991` и `plat_priv.c:71`) — без неё
+   прошивка не имеет гарантированного доступа к своему EMI.
+3. Проверить гипотезу ROM-patch: перенести вызов
+   `mtk_wcn_soc_rom_patch_dwn()`-подобного шага для MT6771 с файлом
+   `soc3_0_ram_mcu_e1_hdr.bin`.
