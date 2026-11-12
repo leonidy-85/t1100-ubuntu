@@ -2105,3 +2105,29 @@ out-дерево `out-normal` (release `6.12.114-g400cb6f-touch-rot`). Лока�
 `../linux-t1100` отстаёт (0042 + два патча 0045/0046) — `scripts/build-kernel-remote.sh`
 синхронизирует локальное дерево на хост и **затрёт** актуальное, поэтому
 собирать надо прямо на хосте.
+
+### 12.11 (5): клавиатура Plasma — восстановлены `normalKeyWidth`/`functionKeyWidth`
+
+**Симптомы:** в английской раскладке часть кнопок не отображалась, пробел
+растягивался на всю строку, служебные клавиши (Shift, глобус, `&123`,
+backspace) уезжали за край. Русская раскладка при этом работала.
+
+**Причина:** в `layouts/fallback/main.qml` и `layouts/en_US/main.qml` были
+потеряны две строки, которые есть в `ru_RU/main.qml`:
+
+```
+readonly property real normalKeyWidth: normalKey.width
+readonly property real functionKeyWidth: mapFromItem(normalKey, normalKey.width / 2, 0).x
+```
+
+Без них `weight` служебных кнопок и `Layout.preferredWidth` подстрок были
+`undefined`, а `SpaceKey` (единственный с `fillWidth`) забирал всю строку.
+
+**Цифровой ряд.** Отдельный 6-й ряд в эту панель не влезает: высота панели
+фиксирована под 5 рядов (проверено: 555 px при экране 1600). Без сжатия
+нижний ряд уходит за экран, со сжатием кнопки становятся слишком мелкими.
+Поэтому оставлена штатная 5-рядная раскладка; цифры — удержание клавиши
+(smallText `1..0`) и страница `&123`.
+
+Файлы зафиксированы в `rootfs-overlay/usr/share/plasma/keyboard/layouts/`
+(`fallback/main.qml`, `en_US/main.qml`) — это же лежит на планшете.
