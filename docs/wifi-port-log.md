@@ -2126,3 +2126,65 @@ rompatch: cpupcr +100ms          0x00000000
 не про MCU-ROM, а про BT/GPS-часть (файл `*_mcu_*` при этом единственный).
 Дальше без RE не продвинуться: нужно найти в стоковом `wmt_loader`/ROM таблицу
 `addRess[]` для `srh_rom_patch` (какое смещение и какая проверка версии).
+
+## 35. M13: `rom_desel` пишется и читается, MCU всё равно стартует из ROM (12.11)
+
+### 35.1 Что такое rom_desel у вендора
+
+mt6771 (`common_main/platform/mt6771.c`, `update_consys_rom_desel()`):
+
+```c
+	CONSYS_REG_WRITE(conn_reg.mcu_base + CONSYS_ROM_DESEL_OFFSET, CONSYS_ROM_DESEL_MASK);
+	WMT_PLAT_PR_INFO("Update consys rom desel value(0x%x)\n", CONSYS_REG_READ(...));
+```
+
+`common_main/platform/include/mt6771.h`:
+
+```
+68:  #define CONSYS_ROM_DESEL_OFFSET   0x00000600      /* -> 0x18070600 */
+132: #define CONSYS_ROM_DESEL_MASK     ((0x17 << 16) | 0x2a4)   /* 0x001702a4 */
+```
+
+То есть у MT6771 это **прямая запись константы** `0x1702a4` в `0x18070600`, без
+чтения DT/`WMT_SOC.cfg`. Для сравнения mt6765 (`mt6765.c`, `polling_consys_chipid()`)
+делает read-modify-write другого регистра: `0x114 & 0xFFFF0000 | 0x17`.
+
+Порядок у нас: `consys_hw_power_ctrl()` (iso/patch/rst) → `polling_consys_chipid()`
+→ `update_consys_rom_desel()` → `acr`/`afe` → **`consys_hw_reset_bit_set(DISABLE)`**
+(снятие `0x10007018[12]`), т.е. rom_desel пишется, пока MCU ещё в SW reset.
+
+### 35.2 Что изменил (патч 0011)
+
+В `consys_hw_reset_bit_set(FALSE)` после снятия сброса rom_desel пишется ещё раз
+и печатается `cpupcr`:
+
+```c
+	CONSYS_REG_WRITE(conn_reg.ap_rgu_base + CONSYS_CPU_SW_RST_OFFSET, ... & ~BIT | KEY);
+	CONSYS_REG_WRITE(conn_reg.mcu_base + CONSYS_ROM_DESEL_OFFSET, CONSYS_ROM_DESEL_MASK);
+	pr_info("romdesel: after reset release ROM_DESEL=0x%08x cpupcr=0x%08x", ...);
+	mdelay(20); pr_info("romdesel: +20ms cpupcr=0x%08x", ...);
+```
+
+### 35.3 Замеры
+
+```
+rompatch: EMI 0xbfc00000 readback 0000dbb0 00018830 000021a0 00002130   (патч в EMI до сброса)
+update_consys_rom_desel: Update consys rom desel value(0x1702a4)        <- теперь читается 0x1702a4, не 0x0
+romdesel: after reset release ROM_DESEL=0x001702a4 cpupcr=0x00000000
+romdesel: +20ms cpupcr=0x00001170        <- MCU уже исполняет код по адресу 0x1170 (ROM)
+... в probe: cpupcr 0x15730              (ROM-петля)
+WCIR 0x180f0000 = 0x1000f004             (WLAN_READY = 0)
+```
+
+Вывод: `rom_desel` записан корректно и читается обратно; MCU стартует с `0x1170`
+и уходит в `0x15730` — оба адреса ниже `0xa5800`, т.е. **из ROM**. Ни `rom_desel`,
+ни ROM-patch в EMI не переводят его на RAM-загрузку.
+
+### 35.4 Что это значит
+
+Гипотеза «rom_desel пишет ноль и потому MCU в ROM» — **опровергнута**: значение
+пишется и держится. Остаются: (а) EMI MPU не настроен (MCU не имеет доступа к EMI
+и потому не может прочитать ни патч, ни образ — симптом тот же); (б) MCU ждёт
+патч по другому смещению/с другой проверкой версии. Порядок дальнейших действий:
+EMI MPU (нужна публичная раскладка регистров), и только потом реверс
+`srh_rom_patch`.
