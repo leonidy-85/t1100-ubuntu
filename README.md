@@ -5,7 +5,7 @@
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
 > **Статус (12.11.2026): фазы 1–3 закрыты; на панели работает Wayland (Weston).**
-> mainline 6.12.114 + патчи 0001–0039: ядро доходит до `systemd running`,
+> mainline 6.12.114 + патчи 0001–0051 (0035 отключён): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, USB-RNDIS (`1d6b:0104`) и
 > `ssh root@10.42.66.66` по ключу, **батарея заряжается** (`mt6370-charger`:
 > `online=1`, `Charging`, `vbus 4940 мВ`), **`poweroff` плату гасит** (0034).
@@ -15,9 +15,9 @@
 > `glmark2` Score 452. Weston 13 (DRM/atomic) показывает панель, EGL-клиенты
 > 56.4 fps. **Сдвиг кадра на панели исправлен** (0046: `vbp 240`, `vfp 8`).
 > Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Тач HX83102E
-> работает (`boot_touch4`, ориентация исправлена патчем 0050). Дальше:
-> DVFS GPU, обновление rootfs до 26.04. Состояние и план — `docs/STATUS.md`,
-> `docs/handover.md`.
+> работает (`boot_touch6`, native portrait; KWin сам поворачивает — 0051).
+> Дальше: задержка выделения, DVFS GPU, rootfs 26.04. Состояние и план —
+> `docs/STATUS.md`, `docs/handover.md`.
 >
 > ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
 > подтверждена косвенно (петли сбросов нет), лог подтверждения — следующий шаг.
@@ -153,7 +153,7 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | GPU panfrost (Mali-G72) | ✅ 0039 прошит: Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps, `glmark2` Score 452 |
 | Wayland (Weston 13) | ✅ DRM/atomic на панели, EGL-клиенты 56.4 fps; фаза 4 — ввод и десктоп |
 | Wi-Fi / BT | ❌ в mainline не поддержаны (CONNSYS_6771/MT6631); сеть только RNDIS |
-| KDE Plasma / GNOME | ⏳ после тача |
+| KDE Plasma / GNOME | ✅ KDE Plasma 5.27 + SDDM; GNOME не ставили |
 
 ## С чего начать
 

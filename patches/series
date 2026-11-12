@@ -47,3 +47,4 @@
 0048-arm64-dts-t1100-finish-the-touch-wiring.patch
 0049-arm64-dts-t1100-describe-CONSYS-and-the-MT6631-Wi-Fi.patch
 0050-arm64-dts-t1100-swap-the-touch-axes-for-landscape.patch
+0051-arm64-dts-t1100-use-native-portrait-touch-coordinates.patch
