@@ -1,0 +1,36 @@
+EMI MPU на arm64 пишется через SMC (secure world), не из Linux
+==============================================================
+
+Источник: github.com/nokia-dev/android_kernel_nokia_mt6771,
+drivers/misc/mediatek/emi_mpu/mt6758/emi_mpu.c
+
+  64:  static void __iomem *EMI_MPU_BASE;
+ 913:  EMI_MPU_BASE = mt_emi_mpu_base_get();
+ 935:  mt_emi_reg_base_set(CEN_EMI_BASE);
+ 308-332: int emi_mpu_set_region_protection(...)
+          #else /* CONFIG_ARM64 */
+            access_permission |= ((unsigned long long)region & 0x1F) << 27;
+            emi_mpu_smc_set(...)        <- запись APC/SA/EA только из secure world
+
+То есть на arm64 регистры EMI MPU программирует secure world (LK/ATF), а ядро
+ходит туда через SMC. Наша раскладка v2 (32 региона / 16 доменов,
+refs/emi-mpu-v2-mt6758-layout.txt) подтверждается, но напрямую из Linux писать
+нельзя.
+
+Дамп из NS-мира (mempeek, домен CONN поднят, probe не запускался), база-кандидат
+0x1020e000:
+
+  CTRL        0x000 = 0x01004000
+  DBG         0x004 = 0x00004000
+  SA25        0x164 = 0x00000000     EA25 0x264 = 0x00000000
+  APC25 d0-7  0x364 = 0x00000000     APC25 d8-15 0x464 = 0x00000000
+  SA26        0x168 = 0x00000000     EA26 0x268 = 0x00000000
+  APC26 d0-7  0x368 = 0x00000000     APC26 d8-15 0x468 = 0x00000000
+  CTRL_D0     0x800 = 0x00000000
+
+Чтение нулей из non-secure мира согласуется с SMC-моделью (регистры не видны
+или закрыты для NS). LK на плате стоковый и не менялся, т.е. регион CONNSYS
+сконфигурирован им на этапе загрузки.
+
+Вывод: EMI MPU — НЕ блокер ROM-петли; из Linux его и не настроить без SMC.
+Гипотеза B закрыта. Следующий рубеж — M19 (порядок WLAN-загрузки).
