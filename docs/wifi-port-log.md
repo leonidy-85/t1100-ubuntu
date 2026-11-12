@@ -1965,3 +1965,56 @@ MCU не переходит на `0xA5800` — значит либо «direct-to
 результат нигде не печатается) и что `wlanConfigWifiFunc()` (WIFI_START, его
 return в `wlan_lib.c:607` игнорируется) реально отправляет команду; затем —
 ROM-patch по образцу `mt6765.c`.
+
+## 32. M10: MCIF-команды доходят до MCU, `WIFI_START` был без адреса (12.11)
+
+### 32.1 Дамп MCR-страницы `0x180f0000` (патч 0008, `t1100_dump_mcr`)
+
+До `WIFI_START`:
+
+```
+00: 00100788 00000100 0000000d 00000000 00000041 ffffff47 00000000 00000000
+20: 00010200 00000000 ...                                     (WASR)
+60: ... 02000040 00000002
+e0: 00000004 ... 20130512 ...                                 (0xf0 - ROM-версия)
+```
+
+После `WIFI_START`:
+
+```
+00: 00100788 00000100 0000000d 00000000 00000041 ffffff47 00000000 00000000
+20: 00000200 ...          (WASR изменился: 0x10200 -> 0x200)
+60: ... 02000010 00000000
+e0: 00000000 ... 20130512 ...
+```
+
+`WCIR (0x00) = 0x00100788`: `WCIR_CHIP_ID[15:0] = 0x788` — совпадает с DT
+`hardware-values[0]`, `WLAN_READY` (бит21) = 0 и до, и после.
+
+### 32.2 Команды ДОХОДЯТ до MCU
+
+```
+t1100-mcif: section-config dst=0x020a1000 len=28032 reset=1 -> status=0 (0=ok)
+t1100-mcif: section-config dst=0x000a5800 len=33776 reset=0 -> status=0 (0=ok)
+t1100-mcif: WIFI_START override=0 addr=0x00000000 seq=3 -> status=0     <- было
+t1100-mcif: WIFI_START override=1 addr=0x000a5800 seq=3 -> status=0     <- стало (патч 0008)
+```
+
+Ключевое: `status` у `section-config` — это результат
+`wlanImageSectionDownloadStatus()`, т.е. **ожидание `INIT_EVENT_ID_CMD_RESULT`
+от MCU** (включено `CFG_ENABLE_FW_DOWNLOAD_ACK=1`, `include/config.h:561`).
+Статус 0 ⇒ MCU принял H2D-команду и ответил. Плюс `WASR (0x20)` меняется
+`0x10200 -> 0x200` вокруг команды. Вывод: **MCIF/H2D исправен, команды доходят**.
+
+### 32.3 Что было не так в старте
+
+`include/config.h:569` `#define CFG_OVERRIDE_FW_START_ADDRESS 0` → в
+`wlan_lib.c:623` уходила ветка `wlanConfigWifiFunc(prAdapter, FALSE, 0)`:
+чипу говорили «стартуй по своей точке входа по умолчанию», и адрес из DT
+(`hardware-values[2] = 0xa5800`, он же dest секции 1) **не использовался вообще**.
+Такой режим рассчитан на ROM, уже пропатченный `wmt_loader`'ом по STP.
+
+Патч 0008 ставит `CFG_OVERRIDE_FW_START_ADDRESS 1` — `WIFI_START` теперь идёт с
+`override=1 addr=0xa5800` (см. лог выше). READY всё равно 0
+(`wcir=0x1000f004`, `cpupcr=0x1572a`): MCU по-прежнему в ROM, значит одного
+адреса старта мало — нужен ROM-patch (следующий шаг).

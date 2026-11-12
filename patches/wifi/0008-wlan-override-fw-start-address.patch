@@ -1,0 +1,98 @@
+--- a/include/config.h
++++ b/include/config.h
+@@ -566,7 +566,17 @@
+ /* Vary between projects, already replaced by device tree */
+ /* default value is for MT6630 */
+ #define CFG_FW_LOAD_ADDRESS                     0x00091400
+-#define CFG_OVERRIDE_FW_START_ADDRESS           0
++/*
++ * T1100 (mainline): without PATCH the WIFI_START command is sent with
++ * override = FALSE and address 0, i.e. the chip is asked to use its own
++ * default entry point. That only works when the ROM has been patched by
++ * wmt_loader over STP first - on this port there is no STP, so the MCU stayed
++ * in its ROM loop (cpupcr 0x15730) and never asserted WLAN_READY.
++ * With 1 the driver sends override = TRUE and DT "hardware-values"[2]
++ * (= 0xa5800 here, the destination of section 1) as the start address, which
++ * is exactly the image just downloaded.
++ */
++#define CFG_OVERRIDE_FW_START_ADDRESS           1
+ #define CFG_FW_START_ADDRESS                    0x00091400
+ 
+ /*------------------------------------------------------------------------------
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -144,6 +144,23 @@
+ 		      IN UINT_32 u4FwLoadAddr,
+ 		      IN UINT_32 u4FwImageFileLength);
+ 
++/* T1100 debug: dump the whole MCR page of the AHB HIF (0x180f0000..+0x100),
++ * which is where WCIR/WASR/WSR/mailboxes live (include/nic/mt6630_reg.h).
++ */
++static void t1100_dump_mcr(P_ADAPTER_T prAdapter, const char *tag)
++{
++	UINT_32 r[64];
++	INT_32 i;
++
++	for (i = 0; i < 64; i++)
++		HAL_MCR_RD(prAdapter, (UINT_32)(i * 4), &r[i]);
++	pr_info("t1100-mcr[%s]:\n", tag);
++	for (i = 0; i < 64; i += 8)
++		pr_info("t1100-mcr[%s] %02x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
++			tag, i * 4, r[i], r[i + 1], r[i + 2], r[i + 3],
++			r[i + 4], r[i + 5], r[i + 6], r[i + 7]);
++}
++
+ #if CFG_ENABLE_FW_DIVIDED_DOWNLOAD
+ static WLAN_STATUS
+ wlanImageDividDownloadByEntry(IN P_ADAPTER_T prAdapter,
+@@ -958,6 +975,24 @@
+ 	UINT_8 __iomem *prWifiEmiBaseAddr;
+ #endif
+ 
++	/*
++	 * T1100 debug: the download itself is otherwise invisible, and the
++	 * sections are addressed by their own u4DestAddr (entries >= 2 go to
++	 * EMI through ioremap(gConEmiPhyBase)), *not* to the DT load address
++	 * "hardware-values[1]". Print the table so EMI can be checked at the
++	 * real destinations. Deliberately no EMI read-back here: an out-of-range
++	 * destination would fault inside the driver (the ioremap window is
++	 * WIFI_EMI_AVAILABLE_MEM_SIZE, the bound check uses WIFI_EMI_MEM_SIZE).
++	 */
++	pr_info("t1100-fw: entries=%u secsz=%zu\n",
++		prFwHead->u4NumOfEntries, sizeof(prFwHead->arSection[0]));
++	for (i = 0; i < prFwHead->u4NumOfEntries && i < 16; i++)
++		pr_info("t1100-fw: sec[%u] dest=0x%08x len=%u off=0x%x enc=%u\n",
++			i, prFwHead->arSection[i].u4DestAddr,
++			prFwHead->arSection[i].u4Length,
++			prFwHead->arSection[i].u4Offset,
++			prFwHead->arSection[i].ucEnc);
++
+ 	/* engage divided firmware downloading */
+ 	/* DLM + ILM */
+ 	for (i = 0; i < prFwHead->u4NumOfEntries && i < ENTRY_DIRECTLY_TO_CHIP; i++) {
+@@ -2708,6 +2743,10 @@
+ 		/* 7. Wait for INIT_EVENT_ID_CMD_RESULT */
+ 		u4Status = wlanImageSectionDownloadStatus(prAdapter, ucCmdSeqNum);
+ #endif
++		pr_info("t1100-mcif: section-config dst=0x%08x len=%u reset=%u -> status=%u (0=ok)\n",
++			u4DestAddr, u4ImgSecSize, fgReset, u4Status);
++		if (fgReset)
++			t1100_dump_mcr(prAdapter, "after-first-section-config");
+ 		break;
+ 	}
+ 
+@@ -3119,10 +3158,14 @@
+ 			continue;
+ 		}
+ 		/* 5.2 Send CMD Info Packet */
++		t1100_dump_mcr(prAdapter, "before-wifi-start");
+ 		if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			DBGLOG(INIT, ERROR, "Fail to transmit WIFI start command\n");
+ 		}
++		pr_info("t1100-mcif: WIFI_START override=%u addr=0x%08x seq=%u -> status=%u\n",
++			fgEnable, u4StartAddress, ucCmdSeqNum, u4Status);
++		t1100_dump_mcr(prAdapter, "after-wifi-start");
+ 
+ 		break;
+ 	};
