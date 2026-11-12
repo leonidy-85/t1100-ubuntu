@@ -4,19 +4,21 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус (12.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
-> mainline 6.12.114 + патчи 0001–0052 (0035 отключён): ядро доходит до `systemd running`,
+> **Статус (13.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
+> mainline 6.12.114 + патчи 0001–0059 (0035 отключён): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
 > заряжается** (`mt6370-charger`), **`poweroff` плату гасит** (0034).
 > Дисплей: `card0-DSI-1` `connected/enabled`, режим `1600x2176@58.93`; сдвиг
 > кадра убран окончательно (0046 + 0052: `vbp 284`, `vfp 8`).
-> GPU: panfrost (0039) — **Mesa 26.0.3**; KDE Plasma 6.6.4 + SDDM
-> (autologin root) на панели.
+> GPU: panfrost (0039) — **Mesa 26.0.3**; **DVFS включён** (0058/0059:
+> coupler MT6771/MT8788, OPP 698/743/800 МГц, VGPU/VSRAM spread 100 мВ);
+> `glmark2` Score 1409/1583, но в отдельных shader-сценах есть таймауты
+> panfrost — отдельный баг, не DVFS. KDE Plasma 6.6.4 + SDDM (autologin root).
 > Тач HX83102E работает (`boot_touch8`, native portrait; KWin сам поворачивает —
 > 0051). Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Дальше:
-> задержка выделения, DVFS GPU, Wi-Fi/BT (фаза 5). Состояние и план —
-> `docs/STATUS.md`, `docs/handover.md`.
+> panfrost shader timeout, Wi-Fi/BT (фаза 5), USB host/OTG, suspend, задержка
+> выделения. Состояние и план — `docs/STATUS.md`, `docs/handover.md`.
 >
 > ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
 > подтверждена косвенно (петли сбросов нет), лог подтверждения — следующий шаг.

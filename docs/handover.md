@@ -169,12 +169,17 @@ per-panel конфиг по смещению `0x90ea8`), а вендорское
    d. альтернатива: проверить гипотезу «LK инициализирует панель при любой
       загрузке» — образ, где наш драйвер **не трогает** мост в `prepare()`
       (только DSI + DCS), и посмотреть, появится ли картинка.
-3. **Сделано:** GPU (panfrost; патч 0039 включает `&gpu`, DVFS выключен
-   намеренно, `mfg`-узлы не нужны — см. `docs/panfrost-plan.md`) **прошит**
-   (`boot_ubuntu28`): panfrost 1.2.0, Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps,
-   `glmark2` Score 452; Weston 13 (DRM/atomic) и EGL-клиенты 56.4 fps на панели.
-   Mesa/kmscube/glmark2/Weston лежат в `/usr/local`, rootfs не тронут.
-   **Дальше:** тач Himax (evdev/libinput), KDE Plasma/GNOME, решение по DVFS GPU.
+3. **Сделано:** GPU (panfrost; патч 0039 включает `&gpu`) **прошит**:
+   panfrost 1.2.0, Mesa 26.0.3, GLES 3.1, `kmscube` 56.4 fps, Weston 13.
+   **DVFS включён** (0058 — coupler MT6771/MT8788, 0059 — DTS: OPP
+   698/743/800 МГц, VGPU/VSRAM spread 100 мВ, VSRAM без `always-on`);
+   `boot_gpudvfs10.img` sha256 `68c74d1e…`, p29 md5 `d4cdc9ef…`;
+   devfreq `13040000.gpu` `simple_ondemand`, 698/743/800 МГц.
+   `glmark2` Score 1409/1583; в сценах `conditionals`/`function`/`loop`/`logic`
+   есть `panfrost gpu sched timeout` и при 698, и при 800 — это отдельный
+   shader-баг panfrost, не DVFS. Откат — `/tmp/opencode/boot_a_before_gpudvfs.img`
+   md5 `886c86cb…`. **Дальше:** panfrost shader timeout, Wi-Fi/BT, USB host/OTG,
+   suspend, задержка выделения тача.
 4. **Мелочи:** `constant_charge_current` = 2 А теперь поднимает
    `t1100-power-guard` (драйвер сам ставит 900 мА); вернуть `tcpc`, когда
    понадобится OTG/host (сейчас отключён, `tcpci` не находит узел `connector`);
