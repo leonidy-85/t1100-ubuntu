@@ -2717,3 +2717,139 @@ t1100-patch: ROM rejected PATCH_START, stop
    главный открытый риск вместе с неизвестным смещением регистров BTIF от
    MT6771 (plat-слой берёт их из DT, но значения `apdma`-регистров в нашем
    дереве не подтверждены).
+
+## 44. M23: BTIF собран и открывается, STP уходит в чип — но ROM не отвечает (13.11)
+
+### 44.1 Блок и его состояние (read-only, до первого TX)
+
+BTIF — UART-подобный контроллер (`btif_priv.h:31-58`: RBR/THR 0x00, IER 0x04,
+IIR/FCR 0x08, LCR 0x0c, LSR 0x14, SLEEP_EN 0x48, DMA_EN 0x4c, RTOCNT 0x54,
+TRI_LVL 0x60, WAK 0x64, WAT_TIME 0x68, HANDSHAKE 0x6c) плюс два окна AP-DMA
+(0x11000a80 = TX, 0x11000b00 = RX). Адреса/IRQ — сток `refs/stock-mt6771.dts:2198`
+(SPI 0x72/0x8b/0x8c), сводка — `refs/m23-btif.md`.
+
+`mempeek --mmap` (mainline `6.12.114-g400cb6f-touch-rot`, CONSYS в ROM):
+
+```
+0x1100c008=0x00000001 (IIR: нет прерывания)   0x1100c014=0x00000060 (LSR: THRE|TEMT)
+0x1100c054=0x00000040  0x1100c060=0x0000005a  0x1100c064=0x00000001
+0x1100c068=0x00000012  0x1100c06c=0x00000003  0x11000a80..b0c = 0
+```
+
+`LSR=0x60` — доказательство, что `btifc` уже включён (у загейченного блока LSR
+читался бы нулём). Статус гейтов INFRACFG_AO: `0x10001090=0x9befff5d` (бит31,
+IFR2 `btif`), `0x10001094=0xc78f7db2` (бит18, IFR3 `ap_dma`) — оба стоят.
+Раскладка гейтов взята из mt6765/6771-семейства
+(`drivers/clk/mediatek/clk-mt6765.c:522-581`: IFR2 set/sta 0x80/0x90, IFR3
+0x88/0x94; `CLK_IFR_BTIF` = IFR2[31], `CLK_IFR_AP_DMA` = IFR3[18]).
+
+### 44.2 Публичный порт собрался под 6.12 без правок источника
+
+`/home/l/wifi-src/rb/drivers/staging/mtk-connectivity/btif` (mt6765, mainline-стиль,
+4 объекта, 9 159 строк) компилируется против `/home/l/t1100-merge2-out`
+первым же прогоном: `make -C <out> M=<tree> ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-`.
+Правки нужны только «на стыке» с mainline-платой (наш `scripts/remote/m23-btif/`,
+патч `0010-btif-mt6771-glue.patch`):
+
+1. **Нет DT-узла** (boot DTB мы не трогаем): регистрируем platform device по
+   имени, базы/IRQ — параметры модуля со стоковыми значениями; в
+   `_btif_set_default_setting()`/`hal_dma_set_default_setting()` — ветка «of_node
+   == NULL» с `ioremap` и параметрами.
+2. **Нет клоков** (`btifc`/`apdmac` в mainline для MT6771 отсутствуют): в
+   `hal_btif_clk_get_and_prepare()` и `hal_btif_clk_ctrl()` — прямой доступ к
+   гейтам INFRACFG_AO (`m23_clk_enable()`, идемпотентно).
+3. **IRQ**: `request_irq(114)` попадает в домен `mt-eint`
+   (`gpiochip_lock_as_irq: tried to flag a GPIO set as output for IRQ` →
+   `_btif_irq_reg failed, i_ret(-5)`). Правильно — `irq_create_fwspec_mapping()`
+   через `mediatek,mt8183-sysirq` с ячейками `<GIC_SPI n IRQ_TYPE_LEVEL_LOW>`
+   (`m23_irq_map()`): SPI 114→virq 395, 139→396, 140→397.
+4. **Баг вендора для PIO**: `btif_rx_dma_has_pending_data()`/`..._tx_...()`
+   разыменовывали `p_rx_dma`/`p_tx_dma`, которые в PIO-сборке NULL; в прогоне
+   это дало oops в потоке `mtk_wmtd` (`btif_rx_dma_has_pending_data+0x10/0x24`,
+   `note: mtk_wmtd[1404] exited with irqs disabled`). Добавлены проверки на NULL,
+   PIO для TX/RX включён флагами `-DENABLE_BTIF_{TX,RX}_DMA=0`.
+
+Итог: `mtk_wcn_btif_open("m23-selftest") -> 0`, HW init и три IRQ
+зарегистрированы (`/proc/interrupts`: `MT_SYSIRQ 114 Level  mtk btif irq`).
+
+### 44.3 STP over BTIF: HIF_CONF/PWR_ON идут, ответа чипа нет
+
+В `wmt_drv` добавлен `stp_btif.o` (сильные определения
+`mtk_wcn_consys_stp_btif_*` вместо `__weak` из `stp_core.c:148`) и параметр
+`t1100_btif_stp`: по `WMT_init()` (его вызывает `wmtctl init`) планируется
+работа, повторяющая вендорский launcher — `wmt_lib_set_hif()` + `WMT_OPID_HIF_CONF`
++ `WMT_OPID_PWR_ON` (последний через `wmt_core_stp_init()` доходит до
+`mtk_wcn_soc_sw_init()` с загрузкой ROMv4-патча):
+
+```
+t1100: STP over BTIF: hif conf
+[WMT-CORE][E]opfunc_hif_conf(1126):WMT-CORE: WMT HIF info added
+t1100: WMT_OPID_HIF_CONF -> 1
+[WMT-CONSYS-HW][I]polling_consys_chipid:retry(9)consys chipId(0x00000788)
+[WMT-CONSYS-HW][I]mtk_wcn_consys_hw_pwr_on:CONSYS-HW-PWR-ON, finish(0)
+MTK-BTIF-EXP[I]mtk_wcn_btif_open:btif_open succeed
+```
+
+Замечание по API: `wmt_lib_set_hif(STP_BTIF_FULL)` возвращает `-2` — функция
+дополнительно декодирует FM-полубайт и отвергает нулевой
+(`invalid fm mode`), поэтому аргумент вендора —
+`STP_BTIF_FULL | (WMT_FM_COMM << 4)` = `0x23`.
+
+Дальше `wmt_core_stp_init()` → `wmt_core_hw_check()` шлёт WMT REG_READ
+(`GEN_HCR 0x80000008`, 16 байт: `01 08 10 00 02 01 00 01 08 00 00 80 …`) и
+ждёт 8-байтный EVT:
+
+```
+[STP-BTIF]… Tx-len:16 0x01 0x08 0x10 0x00 0x02 0x01 0x00 0x01 0x08 0x00 0x00 0x80 …
+hal_btif_dump_reg: IER:0x0, IIR:0x1, LSR:0x60
+hal_btif_dump_reg: Tx DMA disabled, Rx DMA disabled, Rx data is empty, Tx data is empty
+[WMT-CORE][E]wmt_core_reg_rw_raw(636):Rx REG_EVT fail!(-1) len(0, 16)
+[WMT-CORE][E]wmt_core_hw_check(1014):get hwcode (chip id) fail (-3)
+[WMT-CORE][E]wmt_core_stp_init(877):hw_check fail:-2
+[WMT-CORE][E]opfunc_pwr_on(1168):WMT-CORE: wmt_core_stp_init fail (-8)
+```
+
+То есть: AP-сторона исправна (байты уходят, FIFO пустеет — `LSR=0x60`,
+TEMT=1), но **чип не отвечает**: `/proc/interrupts` для virq 395/396/397 —
+нули, RX-данных нет. После провала `opfunc_pwr_on` штатно гасит CONSYS,
+поэтому `cpupcr` в конце — `0x0`; в момент, когда домен был жив, читалось
+`0x00000788` (chip id @0x18070008) и `cpupcr = 0x1170` (ROM).
+
+ROMv4-патч **не доставлен**: до `mtk_wcn_soc_patch_dwn()` поток не доходит,
+`hw_check` стоит раньше. `wlan0` нет.
+
+### 44.4 Что сделано в коде
+
+- `patches/wifi/0010-common-btif-stp.patch`: `stp_btif.o` в
+  `common.Kbuild`; `t1100_btif_stp` в `wmt_dev.c` (работа после `WMT_init`);
+  `t1100_rom_patch=<файл>` в `wmt_ic_soc.c` — в `mtk_wcn_soc_patch_dwn(VOID)`
+  файл читается из `/lib/firmware` (заголовок `struct wmt_rom_patch`, 48 Б,
+  тело — с offset 48, адрес — `u4PatchAddr`), вместо запроса `srh_patch` к
+  userspace; сам протокол остался вендорским
+  (`mtk_wcn_soc_normal_patch_dwn()`).
+- `patches/wifi/0010-wlan-pwr-on-done.patch`: `t1100_pwr_on_done=1` — не
+  поднимать CONSYS повторно, если его уже поднял `wmt_drv`.
+- `scripts/remote/m23-btif/` + `scripts/build-btif-remote.sh`: сборка BTIF
+  как отдельного модуля (`mtk_btif_drv.ko`), `Module.symvers` подхватывается
+  сборкой `wmt_drv` (`scripts/remote/build-wifi-remote.sh`, `BTIF_DIR`).
+- Модули (proтив `/home/l/t1100-merge2-out`, vermagic
+  `6.12.114-g400cb6f-touch-rot`): `mtk_btif_drv.ko`
+  `5027cf3dc593…445679cc` (PIO), `wmt_drv.ko` `35b5d094…b07a398e`,
+  `wlan_drv_gen3.ko` `80dafe3d…f396ded1`.
+
+### 44.5 Следующий шаг (по убыванию вероятности)
+
+1. **Почему чип молчит.** Первое, что проверить: импульс `BTIF_WAK` (0x64)
+   перед первой посылкой — LK оставил `WAK=1`, но CONSYS power-on сбрасывает
+   свою сторону, а вендор зовёт `mtk_wcn_consys_stp_btif_wakeup()`
+   (`wmt_core.c:1474`, «wakeup connsys by btif»). Второе — `HANDSHAKE` (0x6c):
+   при `HANDSHAKE=3` TX может упираться в CTS, которого нет у непрошитого
+   чипа (FIFO при этом пустеет, поэтому по `LSR` это не видно; проверить
+   `TEMT` сразу после записи и/или снять handshake).
+2. Сверить с рабочим стоком: снять `dmesg`/`/proc/interrupts` загрузки
+   Aurora 5.1.6.110 при живом BT (если BT на стоке работает) — видно, идёт ли
+   STP over BTIF и на каких настройках BTIF.
+3. Если BTIF на ROM не поднимается в принципе — вернуться к MCIF, но уже с
+   ROMv4-файлом: `INIT_CMD_ID_PATCH_*` в gen4m + `PATCH_SEMA_CONTROL`
+   (закрыто в §43, но с новым аргументом: возможно, ROM обслуживает патч
+   только после `PATCH_SEMAPHORE_CONTROL` с корректным статусом).
