@@ -2395,3 +2395,48 @@ USB-гаджет один раз отвалился на несколько се
 
 Автοяркость в KDE 6 из коробки не подключена (Plasma не умеет ALS без
 стороннего демона) — датчик готов, демон можно добавить отдельно.
+
+### 12.11 (13): звук — ALSA-карточка, динамик поёт через PipeWire + UCM
+
+**Что выяснилось:** аудиоблок MT6771 (`0x11220000`) регистрово совпадает с
+MT8183, поэтому mainline-драйвер AFE `sound/soc/mediatek/mt8183` работает на
+нём без правок (в dmesg: `mt8183-audio 11220000.audio-controller: ... num of
+dai 20`, кодек `mt6358-sound` поднялся). Не хватало только machine-драйвера,
+связывающего AFE с кодеком MT6358; I2S-кодека на плате нет — звук идёт через
+DAC MT6358 и **внешний аналоговый усилитель**, включаемый GPIO159.
+
+**Патч 0056** (`sound/soc/mediatek/mt6771/mt6771-mt6358.c` + Kconfig/Makefile
++ DTS-узел `sound`):
+- FE `Playback_1`/`Capture_1`: CPU `DL1`/`UL1` (AFE), `.dynamic`, `.dpcm_*`;
+- BE `Primary Codec`: CPU `ADDA`, CODEC `mt6358-sound`/`mt6358-snd-codec-aif1`;
+- GPIO159 (`amp-gpios`) включается на playback.
+
+**Маршрут (главное открытие):** тишина была не из-за DPCM, а из-за mux'ов
+кодека, которые по умолчанию стоят в `Open`. Нужно:
+```
+ADDA_DL_CH1 DL1_CH1   1
+ADDA_DL_CH2 DL1_CH1   0
+ADDA_DL_CH2 DL1_CH2   1
+DAC In Mux            Normal Path
+HPL Mux               LoudSPK Playback
+HPR Mux               LoudSPK Playback
+```
+после чего DAPM включает `AIF_RX`/`DACL`/`AUDIO_TOP_DAC_CTL`/`AFE_ON`.
+
+**Автоматизация — UCM2** (в `rootfs-overlay/usr/share/alsa/ucm2/conf.d/mt6771-mt6358/`:
+`mt6771-mt6358.conf` + `HiFi.conf`, устройство `Speaker`), PipeWire/wireplumber
+подхватывают профиль: в `wpctl status` появляется Sink «Built-in Audio Internal
+speaker», маршруты выставляются сами при старте потока. Проверено
+`pw-play /tmp/tone.wav` — **слышно тон**.
+
+**Инструменты проверки** (статически собраны для aarch64, в `/tmp/opencode/`):
+- `rawplay` — ALSA-плеер на сырых ioctl (синус 440 Гц), нужен, когда PipeWire не поднят;
+- `ctlroute` — LIST/SET только для boolean-контролов (AFE-микшеры);
+- `ctlenum` — LIST/SET для enum-контролов (`DAC In Mux`, `HPL/HPR Mux`, …),
+  `ctlroute` их не умеет.
+
+**Замечания:** PipeWire в этом rootfs не стартует как сервис (нет DBus-сессии в
+`/run/user/0`), запускается вручную: `XDG_RUNTIME_DIR=/run/user/0 setsid pipewire`
+и `setsid wireplumber`. `alsaucm`/`amixer`/`alsactl` в rootfs нет — UCM
+проверяется только через PipeWire. GPIO159 в `/sys/kernel/debug/gpio` не виден,
+но звук работает (усилитель, похоже, включён всегда/через другую линию — уточнить).
