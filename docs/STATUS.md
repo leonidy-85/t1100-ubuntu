@@ -2704,3 +2704,47 @@ wmt_drv)` → `Exec format error`. Это наша заглушка `show_stack(
 2. либо включить `CONF_HIF_DEV_MISC=1` (тогда появится `/dev/wmtWifi` и
    power-on можно дёргать ioctl'ом) — но это меняет путь пробинга;
 3. после появления `wlan0`: `wpa_supplicant` + DHCP = DoD фазы 5.
+
+## 12.11: итог сессии (продолжение в новой сессии)
+
+**Состояние планшета на конец сессии** (проверено по SSH):
+```
+p29 sha256 : d1e4a2e976b793fe…44c43   (build/boot_merge_audio_wifi_v2.img)
+uname      : 6.12.114-g400cb6f-touch-rot, nproc 8
+rootfs     : Ubuntu 26.04 LTS + KDE Plasma 6.6.4 (SDDM active)
+экран      : card1-DSI-1 connected; тач Himax в event1
+звук       : 0 [mt6771mt6358] mt6771-mt6358, тестовый тон 440 Гц слышен
+файрмварь  : /lib/firmware/{WMT_SOC.cfg, WIFI_RAM_CODE_6759, soc3_0_ram_*, mt6631_fm_*}
+модули     : wmt_drv/wlan_drv_gen3 сейчас НЕ загружены (после ребута)
+```
+
+**Что сделано за день**
+1. Смержены 12+6 коммитов второго разработчика (fast-forward): панель (0046,
+   0052), тач (0050/0051), Plasma Keyboard, аудио (0057), PAM, packages list.
+2. Собрано объединённое дерево из патчей 0001–0057; **найдена причина прошлых
+   «LK crash»**: `ramoops@70000000` пересекался с LK-резервацией `ibc-reserved`
+   (не был применён 0042). Валидатор теперь прогоняется с
+   `LK_EXTRA_RES=0x70000000:0x10000:ibc-reserved`.
+3. Прошит `boot_merge_audio_wifi_v2.img` — работает всё: панель, тач, **звук**
+   (machine-driver + UCM/pipewire), 8 ядер.
+4. Развёрнут rootfs второго разработчика (Ubuntu 26.04 + Plasma) с его
+   оверлеем; восстановлен доступ (ключ) и, отдельно, испорченный ранее
+   `/etc/shadow` (`root:HASH` → валидный yescrypt, пароль `0`).
+5. Wi-Fi: см. (13)–(15) — модули грузятся, CONSYS поднимается, файрмварь на
+   месте; остался запуск WLAN (нужен `wlan0` через nl80211).
+
+**Грабли, которые записаны в этой сессии**
+- `tar` оверлея с uid 1000 → sshd `StrictModes` отказывает в ключе
+  (`deploy-overlay.sh` теперь ставит `--owner=0 --numeric-owner` + chown);
+- сломанный `sed` с `$HASH` записал литерал `HASH` в `/etc/shadow` — пароль
+  root перестал работать, лечится `chpasswd`; проверять
+  `getent shadow root | cut -d: -f2`;
+- `rmmod` вендорских модулей (`wmt_drv`, `wlan_drv_gen3`) зависает
+  (`refcnt -1`) — только ребут;
+- `super` на этой плате — **бэкап инсталлятора Aurora** (`root.img.gz` +
+  `home.img.gz`), а не Android-раздел: файрмварь Wi-Fi лежит в `root.img.gz`.
+
+**Следующая сессия:** (1) статический `iw` (libnl) или `CONF_HIF_DEV_MISC=1`
+→ `wlan0` → wpa_supplicant/DHCP; (2) `libinput` + проверка тача в Plasma;
+(3) DVFS GPU; (4) закрепить порядок загрузки модулей Wi-Fi юнитом
+(`t1100-wifi.service` уже есть, не включён).
