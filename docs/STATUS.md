@@ -3174,3 +3174,21 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
 и `hifType = WMT_HIF_BTIF`, (3) `mtk_wcn_soc_normal_patch_dwn()` с
 `ROMv4_be_patch_1_0_hdr.bin` (на планшете, sha256 `83f7e9bc…`), (4) `WIFI_START`
 → `WLAN_READY` → `wlan0` → ассоциация/DHCP.
+
+## 13.11 (3): M23 — BTIF собран и открывается, но ROM не отвечает по STP
+
+- Публичный порт BTIF (`/home/l/wifi-src/rb/.../btif`, mt6765) собран как
+  `mtk_btif_drv.ko` под 6.12 без правок источника; наш слой
+  (`scripts/remote/m23-btif/`) даёт platform device без DT, базы/IRQ из
+  параметров (0x1100c000 / 0x11000a80 / 0x11000b00, SPI 114/139/140) и гейты
+  `btifc`/`apdmac` напрямую в INFRACFG_AO (`0x10001090` бит31, `0x10001094`
+  бит18 — оба уже стояли). `LSR=0x60`, `IIR=0x1` — блок живой;
+  `mtk_wcn_btif_open() = 0`, IRQ мапятся через `sysirq` (virq 395/396/397).
+- `wmt_drv` со `stp_btif.o` + `t1100_btif_stp=1`: HIF_CONF и PWR_ON проходят,
+  STP открывается, WMT REG_READ (chip id 0x80000008) уходит в BTIF, но ответа
+  нет (`Rx REG_EVT fail!(-1)`, IRQ 0, RX пуст) → `hw_check fail` → CONSYS
+  гасится. ROMv4-патч не доставлен (`cpupcr=0x1170` в ROM, READY=0), `wlan0` нет.
+- Готово к следующему шагу: путь «патч из `/lib/firmware`» уже в ядре
+  (`t1100_rom_patch`), `t1100_pwr_on_done` не даёт `wlan_drv` повторно
+  поднимать чип; подробности и следующие гипотезы — `docs/wifi-port-log.md` §44,
+  регистры/цитаты — `refs/m23-btif.md`.
