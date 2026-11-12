@@ -29,6 +29,7 @@ KeyboardLayout {
     KeyboardRow {
         Layout.fillHeight: true
         spacing: 12
+        Key { Layout.minimumHeight: 0; text: "~" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_1; text: "1"; alternativeKeys: "!1"; smallText: "!"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_2; text: "2"; alternativeKeys: "@2"; smallText: "@"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_3; text: "3"; alternativeKeys: "#3"; smallText: "#"; smallTextVisible: true }
@@ -117,8 +118,13 @@ KeyboardLayout {
             Layout.fillHeight: true
             Layout.preferredWidth: functionKeyWidth
             Layout.fillWidth: false
-            FillerKey {
+            Key {
                 Layout.minimumHeight: 0
+                text: "Caps"
+                functionKey: true
+                noKeyEvent: true
+                onClicked: InputContext.priv.shiftHandler.capsLockActive = !InputContext.priv.shiftHandler.capsLockActive
+                highlighted: InputContext.priv.shiftHandler.capsLockActive
             }
             Key {
                 Layout.minimumHeight: 0
