@@ -2270,3 +2270,45 @@ rst), и статус он читает по `PWR_STATUS(0x180)` бит1 — т�
 
 Значит гипотеза A **уже реализована** нашим SPM-путём: недостающего клока нет,
 и это не причина ROM-петли. Идём в гипотезу B (EMI MPU).
+
+## 38. M16: раскладка EMI MPU для MT6771 в публичном дереве отсутствует (12.11)
+
+Источник, который есть: `github.com/Hadenix/android_kernel_alps-4.4` @
+`e73397b5…`, `drivers/misc/mediatek/emi_mpu/mt6739/emi_mpu.h` (выдержка —
+`refs/emi-mpu-mt6739-layout.txt`):
+
+```
+27: #define EMI_MPU_CTRL                 (0x0)
+29: #define EMI_MPU_SA0                  (0x100)
+31: #define EMI_MPU_SA(region)           (EMI_MPU_SA0 + (region*4))
+32: #define EMI_MPU_EA(region)           (EMI_MPU_EA0 + (region*4))
+33: #define EMI_MPU_APC0                 (0x300)
+34: #define EMI_MPU_APC(region, domain)  (EMI_MPU_APC0 + (region*4) + ((domain/8)*0x100))
+35: #define EMI_MPU_CTRL_D0              (0x800)
+54: #define EMI_MPU_REGION_NUMBER        (24)
+55: #define EMI_MPU_DOMAIN_NUMBER        (8)
+101:#define SET_ACCESS_PERMISSON(lock, d7..d0)  /* 3 бита на домен, lock << 26 */
+```
+
+**Но это MT6739-вариант: 24 региона и 8 доменов.** Вендорский код MT6771
+(`wlan: os/linux/plat/mt6771/plat_priv.c:70`, `common: mt6771.c:991`) использует
+регионы **25 и 26** и **16 доменов**
+(`SET_ACCESS_PERMISSION(apc, LOCK, d0 … d15)`), т.е. другой вариант блока
+(32 региона / 16 доменов, APC — 2 бита на домен). Брать mt6739-смещения для
+MT6771 — это аналогия, а не факт, поэтому реализацию не делал.
+
+Baseline с устройства (домен CONN поднят, probe не запускался):
+
+```
+0x1020e000 = 0x01004000    0x1020e004 = 0x00004000    (похоже на EMI-контроллер/MPU CTRL, ненулевое)
+0x10217000 = 0x00000000    0x10217004 = 0x00000000    (пусто)
+0x10219000 = 0xf053f154    0x10219004 = 0x00000000    (emi@10219000 из стокового DT)
+```
+
+Интерпретировать регионы 25/26 по этим данным нельзя — нужна правильная карта.
+
+**Следующий шаг:** взять `emi_mpu` v2 (32 региона, 16 доменов) из публичного
+**mt6771/mt6765 4.14** ядра — в `docs/research.md` уже указан Realme 4.14 как
+источник для нашего дерева; оттуда же взять `emi_mpu.h`/`emi_mpu.c`
+и `SET_ACCESS_PERMISSION` с 16 доменами, положить в `refs/` и реализовать
+регионы 25/26 точь-в-точь.
