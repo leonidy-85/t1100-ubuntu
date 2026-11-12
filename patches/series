@@ -49,3 +49,4 @@
 0050-arm64-dts-t1100-swap-the-touch-axes-for-landscape.patch
 0051-arm64-dts-t1100-use-native-portrait-touch-coordinates.patch
 0052-drm-panel-it6112-move-44-more-vblank-lines.patch
+0053-power-supply-mt6370-expose-a-battery-with-ocv-capacity.patch
