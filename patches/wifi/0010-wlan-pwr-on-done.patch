@@ -1,0 +1,45 @@
+--- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-12 23:06:01.892863572 +0000
++++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-12 22:52:18.342858852 +0000
+@@ -1162,6 +1162,18 @@
+ 
+ extern int t1100_probe_stage;
+ 
++/*
++ * T1100 (M23): when wmt_drv has already brought CONSYS up over BTIF/STP
++ * (t1100_btif_stp=1 in wmt_drv, which also downloads the ROMv4 patch), the
++ * chip must not be powered on a second time: wmt_plat_pwr_ctrl(FUNC_ON) runs
++ * the whole CONSYS power-on sequence again, i.e. it resets the MCU and throws
++ * the patch away.
++ */
++int t1100_pwr_on_done;
++module_param(t1100_pwr_on_done, int, 0444);
++MODULE_PARM_DESC(t1100_pwr_on_done,
++		 "T1100: CONSYS is already powered on (and ROM-patched) by wmt_drv");
++
+ /* Read-only probe of the STP function register block (see t1100_stp_probe()). */
+ int t1100_stp_probe_en = 1;
+ module_param(t1100_stp_probe_en, int, 0444);
+@@ -1235,12 +1247,17 @@
+ {
+ 	int ret;
+ 
+-	DBGLOG(INIT, INFO, "t1100_wlan_probe: chip power on\n");
+-	ret = wmt_plat_pwr_ctrl(0);	/* ENUM_FUNC_STATE: FUNC_ON */
+-	DBGLOG(INIT, INFO, "t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = %d\n", ret);
+-	if (ret) {
+-		DBGLOG(INIT, ERROR, "t1100_wlan_probe: chip power on failed\n");
+-		return ret;
++	if (t1100_pwr_on_done) {
++		DBGLOG(INIT, INFO,
++		       "t1100_wlan_probe: CONSYS already up (wmt_drv BTIF STP)\n");
++	} else {
++		DBGLOG(INIT, INFO, "t1100_wlan_probe: chip power on\n");
++		ret = wmt_plat_pwr_ctrl(0);	/* ENUM_FUNC_STATE: FUNC_ON */
++		DBGLOG(INIT, INFO, "t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = %d\n", ret);
++		if (ret) {
++			DBGLOG(INIT, ERROR, "t1100_wlan_probe: chip power on failed\n");
++			return ret;
++		}
+ 	}
+ 
+ 	if (t1100_probe_stage < 2) {

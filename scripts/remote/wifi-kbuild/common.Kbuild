@@ -61,6 +61,7 @@ wmt_drv-y += \
 	common_main/core/wmt_exp.o \
 	common_main/core/btm_core.o \
 	common_main/core/wmt_ic_6630.o \
+	common_main/linux/stp_btif.o \
 	common_main/linux/stp_dbg_soc.o \
 	common_main/linux/stp_dbg_combo.o \
 	common_main/linux/osal.o \
