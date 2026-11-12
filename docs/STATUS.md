@@ -2147,3 +2147,35 @@ readonly property real functionKeyWidth: mapFromItem(normalKey, normalKey.width 
 - 6 рядов делят высоту панели (`Layout.fillHeight` + `Layout.minimumHeight: 0`).
 
 Файлы: `rootfs-overlay/usr/share/plasma/keyboard/layouts/{fallback,en_US,ru_RU}/main.qml`.
+
+### 12.11 (7): батарея — топливомера нет; сборка ядра с build-хоста не грузится
+
+**Индикация заряда.** В mainline нет `mt6358_gauge`. В `/sys/class/power_supply/`
+только `mt6370-charger` (`type=USB`, `online`, `status=Charging`, без
+`capacity`). Напряжение читается через IIO MT6370 ADC:
+`iio:device0`, `in_voltage3_raw` × `scale=5` = мВ (`vbat`), `in_current6_raw`
+× 50 = мА (`ibat`). Сейчас: vbat ≈ 3825 мВ, status Charging.
+PowerDevil замаскирован (см. 12.11 (4)), поэтому значка батареи в трее нет.
+
+**Страховка от разряда** восстановлена на новом rootfs:
+`tools/host/install-power-guard.sh 10.42.66.66` — таймер активен, ток заряда
+поднят до 2 А, предупреждение про SDP.
+
+**Попытка №1 — драйвер батареи в ядре (не удалась).** В
+`drivers/power/supply/mt6370-charger.c` добавлен второй `power_supply`
+(`mt6370-battery`: PRESENT/TECHNOLOGY/STATUS/VOLTAGE_NOW/CURRENT_NOW/CAPACITY,
+проценты по OCV-таблице 1S Li-ion). Собирается, но **прошитый образ уходит в
+цикл перезагрузок**: в cmdline следующей загрузки `androidboot.bootreason=lk_crash`,
+`pstore` пуст — падает/зависает LK, а не ядро. Ранее так же падали мои образы
+`boot_ubuntu36` и `boot_dpmsfix*` (панель/DPMS). То есть дело не в конкретном
+патче: **перепакованные на этом хосте образы LK не принимает**, хотя раньше
+`boot_ubuntu36` собирался тем же `repack_boot.py`. Причина не выяснена —
+сравнивать надо gzip-поток/размеры/адреса с образами, которые собирала
+вторая сессия (`build/boot_touch8.img`).
+
+**Откат** (рабочий): Recovery → меню `5) Run sshd` (`root`/`recovery`) →
+`dd` `build/xfer/cur_boot.img` (md5 `75aff081…`) в `/dev/mmcblk0p29` → `reboot -f`.
+
+**План для индикации заряда:** сделать пользовательский виджет KDE (QML),
+читающий `vbat`/`ibat` из IIO и показывающий процент в панели — без правок
+ядра. Причина: прошивка ядра сейчас рискованна (LK crash), а виджет безопасен.
