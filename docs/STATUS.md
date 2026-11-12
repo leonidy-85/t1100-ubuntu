@@ -2640,3 +2640,33 @@ wmt_drv)` → `Exec format error`. Это наша заглушка `show_stack(
 `be1df2ac…`); пришлось копировать `scp` вручную. При следующем деплое смотрим
 вывод `apply` целиком (scp идёт с `-q`, ошибки не видны) — возможно, стоит
 добавить проверку sha256 после копирования.
+
+### 12.11 (14): Wi-Fi — модули грузятся, `phy` создаётся; не хватает только файрмвари
+
+Цепочка от «не вставляется» до «нет прошивки»:
+
+1. `wlan_drv_gen3` падал на `wiphy_register` (WARN `vendor_commands[].policy`) —
+   фикс: vendor-команды MTK отключены (они нужны только `iwpriv`), патч
+   `patches/wifi/0002-wlan-port-6.12-vendor-commands.patch`, новый
+   `wlan_drv_gen3.ko` `20e64fc0…`.
+2. После фикса модуль **загружается**: `Create wireless device success`,
+   `HifAhbPltmProbe`, `mtk_wcn_wmt_wlan_reg: wmt wlan cb register`,
+   `initcall initWlan ... returned 0`; в `/sys/class/ieee80211/` появились
+   `phy1`/`phy2` (AIS + P2P).
+3. **Chip-type выставляет userspace** (как вендорский `wmt_loader`): сделан
+   `tools/device/wmtctl.c` (static aarch64, ~150 строк, ioctl к `/dev/wmtdetect`):
+   `detect` → `soc chip id: 0x6771`, `setid 0x6771` → `g_chip_type = SOC`,
+   `init` → `COMBO_IOCTL_DO_MODULE_INIT` (`mtk_wcn_common_drv_init()`).
+4. **`init` падает на отсутствии прошивки**:
+   `Direct firmware load for WMT_SOC.cfg failed with error -2` →
+   `wmt_conf_read_file fails` → `wmt_lib_init() fails (-1)` → `WMT_init:fail`,
+   дальше deinit-путь дергает `platform_driver_unregister()` на
+   незарегистрированном драйвере (WARN в `driver_unregister`, безвредно).
+
+**Откуда взять файрмварь.** В rootfs её нет (и в 26.04-тарболе тоже), стоковый
+`/vendor` — внутри динамического раздела `super` (`mmcblk0p49`, **6 ГБ**,
+`blockdev --getsize64` = 6 442 450 944), который на планшете цел (мы стирали
+только `p54`). `lpunpack` в apt нет, поэтому раздел снят целиком
+(`/home/l/super_t1100.img`) и в нём ищется ext4-образ `vendor`; нужны
+`WMT_SOC.cfg` (119 Б, sha256 `ea673ab1…cf32`) и `WIFI_RAM_CODE_6759`
+(480 752 Б), плюс `mt6631_fm_v1_{patch,coeff}.bin` для FM.
