@@ -2262,3 +2262,45 @@ timeout …` (при неверных ключах он регистрирует
 
 Дальше: разобрать вендорский `stk3x3x` (регистры/power-up) и добавить
 ICM42607 в `inv_icm42600` — каждый пункт отдельной задачей.
+
+## 12.11 (8): соединены ветки, ядро второго разработчика прошито, rootfs 26.04 + Plasma развёрнут
+
+**Слияние.** В `master` вошли 12 коммитов второго разработчика (fast-forward,
+конфликтов не было): сдвиг кадра (0046 проверен, 0052 — `vbp` 240→284,
+refresh 58.93 Гц), тач-ориентация (0050/0051 native portrait),
+Plasma Keyboard (`rootfs-overlay/usr/share/plasma/keyboard/layouts/*`),
+tooling (`recovery_get_boot_header.py`), большая синхронизация документации.
+
+**Ядро.** Образ собран из ЕГО дерева на build-хосте
+(`/home/l/t1100-ubuntu-build/out-normal`, release `6.12.114-g400cb6f-touch-rot`)
+с нашим `cmdline` и `maxcpus=8`:
+- `build/boot_merged12.img`, sha256 `651ab53c22b6bcbab0843a0c782a6cd2bf6326279706c17c85927341254e2ab6`,
+  md5 `251492a50a1c163c9c6701f1ebe3f093`;
+- DTB `2b53c552…e9ff89` (52 669 Б), `tools/lk/verify-dtb.sh` → **validator passed**;
+- прошит в `p29` из recovery, sha раздела сверен; **загрузился**:
+  `uname -r` = `6.12.114-g400cb6f-touch-rot`, `nproc` = **8**,
+  `card1-DSI-1` = connected, `Himax Touchscreen` = `event1`.
+
+**Rootfs.** `p54` заменён на Ubuntu **26.04 LTS + KDE Plasma 6.6.4** из
+тарбола второго разработчика (`b75a40c4…`, 1.2 ГБ, с build-хоста) — развёрнут
+потоком `nc | tar` из recovery, 3.5 ГБ на разделе, `display-manager.service` →
+`/lib/systemd/system/sddm.service`.
+
+**Блокер доступа (на момент записи).** В новом rootfs пароль root заблокирован
+(`/etc/shadow`: `root:*`), а в `/root/.ssh/authorized_keys` лежит только ключ
+второго разработчика (`leonidy85@gmail.com`). Наш ключ нужно дописать из
+recovery (30 секунд) либо получить его приватный ключ. Пароли (`0`, `1`,
+`12345`, `root`, `password`, `ubuntu`) отклоняются — это не гадание, а
+следствие `root:*`.
+
+**Wi-Fi M3 (build-only).** Модули пересобраны под прошитое ядро:
+`wmt_drv.ko` sha256 `8228dd5c…9bbead`, `wlan_drv_gen3.ko` `4bbdb1d5…5f2b91`,
+плюс ядерные `cfg80211.ko` `ae891d54…`, `mac80211.ko` `b4ad9b62…`,
+`rfkill.ko`, `libarc4.ko`; vermagic у всех — `6.12.114-g400cb6f-touch-rot`.
+Важно: в конфиге второго разработчика `CFG80211=m` и нет
+`configs/t1100-wifi.fragment`, поэтому в копии out включён
+`CONFIG_NL80211_TESTMODE=y` — **`cfg80211.ko` из нашего набора обязателен**
+(иначе рассинхрон layout `cfg80211_ops`). WEXT на этом ядре недоступен
+(`wext-core` built-in при `CONFIG_WEXT_CORE=y`), nl80211/wpa_supplicant — работают.
+Прошивки `WIFI_RAM_CODE_6759`/`WMT_SOC.cfg` в rootfs нет — до неё `wlan0`
+не появится.
