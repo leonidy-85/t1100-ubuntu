@@ -1,0 +1,50 @@
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -211,6 +211,10 @@
+ 	struct delayed_work dcs_retry;
+ 	unsigned int mclk_khz;
+ 	enum drm_panel_orientation orientation;
++	/* set by ->unprepare(): only a real DPMS off/on cycle needs the TX
++	 * pulse, the very first ->enable() after boot must not touch the
++	 * bridge (LK has just initialised it and is still streaming) */
++	bool resume_pulse;
+ };
+ 
+ static struct it6112_ctx *panel_to_it6112(struct drm_panel *panel)
+@@ -710,6 +714,24 @@
+ 		it6112_mipi_rx_calc_clk(ctx);
+ 		it6112_dump(ctx, "stream-on");
+ 
++		/*
++		 * Vendor TX-on pulse (LK: write 0x05 = 0xfe, then 0x00).
++		 * The bridge keeps the state LK left, but the DSI stream stops
++		 * on every DPMS cycle and the bridge loses sync: without this
++		 * pulse the picture comes back shifted with coloured stripes
++		 * after the screen was blanked (found on 12.11; sending the
++		 * same pair to a running corrupted bridge fixes it at once).
++		 *
++		 * Not on the first enable: at boot LK has just run the full
++		 * bridge init and the stream is already up, the pulse there
++		 * wedged the boot (tested 12.11), so only re-enables get it.
++		 */
++		if (ctx->resume_pulse) {
++			it6112_mipi_tx_write(ctx, 0x05, 0xfe);
++			it6112_mipi_tx_write(ctx, 0x05, 0x00);
++			msleep(20);
++			ctx->resume_pulse = false;
++		}
+ 
+ 		it6112_dcs_send(ctx, MIPI_DCS_EXIT_SLEEP_MODE,
+ 				IT6112_ECC_EXIT_SLEEP);
+@@ -870,8 +892,10 @@
+ 	 * power it down either - pulsing reset and dropping EXT_PWR here would
+ 	 * destroy the bootloader state for good.
+ 	 */
+-	if (it6112_skip_init)
++	if (it6112_skip_init) {
++		ctx->resume_pulse = true;
+ 		return 0;
++	}
+ 
+ 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
+ 
