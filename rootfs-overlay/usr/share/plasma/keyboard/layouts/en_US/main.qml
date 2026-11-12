@@ -31,82 +31,59 @@ KeyboardLayout {
             Layout.minimumHeight: 0
             key: Qt.Key_Q
             text: "q"
-            alternativeKeys: "q1"
-            smallText: "1"
-            smallTextVisible: true
         }
         Key {
             Layout.minimumHeight: 0
             id: normalKey
             key: Qt.Key_W
             text: "w"
-            alternativeKeys: "w2"
-            smallText: "2"
-            smallTextVisible: true
         }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_E
             text: "e"
-            alternativeKeys: "êe3ëèé"
-            smallText: "3"
-            smallTextVisible: true
+            alternativeKeys: "êeëèé"
         }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_R
             text: "r"
-            alternativeKeys: "ŕr4ř"
-            smallText: "4"
-            smallTextVisible: true
+            alternativeKeys: "ŕrř"
         }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_T
             text: "t"
-            alternativeKeys: "ţt5ŧť"
-            smallText: "5"
-            smallTextVisible: true
+            alternativeKeys: "ţtŧť"
         }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_Y
             text: "y"
-            alternativeKeys: "ÿy6ýŷ"
-            smallText: "6"
-            smallTextVisible: true
+            alternativeKeys: "ÿyýŷ"
         }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_U
             text: "u"
-            alternativeKeys: "űūũûüu7ùú"
-            smallText: "7"
-            smallTextVisible: true
+            alternativeKeys: "űūũûüuùú"
         }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_I
             text: "i"
-            alternativeKeys: "îïīĩi8ìí"
-            smallText: "8"
-            smallTextVisible: true
+            alternativeKeys: "îïīĩiìí"
         }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_O
             text: "o"
-            alternativeKeys: "œøõôöòóo9"
-            smallText: "9"
-            smallTextVisible: true
+            alternativeKeys: "œøõôöòóo"
         }
         Key {
             Layout.minimumHeight: 0
             key: Qt.Key_P
             text: "p"
-            alternativeKeys: "p0"
-            smallText: "0"
-            smallTextVisible: true
         }
     }
     KeyboardRow {

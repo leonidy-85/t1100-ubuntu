@@ -2134,3 +2134,16 @@ readonly property real functionKeyWidth: mapFromItem(normalKey, normalKey.width 
 
 Файлы зафиксированы в `rootfs-overlay/usr/share/plasma/keyboard/layouts/`
 (`fallback/main.qml`, `en_US/main.qml`) — это же лежит на планшете.
+
+### 12.11 (6): раскладки клавиатуры зафиксированы в `rootfs-overlay/`
+
+Итоговые раскладки (проверены на планшете, пользователь подтвердил):
+
+- верхний ряд `1..0` во всех трёх — `fallback`, `en_US`, `ru_RU`;
+- у цифр удержание даёт `! @ # $ % ^ & * ( )`, мелкий `smallText` их показывает;
+- из верхнего буквенного ряда английской раскладки убраны лишние цифровые
+  `smallText`/`alternativeKeys` (`q1`, `w2`, …) — цифры теперь и так в отдельном
+  ряду; акценты в `alternativeKeys` сохранены;
+- 6 рядов делят высоту панели (`Layout.fillHeight` + `Layout.minimumHeight: 0`).
+
+Файлы: `rootfs-overlay/usr/share/plasma/keyboard/layouts/{fallback,en_US,ru_RU}/main.qml`.
