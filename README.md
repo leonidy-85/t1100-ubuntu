@@ -4,7 +4,7 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус (10.11.2026): фазы 1–3 закрыты; на панели работает Wayland (Weston).**
+> **Статус (12.11.2026): фазы 1–3 закрыты; на панели работает Wayland (Weston).**
 > mainline 6.12.114 + патчи 0001–0039: ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, USB-RNDIS (`1d6b:0104`) и
 > `ssh root@10.42.66.66` по ключу, **батарея заряжается** (`mt6370-charger`:
@@ -13,8 +13,9 @@
 > консоль и `t1100 login:` (патч 0038 — убрана запись `TX 0x06` bit2).
 > GPU: panfrost (патч 0039) — **Mesa 25.0.7, GLES 3.1**, `kmscube` 56.4 fps,
 > `glmark2` Score 452. Weston 13 (DRM/atomic) показывает панель, EGL-клиенты
-> 56.4 fps. Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Дальше:
-> тач, KDE Plasma/GNOME, DVFS GPU. Состояние и план — `docs/STATUS.md`,
+> 56.4 fps. **Сдвиг кадра на панели исправлен** (0046: `vbp 240`, `vfp 8`).
+> Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS. Дальше: тач
+> (cold init), DVFS GPU. Состояние и план — `docs/STATUS.md`,
 > `docs/handover.md`.
 >
 > ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
