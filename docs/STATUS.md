@@ -2930,3 +2930,20 @@ override: теперь `WIFI_START override=1 addr=0x000a5800 seq=3 -> status=0`
 
 Гейт `wifi-dma` (`infra_cqdma`) с патча 0007 включён (`enable=1`, 156 МГц).
 `wlan0` нет.
+
+## 12.11 (25): Wi-Fi M11 — ROM-patch записан в EMI, но MCU его не подхватывает
+
+Формат: `struct wmt_rom_patch` (48 Б) + тело, `soc3_0_ram_mcu_e1_hdr.bin`
+(165 344 Б) → `ucPLat="ALPS"`, Hw/Sw `0x108a`, **`u4PatchAddr = 0xf0000000`**
+(пространство MCU/EMI, как у секций прошивки), `u4PatchType = 0x4000000`,
+тело 165 296 Б; файлы `*_mcu_{e1,1_1,1a_1}_hdr.bin` идентичны. Вендор берёт имя
+и адрес из userspace (`wmt_ctrl_ul_cmd("srh_rom_patch")` → `wmt_loader`), в нашем
+`WMT_SOC.cfg` этой секции нет, `mt6771.c` шаг не вызывал.
+
+Сделан патч **0009**: `consys_dl_rom_patch()` читает файл, разбирает заголовок и
+кладёт тело в EMI+0 (`osal_memcpy_toio`), вызов из `polling_consys_chipid()` как
+в `mt6765.c:681`. На железе патч **записался** (readback совпал), но
+`cpupcr = 0x15730`, `WCIR = 0x1000f004` (READY=0) — MCU к этому моменту уже
+вышел из сброса и патч не читает. Следующий шаг: перенести запись внутрь
+`consys_hw_power_ctrl_spm()` между снятием изоляции и снятием сброса.
+`wlan0` нет.
