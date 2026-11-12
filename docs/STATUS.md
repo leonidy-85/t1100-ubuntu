@@ -2840,3 +2840,27 @@ ready-бита вызывает `GL_RESET_TRIGGER` → `schedule_work(rst_trigge
 0005 этот же шаг проходил). Следующий шаг: `slub_debug=U,F` + печать
 `dev/num_tx_queues/_tx` в `wlanNetCreate`, сверка `sizeof(GLUE_INFO_T)` с
 размером wiphy priv.
+
+## 12.11 (21): Wi-Fi M8 — причина oops в `wlanNetCreate` найдена: сборка против чужого out-дерева
+
+**Корень найден и устранён.** Модули собирались против
+`/home/l/t1100-ubuntu-build/out-normal`, а на плате крутится ядро из
+**`/home/l/t1100-merge2-out`**; конфиги расходятся на 23 строки, и ключевая —
+`CONFIG_WIRELESS_EXT`: она добавляет в `struct net_device` два указателя и
+сдвигает все последующие поля на 16 байт. Поэтому `dev->num_tx_queues`
+читался как 0 (ядро пишет 4 в `net/core/dev.c:11393`), а ядро в
+`netif_tx_stop_all_queues()` (`dev.c:10518`) уходило циклом по мусору и писало
+в rodata — `pc: netif_tx_stop_all_queues+0x2c`, как в STATUS 12.11 (20).
+Печать полей это подтвердила: `type=1 mtu=1500 real=4`, но `num_txq=0`.
+
+Сделано: вендорские **и** ядерные модули (`cfg80211`/`mac80211`/`rfkill`/
+`libarc4`) пересобраны против `merge2-out`
+(`KERNEL_OUT=/home/l/t1100-merge2-out … scripts/build-wifi-remote.sh`), в
+`scripts/remote/build-wifi-remote.sh` добавлен отказ собирать без
+`CONFIG_WIRELESS_EXT=y`. Артефакты: `wlan_drv_gen3.ko` `4de6e1d9…92ed69`,
+`wmt_drv.ko` `de80dcce…b3817`, `cfg80211.ko` `76a90f08…`.
+
+**Прогон теперь чистый** (oops нет, ребута нет): chip id `0x788`, DRIVER OWN
+OK, FW download end, reset подавлен `t1100_no_reset=1`. `wlan0` **нет** —
+единственный блокер остался прежний: прошивка не выставляет `WLAN_READY`
+(`WCIR 0x18070038 = 0`, mailbox `0x18070078 = 0x55aa`, `cpupcr` живой).

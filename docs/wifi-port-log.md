@@ -1696,3 +1696,105 @@ read-only страницу, т.е. `dev->num_tx_queues`/`dev->_tx` — мусо�
 - шаги прогона пишутся в `/root/probe-stage.log` (`sync` после каждой строки),
   регистры — в `/root/probe-regs.txt`, oops'ы остаются в журнале
   (`journalctl -k -b -1`).
+
+## 29. Oops в `wlanNetCreate` — причина: модуль собран против out-дерева без `CONFIG_WIRELESS_EXT` (12.11)
+
+Рубеж M8 (регистрация `wlan0`) пока **не взят**, но причина падений найдена и
+устранена; прогон теперь проходит без oops и без ребута.
+
+### 29.1 Что происходило
+
+`modprobe wlan_drv_gen3 t1100_probe=1 t1100_probe_stage=2` валил ядро:
+
+```
+wlanNetCreate: net_device prDev(0x…) allocated
+Unable to handle kernel write to read-only memory at virtual address ffffff80d83cd008
+pc : netif_tx_stop_all_queues+0x2c/0x80
+lr : wlanProbe+0x138/0xeb0
+```
+
+### 29.2 Диагностика: печать полей netdev в `wlanNetCreate`
+
+Добавленные `pr_info` (потом сняты) показали:
+
+```
+sizeof_nd=2496 sizeof_ndq=320 num_txq_off=1080 _tx_off=24 netdev_ops_off=8
+after-alloc dev=… num_txq=0 real_txq=4 _tx=ffffff8012e6b000 priv_off=2496
+stage3 name=wlan%d type=1 mtu=1500 num_txq=0 real=4 _tx=ffffff8012e6b000
+```
+
+`type=1`/`mtu=1500`/`real_num_tx_queues=4` верны, а **`num_tx_queues` читается
+как 0**, хотя ядро в `net/core/dev.c:11393` сразу после `setup(dev)` делает
+
+```c
+	dev->num_tx_queues = txqs;        /* txqs = CFG_MAX_TXQ_NUM = 4 */
+	dev->real_num_tx_queues = txqs;
+```
+
+Значит модуль читает поле не там, где его пишет ядро → `struct net_device` в
+модуле и в ядре **разной длины**. Дальше ядро в своём
+`netif_tx_stop_all_queues()` (`net/core/dev.c:10518`) крутит цикл по своему
+`num_tx_queues` (мусор), берёт `netdev_get_tx_queue(dev, i)` = `_tx + i*320` и
+пишет в rodata — ровно то, что в oops.
+
+### 29.3 Причина
+
+Сравнение конфигов:
+
+```
+out-normal (против него собирались модули):  CONFIG_WIRELESS_EXT — отсутствует
+merge2-out (это ядро и запущено на плате):   CONFIG_WIRELESS_EXT=y
+```
+
+`CONFIG_WIRELESS_EXT` добавляет в `struct net_device` два указателя
+(`wireless_handlers`, `wireless_data`), т.е. сдвигает **все** последующие поля
+на 16 байт. Модули собирались против `out-normal`, ядро на плате — из
+`merge2-out` (дерево `/home/l/t1100-merge2-src`, его board-DTS и содержит
+`consys`), поэтому раскладка не совпадала: часть полей писалась/читалась по
+чужим смещениям. Это же объясняет, почему oops «то есть, то нет»: мусор в
+`num_tx_queues` зависел от содержимого кучи.
+
+Всего конфиги расходятся на 23 строки, и кроме `CONFIG_WIRELESS_EXT` там
+`CFG80211_WEXT`/`WEXT_*`/`NL80211_TESTMODE`/`LIB80211`/`IPW2200` — т.е.
+`out-normal` вообще не пригоден для этого порта.
+
+### 29.4 Исправление
+
+- модули (вендорские **и** ядерные `cfg80211`/`mac80211`/`rfkill`/`libarc4`)
+  пересобраны против **`/home/l/t1100-merge2-out`**:
+  `KERNEL_OUT=/home/l/t1100-merge2-out LOCALVERSION=-g400cb6f-touch-rot scripts/build-wifi-remote.sh`;
+- в `scripts/remote/build-wifi-remote.sh` добавлен предохранитель: сборка
+  отказывается работать, если в `$KB/.config` нет `CONFIG_WIRELESS_EXT=y`.
+
+Артефакты: `wmt_drv.ko` `de80dcce…b3817`, `wlan_drv_gen3.ko`
+`4de6e1d95a857737bf219020355cd937ffd697fdc20941f50dd5773cd992ed69`
+(2 897 592 Б); `cfg80211.ko` `76a90f08…`, `mac80211.ko` `050602fe…`,
+`rfkill.ko` `e6bbcb7b…`, `libarc4.ko` `a38b5be1…`.
+
+### 29.5 Прогон после исправления — чисто, без oops
+
+```
+t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = 0
+polling_consys_chipid: retry(8) consys chipId(0x00000788)
+nicpmSetDriverOwn: DRIVER OWN, status=1 count=25
+nicInitializeAdapter: Chip ID[6771] Version[E1]
+kalFirmwareOpen: WIFI_RAM_CODE_6759 success -> FW download end
+Waiting for Ready bit timeout, Device to Host MailBox 0x38   <- единственный блокер
+glResetTrigger: T1100: whole-chip reset suppressed (t1100_no_reset=1)
+wlanProbe failed; initcall initWlan returned 0
+```
+
+Плата жива, `wlan0` **нет** (`ip -br link` — только `lo`/`usb0`), потому что
+`wlanProbe` возвращает ошибку до `register_netdev`. Регистры: `WCIR
+0x18070038 = 0`, mailbox `0x18070078 = 0x55aa`, `cpupcr 0x18070160 = 0x15730`
+(меняется — MCU работает), `0x180f000c = 0xa07f0000` (WFDMA отвечает).
+
+### 29.6 Следующий шаг (M8)
+
+Прошивка не выставляет `WLAN_READY` в `MCR_WCIR` (0x18070038). Гипотезы по
+порядку: (1) не загружен ROM-patch консью (`soc3_0_ram_mcu_e1_hdr.bin` — eco E1
+совпадает с `Chip ID[6771] Version[E1]`), в вендорском `mt6771.c` его нет вовсе,
+а `mt6765.c`/`mt6761.c` качают через `mtk_wcn_soc_rom_patch_dwn()`; (2)
+`kalSetEmiMpuProtection()` — заглушка («EMI MPU function is not defined»), без
+неё прошивка может не получить доступ к своему EMI; (3) адреса загрузки/старта
+из DT `hardware-values = <0x788 0xa5800 0xa5800>`.
