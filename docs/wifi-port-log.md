@@ -2312,3 +2312,45 @@ Baseline с устройства (домен CONN поднят, probe не за�
 источник для нашего дерева; оттуда же взять `emi_mpu.h`/`emi_mpu.c`
 и `SET_ACCESS_PERMISSION` с 16 доменами, положить в `refs/` и реализовать
 регионы 25/26 точь-в-точь.
+
+## 39. M17: EMI MPU v2 — раскладка найдена (32 региона/16 доменов), база в DT не подтверждена (12.11)
+
+Источник: `github.com/nokia-dev/android_kernel_nokia_mt6771` (HEAD),
+`drivers/misc/mediatek/emi_mpu/mt6758/emi_mpu.h` — выдержка в
+`refs/emi-mpu-v2-mt6758-layout.txt`:
+
+```
+35: #define EMI_MPU_CTRL                 (0x0)
+37: #define EMI_MPU_SA0                  (0x100)
+39: #define EMI_MPU_SA(region)           (EMI_MPU_SA0 + (region*4))
+40: #define EMI_MPU_EA(region)           (EMI_MPU_EA0 + (region*4))
+41: #define EMI_MPU_APC0                 (0x300)
+42: #define EMI_MPU_APC(region, domain)  (EMI_MPU_APC0 + (region*4) + ((domain/8)*0x100))
+43: #define EMI_MPU_CTRL_D0              (0x800)
+65: #define EMI_MPU_REGION_NUMBER        (32)
+66: #define EMI_MPU_DOMAIN_NUMBER        (16)
+```
+
+Это **вариант v2**: 32 региона и 16 доменов — ровно то, что ожидает вендорский
+код MT6771 (регионы 25/26, `SET_ACCESS_PERMISSION(apc, LOCK, d0…d15)`).
+Платформенной папки `mt6771` в дереве Nokia нет (есть mt6739/mt6757/mt6758),
+поэтому вариант сверен по числу регионов/доменов, а не по имени файла.
+
+**Чего не хватает для реализации: базовый адрес блока.** В стоковом DT MT6771
+(`refs/stock-mt6771.dts`) узла `emi_mpu` нет — рядом только
+
+```dts
+infracfg@1020e000 { compatible = "mediatek,infracfg"; reg = <0x1020e000 0x1000>; };
+emi@10219000      { compatible = "mediatek,emi";       reg = <0x10219000 0x1000>, …; };
+```
+
+Наши дампы: `0x1020e000 = 0x01004000`/`0x1020e004 = 0x00004000` (содержимое похоже
+на конфигурацию блоков), `0x10219000 = 0xf053f154`, `0x10217000 = 0`.
+Т.е. базу (0x1020e000? 0x10217000? иное) **из DT подтвердить нельзя** — в
+mt6758-драйвере она берётся либо из своего DT-узла, либо хардкодом; это надо
+прочитать (`emi_mpu.c`, `emi_mpu_init()`), прежде чем писать регионы.
+
+Реализацию и прогон в этом рубеже не делал: без подтверждённой базы это была бы
+догадка. Следующий шаг — прочитать `emi_mpu_init()`/`EMI_MPU_BASE` в
+пublic mt6758-драйвере и сверить с нашими тремя кандидатами по дампу
+(у `0x1020e000` уже видно осмысленное содержимое).
