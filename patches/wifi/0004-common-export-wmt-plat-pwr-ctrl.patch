@@ -1,0 +1,16 @@
+--- a/common_main/platform/wmt_plat_alps.c	2026-11-12 18:24:01.079413624 +0000
++++ b/common_main/platform/wmt_plat_alps.c	2026-11-12 18:24:01.095773156 +0000
+@@ -581,6 +581,13 @@
+ 
+ 	return ret;
+ }
++/* T1100 (mainline): the WMT "func on (WIFI)" path reaches the chip power-on
++ * through opfunc_pwr_on(), which also runs wmt_core_stp_init(); STP has no
++ * transport on this port, so that path aborts before the chip is up and the
++ * WLAN HIF (separate driver) then reads an unpowered block. Export the plain
++ * per-chip power control so the WLAN side can power CONSYS on itself.
++ */
++EXPORT_SYMBOL(wmt_plat_pwr_ctrl);
+ 
+ INT32 wmt_plat_ps_ctrl(ENUM_FUNC_STATE state)
+ {

@@ -1329,3 +1329,137 @@ dmesg | grep -iE "wiphy|wlan0|initWlan|WARNING" | tail -30
 iw phy                      # должен появиться phy0, без WARN в dmesg
 ip -br link | grep wlan0    # интерфейс создаётся при ifconfig up/iw dev
 ```
+
+## 26. M6: nl80211 не создаёт интерфейс; `wlanProbe` запускается, но CONSYS не отвечает (12.11)
+
+Рубеж M6 = «есть `wlan0` и скан». Итог: **не взят**, но путь выяснен до
+конкретного места. Ниже — фактический вывод, чтобы следующая сессия не
+переоткрывала.
+
+### 26.1 Инструмент nl80211: собран статический `iw` 6.9
+
+```sh
+scripts/build-iw-aarch64.sh          # libnl 3.11.0 + iw 6.9, --host=aarch64-linux-gnu
+# build/tools-aarch64/iw  1 267 888 Б
+sha256 c4d68b70f8c529d94e637a59a20e02cc24d51dc3443f7e5fb274aec441b81374
+file: ELF 64-bit LSB executable, ARM aarch64, statically linked, stripped
+```
+
+На планшете: `/usr/local/bin/iw`, `iw version 6.9` работает. Логика сборки:
+libnl `--disable-shared --enable-static` в `/home/l/t1100-tools/iw-src/libnl-aarch64`,
+затем `make CC=aarch64-linux-gnu-gcc LDFLAGS=-static PKG_CONFIG_LIBDIR=<prefix>/lib/pkgconfig`
+(`NEEDED` в `readelf -d` — 0).
+
+### 26.2 `wlan0` через nl80211 НЕ создаётся — и не может
+
+```
+# iw phy phy0 interface add wlan0 type managed
+command failed: Operation not supported (-95)
+```
+
+Причина в самом драйвере, а не в инструменте: в `mtk_wlan_ops`
+(`os/linux/gl_init.c:261`) **нет** `.add_virtual_intf` (есть
+`change_virtual_intf`, `scan`, `connect`, …), а у P2P он закомментирован
+(`gl_p2p.c:78`). `cfg80211` без `rdev_add_virtual_intf` возвращает
+`-EOPNOTSUPP`. То есть в gen3 интерфейс создаёт НЕ userspace через nl80211, а
+`wlanProbe()` при «WMT func on (WIFI)»; вывод в `docs/STATUS.md` 12.11 (15)
+про nl80211-путь был неверен.
+
+### 26.3 Как вендор поднимает WLAN (по исходникам)
+
+```
+mtk_wcn_wmt_func_on(WIFI)                       [wmt_exp.c:126]
+  → отдельный op WMT_OPID_PWR_ON → opfunc_pwr_on [wmt_core.c]
+      → WMT_CTRL_HW_PWR_ON → wmt_plat_pwr_ctrl(FUNC_ON) → mtk_wcn_consys_hw_pwr_on()
+      → wmt_core_stp_init()                     ← упирается здесь у нас
+  → op WMT_OPID_FUNC_ON → opfunc_func_on(WIFI)
+      → для WIFI: ставит в очередь WMT_OPID_WLAN_PROBE и выходит
+  → wmtd worker: opfunc_wlan_probe → gpWmtFuncOps[WIFI]->func_on = wmt_func_wifi_on()
+      → (chip type SOC) mtk_wcn_wlan_probe() = HifAhbProbe()
+          → mtk_wcn_consys_hw_wifi_paldo_ctrl(1)
+          → wlanProbe()  →  wlanNetCreate() (переиспользует gprWdev) + register_netdev
+```
+
+`wmt_core_stp_init()` первым делом требует `wmtInfoBit & WMT_OP_HIF_BIT`
+(его ставит `opfunc_hif_conf`, т.е. `WMT_IOCTL_SET_STP_MODE` от `wmt_loader`)
+и открывает STP-транспорт (UART/SDIO/BTIF). В нашем порте все транспорты —
+заглушки (`stubs/wmt_stubs.c`: `mtk_wcn_stp_{uart,sdio}_drv_init → -ENOSYS`),
+поэтому `opfunc_pwr_on` всегда падает с `-3` и до колбэка дело не доходит.
+Это ровно тот же лог, что в стоке при `wmt_core_stp_init: no hif info!`.
+
+### 26.4 Обходной путь (патчи 0003/0004) и где он упирается
+
+`patches/wifi/0003-wlan-t1100-probe-param.patch` — модульный параметр
+`t1100_probe=1`: после `glRegisterBus()` вызывается `t1100_wlan_probe()`,
+которая (а) питает чип `wmt_plat_pwr_ctrl(FUNC_ON)` (тот же шаг, что первый
+в `opfunc_pwr_on`, без STP), (б) делает `paldo_ctrl(1)` + `pfWlanProbe()`
+без `pfWlanRemove()` при ошибке. `patches/wifi/0004-…` экспортирует
+`wmt_plat_pwr_ctrl` из `wmt_drv`.
+
+Порядок на железе (`modprobe wmt_drv` → `wmtctl detect/setid 0x6771/init` →
+`modprobe wlan_drv_gen3 t1100_probe=1`):
+
+```
+[wlan]createWirelessDevice:(INIT INFO) Create wireless device success
+[wlan]t1100_wlan_probe: chip power on
+[WMT-CONSYS-HW][I]mtk_wcn_consys_hw_pwr_on:CONSYS-HW-PWR-ON, start
+[WMT-CONSYS-HW][E]polling_consys_chipid(611):Maybe has a consys power on issue,(0x00000000)
+[WMT-CONSYS-HW][I]update_consys_rom_desel:Update consys rom desel value(0x0)
+[WMT-CONSYS-HW][I]mtk_wcn_consys_hw_pwr_on:CONSYS-HW-PWR-ON, finish(0)
+[wlan]t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = 0
+[wlan]t1100_wlan_probe: paldo on + wlanProbe
+[wlan]wlanNetCreate:(INIT INFO) net_device prDev(0x...) allocated
+[wlan]sdio_open:(HAL ERROR) Enable function failed, error -62      ← -ETIME: IORx не встал
+[wlan]glLoadNvram:(INIT WARN) Nvram not available
+[wlan]nicpmSetDriverOwn:(NIC ERROR) LP fail, Timeout(516ms) Bus Error[0] …
+[wlan]wlanPollingCpupcr:(INIT ERROR) i:0..3, cpupcr:00000000
+[wlan]wlanAdapterStart:(INIT ERROR) nicpmSetDriverOwn() failed!
+[wlan]wlanProbe:(INIT ERROR) wlanProbe failed
+[wlan]t1100_probe: t1100_wlan_probe() = -5
+initcall initWlan ... returned 0                              ← модуль загружен, phy0/phy1 есть
+```
+
+Читается так: netdev создан, но регистр-обмена с HIF нет — все чтения из окна
+CONNSYS (`0x180f0000` WFDMA и `0x18070000`) возвращают 0 (`cpupcr:00000000`,
+`IORx` не выставляется). «PWR-ON, finish(0)» и ненулевые ACK-регистры SPM —
+это AP-сторона (`0x1000632c`, `0x10006180`), они не доказывают, что домен
+CONN реально поднялся.
+
+**Чего в порте заведомо нет** (по исходникам, не по догадкам):
+
+- `consys_hw_wifi_vcn33_ctrl()` (paldo WIFI) целиком в `#if 0`;
+- `CONSYS_PWR_ON_OFF_API_AVAILABLE = 0` для mt6771 → `clk_scp_conn_main`
+  («conn») никогда не включается, питание домена идёт только ручными записями
+  в SPM (0x1000632c), а в DT узла consys клока нет вовсе;
+- ROM-patch CONSYS (`soc3_0_ram_*.bin`) в стоке грузит `wmt_loader` по STP —
+  у нас этого пути нет.
+
+### 26.5 Опасность: неудачный probe через `HifAhbProbe()` вешает ядро
+
+Первая версия патча вызывала `HifAhbProbe()` прямо в `glRegisterBus()`.
+`HifAhbProbe()` при ошибке probe делает `pfWlanRemove()` = `wlanRemove()` на
+полуинициализированном glue → **kernel hang**: ping/TCP отвечают, но sshd не
+отдаёт баннер (`dmesg` тоже виснет на printk-lock), лечится только
+долгим нажатием Power. Поэтому в итоговой версии rollback убран: ошибка probe
+только пишется в лог, модуль остаётся загруженным, система жива.
+
+### 26.6 Что проверено и что нет
+
+Проверено на железе: `iw` статический работает; nl80211 add_iface → `-EOPNOTSUPP`
+(объяснено исходником); CONSYS power-on по SPM возвращает 0; probe доходит до
+`nicpmSetDriverOwn` и падает на пустом HIF-окне; `devmem`/`mempeek` через
+`pread(/dev/mem)` на 0x180f0000/0x1000632c дают `EFAULT` (нужен `mmap`).
+Не проверено: реальные значения регистров окна CONN (нет инструмента),
+поведение `wmt func on` при живом STP, скан эфира.
+
+### 26.7 Следующий шаг (по порядку)
+
+1. Дать регистровую видимость: статический `regpeek` (mmap `/dev/mem`) и снять
+   `0x18070008` (chip id), `0x180f0000…+0x40`, `0x1000632c/0x10006180` до и
+   после `wmt_plat_pwr_ctrl(FUNC_ON)` — один прогон, без пересборки ядра.
+2. Сверить SPM-последовательность `mt6771.c:consys_hw_power_ctrl()` с
+   вендорским mt6771 (вопрос к `bringup`): биты `CONN_TOP1_PWR_ON[_S]`,
+   `conn_clk_dis`, `conn_top1_iso_en`, и нужен ли для WFDMA отдельный клок
+   (`CLK_INFRA_CQ_DMA` включается только в `ahb_pdma.c` при DMA).
+3. Только после живого окна CONN имеет смысл `ip link set wlan0 up` (загрузка
+   `WIFI_RAM_CODE_6759`) и `iw dev wlan0 scan`.

@@ -1,0 +1,80 @@
+--- a/os/linux/gl_init.c	2026-11-12 17:02:16.187599323 +0000
++++ b/os/linux/gl_init.c	2026-11-12 18:24:23.253255624 +0000
+@@ -2719,6 +2719,16 @@
+ * \retval 0     Success
+ */
+ /*----------------------------------------------------------------------------*/
++/* T1100 (mainline): the WMT "func on (WIFI)" callback path needs an STP
++ * transport, which this port does not build. With t1100_probe=1 the chip is
++ * powered on and the HIF brought up right at insmod instead
++ * (see t1100_wlan_probe() in ahb.c).
++ */
++extern int t1100_wlan_probe(void);
++static int t1100_probe;
++module_param(t1100_probe, int, 0444);
++MODULE_PARM_DESC(t1100_probe, "T1100: power CONSYS on and call the wlan HIF probe at module init");
++
+ /* 1 Module Entry Point */
+ static int initWlan(void)
+ {
+@@ -2743,6 +2753,11 @@
+ 	glP2pCreateWirelessDevice(prGlueInfo);
+ 
+ 	ret = ((glRegisterBus(wlanProbe, wlanRemove) == WLAN_STATUS_SUCCESS) ? 0 : -EIO);
++	if (ret == 0 && t1100_probe) {
++		int probe_ret = t1100_wlan_probe();
++
++		DBGLOG(INIT, ERROR, "t1100_probe: t1100_wlan_probe() = %d\n", probe_ret);
++	}
+ 
+ 	if (ret == -EIO) {
+ 		kalUninitIOBuffer();
+diff -ru wp/os/linux/hif/ahb_sdioLike/ahb.c wp2/os/linux/hif/ahb_sdioLike/ahb.c
+--- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-12 17:02:16.185839307 +0000
++++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-12 18:24:23.253015990 +0000
+@@ -1142,6 +1142,45 @@
+ 
+ /*----------------------------------------------------------------------------*/
+ /*!
++ * \brief T1100: power CONSYS on and bring the AHB Wi-Fi HIF up (M6 milestone).
++ *
++ * The vendor flow reaches HifAhbProbe() from WMT as the "wmt func on (WIFI)"
++ * callback, after opfunc_pwr_on() has powered the chip. That path runs through
++ * wmt_core_stp_init() and needs an STP transport (UART/SDIO/BTIF); on this
++ * mainline port all of them are stubs, so the callback is never reached and no
++ * netdev is created. AHB Wi-Fi itself does not use STP, so:
++ *   1) power the chip with wmt_plat_pwr_ctrl(FUNC_ON) -- the same per-chip
++ *      power-on opfunc_pwr_on() calls first, no STP involved;
++ *   2) do what HifAhbProbe() does before probing, but without the
++ *      pfWlanRemove() rollback, so a failed attempt leaves the module loaded
++ *      (and the box alive) instead of tearing down a half-initialized glue.
++ *
++ * initWlan() calls this when the module is inserted with t1100_probe=1;
++ * default (0) keeps the vendor behaviour untouched.
++ */
++extern int wmt_plat_pwr_ctrl(int state);	/* exported by wmt_drv (FUNC_ON = 0) */
++
++int t1100_wlan_probe(VOID)
++{
++	int ret;
++
++	DBGLOG(INIT, INFO, "t1100_wlan_probe: chip power on\n");
++	ret = wmt_plat_pwr_ctrl(0);	/* ENUM_FUNC_STATE: FUNC_ON */
++	DBGLOG(INIT, INFO, "t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = %d\n", ret);
++	if (ret) {
++		DBGLOG(INIT, ERROR, "t1100_wlan_probe: chip power on failed\n");
++		return ret;
++	}
++
++	DBGLOG(INIT, INFO, "t1100_wlan_probe: paldo on + wlanProbe\n");
++	mtk_wcn_consys_hw_wifi_paldo_ctrl(1);	/* power on WiFi TX PA 3.3V */
++	ret = (int) pfWlanProbe((PVOID) &HifAhbPDev->dev);
++	DBGLOG(INIT, INFO, "t1100_wlan_probe: wlanProbe returned %d\n", ret);
++	return ret;
++}
++
++/*----------------------------------------------------------------------------*/
++/*!
+ * \brief This function will do module remove.
+ *
+ * \param[in] None
