@@ -25,6 +25,8 @@ KeyboardLayout {
         Key { Layout.minimumHeight: 0; key: Qt.Key_F8; text: "F8" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F9; text: "F9" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F10; text: "F10" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F11; text: "F11" }
+        Key { Layout.minimumHeight: 0; key: Qt.Key_F12; text: "F12" }
     }
     KeyboardRow {
         Layout.fillHeight: true
@@ -40,6 +42,8 @@ KeyboardLayout {
         Key { Layout.minimumHeight: 0; key: Qt.Key_8; text: "8"; alternativeKeys: "*8"; smallText: "*"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_9; text: "9"; alternativeKeys: "(9"; smallText: "("; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_0; text: "0"; alternativeKeys: ")0"; smallText: ")"; smallTextVisible: true }
+        Key { Layout.minimumHeight: 0; text: "-" }
+        Key { Layout.minimumHeight: 0; text: "+"; alternativeKeys: "=+"; smallText: "="; smallTextVisible: true }
         BackspaceKey {
             Layout.minimumHeight: 0
             weight: normalKeyWidth
