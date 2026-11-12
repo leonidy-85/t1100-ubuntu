@@ -69,7 +69,7 @@
  }
  
 --- a/btif_plat.c	2026-11-11 14:00:44.843844888 +0000
-+++ b/btif_plat.c	2026-11-12 22:45:34.632662551 +0000
++++ b/btif_plat.c	2026-11-12 23:09:28.247173032 +0000
 @@ -13,6 +13,7 @@
  #include "btif_pub.h"
  #include "btif_priv.h"
@@ -164,6 +164,27 @@
  #endif /* defined(CONFIG_MTK_CLKMGR) */
  		} else {
  			i_ret = ERR_INVALID_PAR;
+@@ -535,6 +559,20 @@
+ /*enable Rx IER by default*/
+ 	hal_btif_rx_ier_ctrl(p_btif, true);
+ 
++	/*
++	 * M23 knobs, used to tell "the AP never put the bytes on the wire" from
++	 * "the chip does not answer": a WAK pulse asks the CONNSYS BTIF side to
++	 * wake up, and clearing HANDSHAKE removes CTS/RTS pacing.
++	 */
++	if (m23_no_handshake) {
++		btif_reg_sync_writel(0, BTIF_HANDSHAKE(base));
++		BTIF_INFO_FUNC("m23: handshake disabled\n");
++	}
++	if (m23_wak_pulse) {
++		btif_reg_sync_writel(BTIF_WAK_BIT, BTIF_WAK(base));
++		BTIF_INFO_FUNC("m23: wak pulse sent\n");
++	}
++
+ 	i_ret = 0;
+ 	return i_ret;
+ }
 --- a/btif_dma_plat.c	2026-11-11 14:00:44.843844888 +0000
 +++ b/btif_dma_plat.c	2026-11-12 22:45:34.632812806 +0000
 @@ -12,6 +12,7 @@

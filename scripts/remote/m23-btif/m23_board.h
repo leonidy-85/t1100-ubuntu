@@ -12,6 +12,8 @@ extern int m23_btif_rxdma_pa;
 extern int m23_btif_irq;
 extern int m23_btif_txdma_irq;
 extern int m23_btif_rxdma_irq;
+extern int m23_wak_pulse;
+extern int m23_no_handshake;
 
 int m23_board_register(void);
 void m23_board_unregister(void);

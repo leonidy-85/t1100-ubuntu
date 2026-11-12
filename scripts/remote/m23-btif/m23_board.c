@@ -55,6 +55,16 @@ module_param(m23_btif_rxdma_irq, int, 0444);
 MODULE_PARM_DESC(m23_btif_rxdma_irq, "BTIF RX DMA IRQ (stock DT: SPI 0x8c = 140)");
 
 /* >0: after init, dump the controller and do exactly one open/close. */
+/* >0: pulse BTIF_WAK once per open (wake the CONNSYS BTIF side). */
+int m23_wak_pulse;
+module_param(m23_wak_pulse, int, 0444);
+MODULE_PARM_DESC(m23_wak_pulse, "T1100: write BTIF_WAK after hw init (wake CONNSYS BTIF)");
+
+/* >0: clear BTIF_HANDSHAKE after hw init (no CTS/RTS flow control). */
+int m23_no_handshake;
+module_param(m23_no_handshake, int, 0444);
+MODULE_PARM_DESC(m23_no_handshake, "T1100: clear BTIF_HANDSHAKE (disable flow control)");
+
 int m23_selftest;
 module_param(m23_selftest, int, 0444);
 MODULE_PARM_DESC(m23_selftest, "T1100: 1 = dump BTIF registers and run one open/close self test");
