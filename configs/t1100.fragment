@@ -151,3 +151,12 @@ CONFIG_TYPEC_TCPCI_MT6370=y
 # window at 0x900000d0), which is register-compatible with the hx83112b
 # driver. Without the driver the i2c client 0-0048 exists but nothing binds.
 CONFIG_TOUCHSCREEN_HIMAX_HX83112B=y
+
+# --- sensors: InvenSense ICM-42607-P (accel + gyro, i2c1 0x68) ---------------
+# The ICM-42607-P has its own register map (DEVICE_CONFIG at 0x01, not 0x11)
+# and is not supported by inv_icm42600. Patch 0054 backports the upstream
+# inv_icm42607 driver. The driver is built in: the image has no /lib/modules.
+CONFIG_IIO_BUFFER=y
+CONFIG_IIO_KFIFO_BUF=y
+CONFIG_IIO_TRIGGERED_BUFFER=y
+CONFIG_INV_ICM42607_I2C=y
