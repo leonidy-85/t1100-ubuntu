@@ -42,7 +42,7 @@
 0043-input-touchscreen-hx83112b-implement-HX83102E-init.patch
 0044-arm64-dts-t1100-touch-interrupt-on-falling-edge.patch
 0045-drm-panel-it6112-report-the-panel-orientation-to-the.patch
-0046-drm-panel-it6112-WIP-move-212-lines-of-vblank-into-t.patch
+0046-drm-panel-it6112-fix-frame-shift-move-212-lines-of-vblank.patch
 0047-input-touchscreen-hx83112b-HX83102E-vendor-init.patch
 0048-arm64-dts-t1100-finish-the-touch-wiring.patch
 0049-arm64-dts-t1100-describe-CONSYS-and-the-MT6631-Wi-Fi.patch

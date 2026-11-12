@@ -69,6 +69,8 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
   `ubuntu` (Ubuntu 24.04.3).
 - Wayland: **Weston 13** с DRM/atomic-бэкендом работает на панели; EGL/GLES
   через panfrost, `weston-simple-egl` 56.4 fps (kiosk-shell, `card1`).
+- **Сдвиг кадра:** исправлен патчем 0046 (vbp 240, vfp 8; vblank не изменён),
+  проверено на `boot_shift.img` 12.11.
 - **Осталось:** ввод с тача (Himax, evdev/libinput), десктоп KDE Plasma/GNOME.
 - **Готово:** рабочий стол на дисплее, ввод с тача.
 
