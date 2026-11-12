@@ -28,6 +28,7 @@ KeyboardLayout {
     }
     KeyboardRow {
         Layout.fillHeight: true
+        spacing: 12
         Key { Layout.minimumHeight: 0; key: Qt.Key_1; text: "1"; alternativeKeys: "!1"; smallText: "!"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_2; text: "2"; alternativeKeys: "@2"; smallText: "@"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_3; text: "3"; alternativeKeys: "#3"; smallText: "#"; smallTextVisible: true }
@@ -231,16 +232,9 @@ KeyboardLayout {
     }
     KeyboardRow {
         Layout.fillHeight: true
-        Key { Layout.minimumHeight: 0; key: Qt.Key_Left; text: "←"; weight: normalKeyWidth; Layout.fillWidth: false }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_Up; text: "↑"; weight: normalKeyWidth; Layout.fillWidth: false }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_Down; text: "↓"; weight: normalKeyWidth; Layout.fillWidth: false }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_Right; text: "→"; weight: normalKeyWidth; Layout.fillWidth: false }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
         SymbolModeKey {
             Layout.minimumHeight: 0
-            weight: functionKeyWidth
+            weight: normalKeyWidth
             Layout.fillWidth: false
         }
         ChangeLanguageKey {
@@ -258,6 +252,34 @@ KeyboardLayout {
             smallTextVisible: keyboard.isFunctionPopupListAvailable()
             highlighted: true
         }
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Left
+            text: "←"
+            weight: normalKeyWidth * 0.55
+            Layout.fillWidth: false
+        }
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Up
+            text: "↑"
+            weight: normalKeyWidth * 0.55
+            Layout.fillWidth: false
+        }
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Down
+            text: "↓"
+            weight: normalKeyWidth * 0.55
+            Layout.fillWidth: false
+        }
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Right
+            text: "→"
+            weight: normalKeyWidth * 0.55
+            Layout.fillWidth: false
+        }
         SpaceKey {
             Layout.minimumHeight: 0
         }
@@ -274,12 +296,17 @@ KeyboardLayout {
         }
         HideKeyboardKey {
             Layout.minimumHeight: 0
+            weight: normalKeyWidth * 0.7
+            Layout.fillWidth: false
+        }
+        ShiftKey {
+            Layout.minimumHeight: 0
             weight: normalKeyWidth
             Layout.fillWidth: false
         }
         EnterKey {
             Layout.minimumHeight: 0
-            weight: functionKeyWidth
+            weight: normalKeyWidth
             Layout.fillWidth: false
         }
     }
