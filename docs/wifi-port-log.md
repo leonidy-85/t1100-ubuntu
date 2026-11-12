@@ -2018,3 +2018,73 @@ t1100-mcif: WIFI_START override=1 addr=0x000a5800 seq=3 -> status=0     <- ст�
 `override=1 addr=0xa5800` (см. лог выше). READY всё равно 0
 (`wcir=0x1000f004`, `cpupcr=0x1572a`): MCU по-прежнему в ROM, значит одного
 адреса старта мало — нужен ROM-patch (следующий шаг).
+
+## 33. M11: ROM-patch реализован и записан, но MCU его не подхватывает (12.11)
+
+### 33.1 Формат файла (без догадок)
+
+`struct wmt_rom_patch` — `common_main/core/include/wmt_core.h:427`:
+`ucDateTime[16] | ucPLat[4] | u2HwVer | u2SwVer | u4PatchAddr | u4PatchType | u4CRC[4]`
+= **48 байт**, тело идёт следом (`mtk_wcn_soc_rom_patch_dwn()`:
+`patchSize -= sizeof(struct wmt_rom_patch); pPatchBuf += sizeof(struct wmt_rom_patch);`).
+
+`soc3_0_ram_mcu_e1_hdr.bin` (165 344 Б) декодируется как
+
+```
+ucDateTime = "2205092132000000"   ucPLat = "ALPS"
+u2HwVer    = 0x108a               u2SwVer = 0x108a
+u4PatchAddr= 0xf0000000           u4PatchType = 0x04000000
+body       = 165 296 байт, первые слова 0000dbb0 00018830 000021a0 00002130
+```
+
+`u4PatchAddr = 0xf0000000` — то же адресное пространство MCU/EMI, что и у секций
+прошивки WLAN (`0xf0000000`, `0xf0055000`), которые `wlan_lib.c` индексирует
+через `& 0xfffff`; значит и здесь адрес — `EMI + 0`. Файлы
+`soc3_0_ram_mcu_{e1,1_1,1a_1}_hdr.bin` **байт в байт идентичны**
+(sha256 `1b8330fddfaac8d89449…`), т.е. eco-суффикс ничего не выбирает.
+
+Где вендор берёт адрес: **не из файла**, а из `pPatchinfo->addRess[]`, которую
+отдаёт userspace: `wmt_ctrl_get_rom_patch_info()` → `wmt_ctrl_ul_cmd(pDev,
+"srh_rom_patch")` (таймаут 6 с) — это запрос к демону `wmt_loader`. В нашем
+`WMT_SOC.cfg` секции `srh_rom_patch` нет (файл содержит только coex/gps/
+co_clock/bt_tssi), и `mt6771.c` этот шаг вообще не вызывал.
+
+### 33.2 Что сделано (патч 0009)
+
+`consys_dl_rom_patch()` в `mt6771.c`: `filp_open("/lib/firmware/soc3_0_ram_mcu_e1_hdr.bin")`
+→ `kernel_read` → разбор заголовка → `ioremap(gConEmiPhyBase + (u4PatchAddr & 0xfffff), body)`
+→ `osal_memcpy_toio` → печать. Вызов — из `polling_consys_chipid()` после
+успешного чтения chip id, ровно как в `mt6765.c:681`/`mt6761.c:682`.
+
+### 33.3 Результат на железе — патч записан, MCU не реагирует
+
+```
+[WMT-CONSYS-HW][I]consys_dl_rom_patch:rompatch: ip_ver=0x788 plat=ALPS hw=0x108a sw=0x108a
+                   addr=0xf0000000 off=0x0 type=0x4000000 total=165344 body=165296
+                   body head 0000dbb0 00018830 000021a0 00002130
+                   EMI 0xbfc00000 readback 0000dbb0 00018830 000021a0 00002130   <- записалось
+```
+
+но дальше:
+
+```
+cpupcr 0x18070160 = 0x00015730    (та же ROM-петля)
+WCIR   0x180f0000 = 0x1000f004    (WLAN_READY бит21 = 0)
+```
+
+Позже секция WLAN-прошивки законно перезаписывает `EMI+0` (`0xbfc00000 =
+bcaa6f3a …` = `WIFI_RAM_CODE_6759` @0xf1c8), т.е. к моменту старта WLAN патча в
+EMI уже нет.
+
+**Вывод:** порядок неверен. В `mt6765`/`mt6761` `consys_dl_rom_patch()`
+вызывается, когда MCU ещё не отдан в свободный запуск (или сразу после), а у нас
+`consys_hw_power_ctrl_spm()` к моменту `polling_consys_chipid()` уже снял
+`conn_ap_sw_rst_b`, MCU успел прочитать пустой EMI и уйти в ROM-петлю; запись
+патча после этого ничего не меняет.
+
+### 33.4 Следующий шаг
+
+Перенести запись ROM-patch **внутрь** `consys_hw_power_ctrl_spm()`, между
+`~CONSYS_SPM_PWR_ISO_S_BIT` (снятие изоляции) и `| CONSYS_SPM_PWR_RST_BIT`
+(снятие сброса), — тогда MCU прочитает патч при выходе из сброса. Альтернатива:
+после записи дёрнуть `mtk_wcn_consys_hw_rst()` (off/on), но это дороже.
