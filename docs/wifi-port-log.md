@@ -1814,21 +1814,27 @@ wlanProbe failed; initcall initWlan returned 0
 252: #define WCIR_CHIP_ID      BITS(0, 15)
 ```
 
-То есть `wlan_lib.c:616` (`HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Value)`) читает
-**`0x18070000`**, а не `0x38`. Число `0x38` в сообщении
+Окно MCR — это `of_iomap(of_node, 0)`, т.е. **`0x180f0000`**
+(`os/linux/hif/ahb_sdioLike/ahb.c:293`), а не `0x18070000` (то — MCU-окно
+CONNSYS, его читает WMT). Значит `HAL_MCR_RD(MCR_WCIR)` = чтение
+**`0x180f0000`**, READY — его **бит 21**. `0x38` в сообщении
 `Waiting for Ready bit timeout, Device to Host MailBox 0x38` — это значение
-**mailbox 0** (`nicGetMailbox` → `MCR_D2HRM0R 0x0078`), а не адрес. Вывод из
-§29.5 («poll не того регистра») отменяется: регистр верный.
+регистра `0x180f0004` (mailbox), а не адрес.
 
-Измерено (`mempeek --mmap 0x18070000`):
+Измерено в состоянии «прошивка скачана»:
 
 ```
-0x18070000 = 0x00008a00   bit21 (WLAN_READY) = 0
-0x18070004 = 0x00008a00
-0x18070008 = 0x00000788   <- chip id, который ждёт polling_consys_chipid()
+0x180f0000 = 0x1000f004   bit21 (0x200000) = 0   <- WLAN_READY не выставлен
+0x180f0004 = 0x00000038   <- ровно то «0x38» из лога
+0x180f0008 = 0x00010000
+0x180f000c = 0xa07f0000
+0x180f0078 = 0x00000000   D2HRM0R, пуст
+0x18070000 = 0x00008a00   MCU-окно (mcu_base+0), к READY отношения не имеет
+0x18070008 = 0x00000788   chip id, который ждёт polling_consys_chipid()
 ```
 
-Значит READY действительно не выставлен, а не «читаем не там».
+Итог: опрос идёт по верному регистру, READY (бит 21) действительно 0. Формулировка
+§29.5 («`WCIR 0x18070038`») была неверна и здесь исправлена.
 
 ### 30.2 MCU не исполняет загруженную прошивку
 
