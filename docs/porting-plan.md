@@ -63,19 +63,18 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
 - **Готово:** Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps, `glmark2` Score 452
   (всё в `/usr/local`, rootfs не тронут).
 
-## Фаза 4 — в работе: Weston на панели (10.11)
+## Фаза 4 — закрыта: Ubuntu 26.04 + KDE Plasma 6.6.4 (12.11)
 
-- Ubuntu-base arm64 rootfs (systemd), root на ext4 — **сделано**: p54, метка
-  `ubuntu` (Ubuntu 24.04.3).
-- Wayland: **Weston 13** с DRM/atomic-бэкендом работает на панели; EGL/GLES
-  через panfrost, `weston-simple-egl` 56.4 fps (kiosk-shell, `card1`).
-- **Сдвиг кадра:** исправлен патчем 0046 (vbp 240, vfp 8; vblank не изменён),
-  проверено на `boot_shift.img` 12.11.
-- **Тач:** HX83102E работает на `boot_touch6.img`; KWin сам поворачивает
-  портретные координаты, патч 0051 убрал `inverted-x`/`swapped-x-y`,
-  холодный init проходит. Осталась задержка выделения в приложениях.
-- **Осталось:** десктоп KDE Plasma/GNOME, DVFS GPU.
+- Rootfs: p54, Ubuntu 26.04 LTS (KDE Plasma 6.6.4, SDDM autologin root,
+  Konsole/Dolphin/Kate/Ark/Gwenview/Okular/KCalc/Spectacle/Plasma Keyboard,
+  Mesa 26.0.3), 8 ядер (`maxcpus=8`).
+- **Сдвиг кадра:** 0046 + **0052** — `vbp 284`, `vfp 8`, `vtotal 2476`,
+  refresh 58.93 Hz; проверено на `boot_touch8.img`.
+- **Тач:** HX83102E работает, native portrait; KWin сам поворачивает,
+  патч 0051 убрал `inverted-x`/`swapped-x-y`. Осталась задержка выделения
+  в приложениях (userspace).
 - **Готово:** рабочий стол на дисплее, ввод с тача.
+- **Осталось:** задержка выделения, DVFS GPU; Wi-Fi/BT — фаза 5.
 
 ## Фаза 5 — периферия
 
@@ -84,7 +83,7 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
   порт вендорского стека `wlan_drv_gen3` + `wmt_drv` (+ conninfra) и прошивок
   из `/vendor/firmware`; BT идёт через тот же WMT (HCI UART H4). Это отдельный
   крупный проект. USB-донгл требует host/OTG, которого сейчас нет.
-- Тач Himax (`i2c@11007000`, 0x48), evdev/libinput.
+- Тач Himax HX83102E — **сделан** (фаза 4, native portrait).
 - **Готово:** сеть (RNDIS или Wi-Fi/BT после порта) и ввод стабильны.
 
 ## Фаза 6 — прошивка/откат

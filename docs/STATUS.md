@@ -2019,3 +2019,25 @@ DTB `2b53c552…`; прошит и проверен на железе, `p29` rea
 Осталось: разобраться с задержкой выделения в приложениях (evdev даёт
 ~112 Гц, kernel не тормозит) и оформить чистовой driver-патч без reload/
 debug-чтений A8.
+
+### 12.11 (3): Ubuntu 26.04 + KDE Plasma 6.6.4, 8 ядер, финальный сдвиг (0052)
+
+- **Rootfs:** p54 перезаписан Ubuntu 26.04 LTS (debootstrap, затем chroot+qemu
+  desktop): KDE Plasma 6.6.4, SDDM с autologin root, Konsole, Dolphin, Kate,
+  Ark, Gwenview, Okular, KCalc, Spectacle, Plasma Keyboard, Mesa 26.0.3.
+  Старый 24.04 сохранён в `/home/l/t1100-rootfs2404-backup.tar.gz` (498 MB,
+  sha256 `29f440bd…`); 26.04 desktop tar — `/home/l/t1100-rootfs2604-desktop.tar.gz`
+  (1.2 GB, sha256 `b75a40c4…`).
+- **8 ядер:** в cmdline был последний `maxcpus=1`; `build/boot_touch7.img`
+  заменил его на `maxcpus=8` — `nproc=8`, online 0–7.
+- **Сдвиг панели:** после 0046 оставалась чёрная полоса ~2% слева; патч
+  **0052** увеличил `vbp` 240→284 (`vtotal` 2476, pixel clock не изменён,
+  refresh 58.93 Hz). Образ `build/boot_touch8.img` (sha256 `757f7e03…`,
+  md5 p29 `75aff081…`) прошит, сдвиг убран, пользователь подтвердил.
+- **Тач:** работает в KDE, native portrait (0051); остаётся задержка выделения
+  в приложениях — evdev отдаёт ~112 Гц, причина в userspace.
+- **Plasma Keyboard:** по запросу добавлен ряд цифр 1–0 в
+  `/usr/share/plasma/keyboard/layouts/fallback/main.qml` (и `en_US/main.qml`);
+  клавиатура проверена через `org.kde.kwin.VirtualKeyboard.forceActivate`,
+  ряд отображается и работает. Это настройка rootfs, не патч ядра.
+- **Дальше:** задержка выделения, DVFS GPU, Wi-Fi/BT (фаза 5).
