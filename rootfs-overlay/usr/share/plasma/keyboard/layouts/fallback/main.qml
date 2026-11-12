@@ -39,6 +39,11 @@ KeyboardLayout {
         Key { Layout.minimumHeight: 0; key: Qt.Key_8; text: "8"; alternativeKeys: "*8"; smallText: "*"; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_9; text: "9"; alternativeKeys: "(9"; smallText: "("; smallTextVisible: true }
         Key { Layout.minimumHeight: 0; key: Qt.Key_0; text: "0"; alternativeKeys: ")0"; smallText: ")"; smallTextVisible: true }
+        BackspaceKey {
+            Layout.minimumHeight: 0
+            weight: normalKeyWidth
+            Layout.fillWidth: false
+        }
     }
     KeyboardRow {
         Layout.fillHeight: true
@@ -247,10 +252,20 @@ KeyboardLayout {
             key: Qt.Key_M
             text: "m"
         }
-        BackspaceKey {
+        ShiftKey {
             Layout.minimumHeight: 0
-            weight: functionKeyWidth
+            weight: normalKeyWidth
             Layout.fillWidth: false
+        }
+        Key {
+            Layout.minimumHeight: 0
+            key: Qt.Key_Period
+            weight: normalKeyWidth
+            Layout.fillWidth: false
+            text: "."
+            alternativeKeys: ","
+            smallText: ","
+            smallTextVisible: true
         }
     }
     KeyboardRow {
@@ -264,16 +279,6 @@ KeyboardLayout {
             Layout.minimumHeight: 0
             weight: normalKeyWidth
             Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Comma
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-            text: ","
-            smallText: "\u2699"
-            smallTextVisible: keyboard.isFunctionPopupListAvailable()
-            highlighted: true
         }
         Key {
             Layout.minimumHeight: 0
@@ -306,25 +311,9 @@ KeyboardLayout {
         SpaceKey {
             Layout.minimumHeight: 0
         }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Period
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-            text: "."
-            alternativeKeys: "!.?"
-            smallText: "!?"
-            smallTextVisible: true
-            highlighted: true
-        }
         HideKeyboardKey {
             Layout.minimumHeight: 0
             weight: normalKeyWidth * 0.7
-            Layout.fillWidth: false
-        }
-        ShiftKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
             Layout.fillWidth: false
         }
         EnterKey {
