@@ -2514,3 +2514,22 @@ dmesg показывает корректный `mt6358_amic_enable(), mux, mic 
 
 **Инструменты:** `/usr/local/bin/{rawplay,ctlroute,ctlenum,ctlset}` (исходники —
 `tools/device/`), запись `pw-record --target <mic-node> --rate 48000 --channels 2`.
+
+### 12.11 (16): перенос ручных установок в образ rootfs
+
+Пакеты, поставленные на планшете вручную, зафиксированы, чтобы попадать в
+новую сборку rootfs:
+
+- `configs/rootfs-packages.txt` — по одному аргументу apt на строку
+  (клавиатура Plasma, kate/ark/gwenview/okular/kcalc/spectacle, language-pack-kde-ru,
+  qmmp, htop/btop/wget/gcc, systemd-timesyncd). Строка `local:ai.storyteller`
+  помечает четыре локальных пакета (cadcraft/gridcraft/photocraft/wordcraft,
+  ~364 МБ) — они в git не кладутся, берутся из `$LOCAL_DEB_DIR`.
+- `scripts/rootfs-extra-packages.sh` — ставит список в chroot собранного rootfs
+  (или на устройстве): `apt-get update`, затем `apt-get install -y
+  --no-install-recommends <строка>`; для `local:ai.storyteller` — `apt-get
+  install -y $LOCAL_DEB_DIR/*.deb` (по умолчанию `/root/Downloads/arm`).
+
+Также на планшете теперь есть интернет по USB (NAT на ноутбуке, `default via
+10.42.66.67`), поэтому apt работает и после перезагрузки достаточно вернуть
+маршрут (или прописать шлюз в NM-профиле).

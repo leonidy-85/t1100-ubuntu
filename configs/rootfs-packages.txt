@@ -1,0 +1,40 @@
+# Пакеты, установленные на планшете вручную поверх базового rootfs Ubuntu 26.04.
+# Используется scripts/rootfs-extra-packages.sh при сборке образа.
+#
+# Формат: одна строка = один аргумент apt-get install.
+# Строки с локальными файлами (./*.deb) требуют, чтобы .deb лежали рядом
+# (см. LOCAL_DEB_DIR в скрипте).
+
+# --- рабочий стол: экранная клавиатура и базовые KDE-приложения ---
+plasma-keyboard
+qt6-virtualkeyboard-plugin
+qml6-module-qtquick-virtualkeyboard
+kate
+ark
+gwenview
+okular
+kcalc
+kde-spectacle
+
+# --- локализация ---
+language-pack-kde-ru
+
+# --- мультимедиа ---
+qmmp
+
+# --- утилиты и отладка ---
+htop
+btop
+wget
+gcc
+
+# --- время ---
+systemd-timesyncd
+
+# --- приложения ai.storyteller (локальные .deb, ~364 МБ) ---
+# Ожидаются в $LOCAL_DEB_DIR (по умолчанию /root/Downloads/arm):
+#   cadcraft-0.20.1-linux-aarch64.deb
+#   gridcraft-0.19.1-linux-aarch64.deb
+#   photocraft-0.23.1-linux-aarch64.deb
+#   wordcraft-0.18.1-linux-aarch64.deb
+local:ai.storyteller
