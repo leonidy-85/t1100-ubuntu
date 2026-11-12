@@ -2670,3 +2670,37 @@ wmt_drv)` → `Exec format error`. Это наша заглушка `show_stack(
 (`/home/l/super_t1100.img`) и в нём ищется ext4-образ `vendor`; нужны
 `WMT_SOC.cfg` (119 Б, sha256 `ea673ab1…cf32`) и `WIFI_RAM_CODE_6759`
 (480 752 Б), плюс `mt6631_fm_v1_{patch,coeff}.bin` для FM.
+
+### 12.11 (15): Wi-Fi — CONSYS поднялся, прошивка на месте; остался запуск WLAN-функции
+
+**Что сработало:**
+- `wmtctl setid 0x6771` → `g_chip_type = SOC`; `wmtctl init`
+  (`COMBO_IOCTL_DO_MODULE_INIT`) вернул **успех**;
+- CONSYS-платформа **пропробиндилась**: `CONNSYS EMI from DT: phys 0xbfc00000
+  size 0x200000`, `Clearing Connsys EMI … 2097152 bytes`,
+  `COREDUMP EMI mapping OK`, `probe of 18070000.consys returned 0`,
+  `wmtd_thread starts`;
+- файрмварь найдена и установлена на планшет: `super` (`mmcblk0p49`, 6 ГБ)
+  оказался **бэкапом инсталлятора Aurora** (`root.img.gz` 1.2 ГБ + `home.img.gz`),
+  внутри `root.img` → `/vendor/firmware/{WMT_SOC.cfg (119 Б, sha256 ea673ab1…),
+  WIFI_RAM_CODE_6759 (480 752 Б), soc3_0_ram_*.bin, mt6631_fm_v1_*}` → скопированы
+  в `/lib/firmware` планшета (`tar --owner=0 --numeric-owner`);
+- `wlan_drv_gen3` грузится: `Create wireless device success`, `HifAhbPltmProbe`,
+  `wmt wlan cb register`, `initWlan … returned 0`; есть `phy0`/`phy1`.
+
+**Что осталось:** нет `wlan0` и не происходит WLAN power-on. В вендоре
+`wlanProbe()` вызывается как колбэк после `wmt func on (WIFI)`; у нас
+`/dev/wmtWifi` не создаётся (в gen3 он есть только в режиме
+`CONF_HIF_DEV_MISC=1`, а у нас платформенный драйвер `mt-wifi` с
+`of_match` по `wifi@180f0000`). Попытка `modprobe -r wlan_drv_gen3` → модуль
+завис в `refcnt -1` (как `wmt_drv` раньше) — лечится только ребутом; это
+известное слабое место вендорского кода при выгрузке.
+
+**Следующие шаги (в порядке):**
+1. Дать userspace-инструмент для nl80211: собрать статический `iw` (нужен
+   libnl) и `iw phy phy1 interface add wlan0 type managed` — это дёргает
+   `gl_cfg80211_add_iface` → `wlanNetCreate` → `register_netdev`, после чего
+   `ip link set wlan0 up` инициирует power-on и загрузку `WIFI_RAM_CODE_6759`;
+2. либо включить `CONF_HIF_DEV_MISC=1` (тогда появится `/dev/wmtWifi` и
+   power-on можно дёргать ioctl'ом) — но это меняет путь пробинга;
+3. после появления `wlan0`: `wpa_supplicant` + DHCP = DoD фазы 5.
