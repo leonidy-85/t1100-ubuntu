@@ -11,15 +11,19 @@
  *                                      on/off. Nothing on mainline needs it.
  *   update_driver_loaded_status()    -- Android sysfs "driver loaded" flag.
  *   wifi_reset_start/end()           -- Android wifi HAL reset handshake.
- *   connectivity_export_show_stack() -- MTK adapter wrapper around show_stack()
- *                                      (see connectivity_build_in_adapter.h).
+ *   connectivity_export_show_stack() -- MTK adapter wrapper around show_stack().
+ *                                      NOT stubbed here: it is defined and
+ *                                      exported once, in wmt_stubs.c
+ *                                      (wmt_drv.ko); a second export makes the
+ *                                      loader reject wlan_drv_gen3.ko
+ *                                      ("duplicate symbol" -> "Exec format
+ *                                      error"). See the note at the bottom.
  *
  * Based on MediaTek/Motorola GPL-2.0 sources (wlan-core-gen3 @ 249649d8).
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
 
 #include "gl_os.h"
 #include "gl_rst.h"
@@ -70,17 +74,16 @@ int wifi_reset_end(ENUM_RESET_STATUS_T status)
 	return 0;
 }
 
-/* --------------------------------------- MTK adapter show_stack wrapper ----- */
-void connectivity_export_show_stack(struct task_struct *tsk, unsigned long *sp)
-{
-	/* show_stack() is not exported to modules; dump the current stack (the
-	 * only caller is a watchdog path that wants to know "who is stuck"). */
-	if (tsk)
-		sched_show_task(tsk);
-	else
-		dump_stack();
-}
-EXPORT_SYMBOL(connectivity_export_show_stack);
+/* --------------------------------------- MTK adapter show_stack wrapper -----
+ * connectivity_export_show_stack() is NOT defined here on purpose: the module
+ * loader rejects a second module that exports a symbol another loaded module
+ * already owns ("exports duplicate symbol ... (owned by wmt_drv)" ->
+ * "could not insert 'wlan_drv_gen3': Exec format error"). The implementation
+ * lives in wmt_stubs.c (wmt_drv.ko), which is loaded first; wlan_drv_gen3.ko
+ * takes the symbol from there (connectivity_build_in_adapter.h declares it,
+ * and modpost resolves it through wmt's Module.symvers via
+ * KBUILD_EXTRA_SYMBOLS), so wlan_drv_gen3.ko records "depends=wmt_drv".
+ */
 
 /* No MODULE_LICENSE()/MODULE_DESCRIPTION() here on purpose: the module-level
  * ones live in the vendor files (wmt_dev.c / gl_init.c). modpost uses every
