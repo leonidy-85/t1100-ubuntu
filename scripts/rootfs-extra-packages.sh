@@ -8,6 +8,8 @@
 #
 # Для локальных .deb ai.storyteller (~364 МБ) их нужно положить в
 # $LOCAL_DEB_DIR (по умолчанию /root/Downloads/arm); в git они не входят.
+# На build-хосте копия лежит в /home/l/t1100-extra/debs — при сборке образа
+# вызывать: LOCAL_DEB_DIR=/home/l/t1100-extra/debs /extra-packages.sh
 # Без них скрипт предупредит и продолжит с остальными пакетами.
 set -e
 
