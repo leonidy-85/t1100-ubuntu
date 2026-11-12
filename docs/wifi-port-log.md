@@ -1463,3 +1463,106 @@ CONN реально поднялся.
    (`CLK_INFRA_CQ_DMA` включается только в `ahb_pdma.c` при DMA).
 3. Только после живого окна CONN имеет смысл `ip link set wlan0 up` (загрузка
    `WIFI_RAM_CODE_6759`) и `iw dev wlan0 scan`.
+
+## 27. M7: окно CONNSYS ожило — причина найдена, патч 0005; probe при живом домене вешает ядро (12.11)
+
+Рубеж M7 = «окно CONN отвечает». Диагноз **доказан** (сырые дампы —
+`refs/consys-regs-2026-11-12.md`), но `wlan0` не появился: при реально
+включённом домене вендорский probe вешает ядро.
+
+### 27.1 Инструмент: `mempeek` с `mmap` и записью
+
+`tools/mempeek/mempeek.c` переписан: `pread()` на MMIO даёт `EFAULT`, поэтому
+основной путь — `mmap(/dev/mem)`, добавлены `--write` и `--poke` (RMW).
+Сборка статически на build-хосте (`aarch64-linux-gnu-gcc -static`), на планшете
+`/usr/local/bin/mempeek`.
+
+### 27.2 Главная причина: power-on ничего не делал
+
+В вендорском `common_main/platform/include/mt6771.h:32`:
+
+```c
+#define CONSYS_PWR_ON_OFF_API_AVAILABLE	1
+```
+
+(в §26.4 было записано «0 для mt6771» — **это неверно**). Значит
+`consys_hw_power_ctrl()` — это ровно одна строка:
+
+```c
+iRet = clk_prepare_enable(clk_scp_conn_main);      /* + clk_disable_unprepare() */
+```
+
+`clk_scp_conn_main` берётся из вендорского clock provider'а
+`mediatek,scpsys` (`clocks = <&scpsys 2>`); в mainline его нет, наш патч 0002
+сделал lookup необязательным → указатель NULL, а `clk_enable(NULL)` в 6.12 —
+**успешный no-op**. Отсюда `CONSYS-HW-PWR-ON, finish(0)` при полностью мёртвом
+домене: SPM-последовательность (`0x1000632c`) не выполнялась вообще.
+
+Дамп до вмешательства: `0x1000632c = 0x112` (iso=1, clk_dis=1, sram_pd=1,
+pwr_on=0), `0x10006180 = 0x008fff4c` (ack=0) — то есть ни одного шага power-on
+не было.
+
+### 27.3 Вторая причина: даже «ручная» SPM-ветка вендора не сняла бы protect
+
+В той же функции под `#else` AXI-protect снимается так:
+
+```c
+CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET,
+                 CONSYS_REG_READ(...) & ~CONSYS_PROT_MASK);
+```
+
+при `CONSYS_TOPAXI_PROT_EN_OFFSET = 0x2a4`. Измерено: `0x100012a0` — это
+`PROT_EN` (обычный RW), а `0x100012a4` — его **write-1-to-clear** зеркало.
+Запись «read & ~mask» не снимает ничего (биты 13/14 остаются), окно читается
+нулями, а первая же запись в него **встаёт намертво** (проверено: `--write
+0x18070600` не вернулся за 60 с).
+
+Правильно — записать маску в `0x100012a4`; после этого:
+
+```
+0x100012a0 = 0x00600000          (protect снят)
+0x18070008 = 0x00000788          chip id CONNSYS — как ждёт polling_consys_chipid()
+0x18070600 = 0x001702a4          ROM deselect: запись проходит и читается обратно
+0x180f0004 = 0x00000043, 0x180f000c = 0xa07f0000    WFDMA отвечает
+0x1000632c = 0x0000010d, 0x10006180 = 0x408fff4e    (bit30 = conn_top2 ack)
+```
+
+Третья мелочь: `conn_top2_pwr_on_ack` (bit30) вендор читает из
+`0x1000632c`, а он приходит в `0x10006180`; плюс оба опроса — без таймаута
+(на полуописанном SoC это lock-up).
+
+### 27.4 Патч 0005 и прогон
+
+`patches/wifi/0005-common-consys-spm-power-on.patch` (`common`):
+
+- `consys_hw_power_ctrl()`: если клока `conn` нет — идём в новую
+  `consys_hw_power_ctrl_spm()` (вендорская SPM-последовательность с
+  таймаутами и правильным снятием protect);
+- `mt6771.h`: `CONSYS_TOPAXI_PROT_EN_OFFSET = 0x2a0`, новый
+  `CONSYS_TOPAXI_PROT_CLR_OFFSET = 0x2a4`.
+
+Собрано: `wmt_drv.ko` sha256 `de80dcce…b3817` (1 113 816 Б),
+`wlan_drv_gen3.ko` `2a6d8c5b…fed67` (2 896 256 Б), vermagic
+`6.12.114-g400cb6f-touch-rot`. На планшете модуль грузится, в логе появилось
+`[CCF]no "conn" clock in DT, power-on uses the SPM sequence`.
+
+**Инцидент.** `modprobe wlan_drv_gen3 t1100_probe=1` при живом домене CONN
+повесил ядро наглухо (нет ping, sshd, USB-gadget; авторебута нет — это не
+panic). Лечится Power 10 с.`/root/wifi-test.log` с последними строками остался
+на устройстве.
+
+### 27.5 Что дальше (порядок)
+
+1. После Power 10 с снять `/root/wifi-test.log` — там видно, на каком шаге
+   `wlanProbe` умер (последняя строка перед зависанием).
+2. Не запускать probe «вслепую». Мелиорация: параметр `t1100_probe_stage=N`
+   (или пошаговый `wmtctl`-ioctl), чтобы останавливаться перед подозрительным
+   шагом; ожидаемые подозреваемые по коду: первый доступ к WFDMA
+   (`0x180f0000`, клок `wifi-dma` — в DTS это mt8183-гейт `CLK_INFRA_CQ_DMA`,
+   соответствие MT6771 не проверено), AFE `0x180b6000`, EMI-MPU
+   `0x10212xxx`.
+3. Проверить `regulator_summary` (vcn33/vcn18) — при мёртвом окне снять не
+   успели.
+4. До живого HIF остаётся тот же вопрос, что и в §26: STP-транспорта нет,
+   поэтому `wlanProbe` зовём сами; но перед ним клок/гейт WFDMA должен быть
+   включён явно.
