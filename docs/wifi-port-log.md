@@ -1566,3 +1566,133 @@ panic). Лечится Power 10 с.`/root/wifi-test.log` с последними
 4. До живого HIF остаётся тот же вопрос, что и в §26: STP-транспорта нет,
    поэтому `wlanProbe` зовём сами; но перед ним клок/гейт WFDMA должен быть
    включён явно.
+
+## 28. M7 взят: окно CONNSYS отвечает, драйвер доходит до загрузки прошивки (12.11, продолжение §27)
+
+Лог прошлого прогона (§27.6) снят: `/root/wifi-test.log`. Он оказался **не**
+логом смерти — наоборот, в нём видно, что после патча 0005 стек доходит до
+конца инициализации:
+
+```
+[CCF]no "conn" clock in DT, power-on uses the SPM sequence
+consys_hw_power_ctrl_spm: CONN SPM power on: 0x10d/0x408fff4e/0x18600098
+polling_consys_chipid: retry(8) consys chipId(0x00000788)     <- окно живое
+update_consys_rom_desel: Update consys rom desel value(0x1702a4)
+nicpmSetDriverOwn: DRIVER OWN, status=1 count=25               <- HIF-хендшейк ОК
+nicInitializeAdapter: Chip ID[6771] Version[E1]
+kalFirmwareOpen: Open FW image /lib/firmware/WIFI_RAM_CODE_6759 success
+wlanAdapterStart: FW download end
+wlanAdapterStart: Waiting for Ready bit timeout, Device to Host MailBox 0x38
+glResetTrigger: Trigger chip reset ... wlan_lib.c line 633
+wlanPollingCpupcr: cpupcr:00015730                             <- MCU исполняет код
+initcall initWlan ... returned 0 after 1824232 usecs
+```
+
+То есть **M7 (окно CONN отвечает) закрыт**: chip id читается, DRIVER OWN
+проходит, прошивка скачивается, MCU считает (cpupcr меняется). Не хватает
+только `WLAN_READY` от прошивки.
+
+### 28.1 Почему умерло ядро: `glResetTrigger` на неинициализированном work
+
+`wlan_lib.c:633` на таймауте ready-бита делает
+`GL_RESET_TRIGGER(RST_FLAG_DO_CORE_DUMP | RST_FLAG_PREVENT_POWER_OFF)` →
+`glResetTrigger()` → `schedule_work(&wifi_rst.rst_trigger_work)` →
+`mtk_wifi_trigger_reset()` → `mtk_wcn_wmt_assert_timeout(...)` (core dump через
+WMT, которого в порте нет).
+
+Но `INIT_WORK(&wifi_rst.rst_trigger_work, mtk_wifi_trigger_reset)` делается в
+`glResetInit()`, а `initWlan()` вызывал его **после** probe. У вендора probe на
+init не бывает, поэтому порядок не мешал; у нас же `schedule_work()` получал
+**неинициализированный** work (нулевой `func`) → вызов NULL в kworker. Это и
+есть «смерть после `initWlan returned 0`».
+
+Патч **`patches/wifi/0006-wlan-probe-stage-and-no-reset.patch`**:
+
+- `glResetInit()` перенесён **до** probe (правильный порядок, вендорский путь не
+  меняется);
+- `t1100_no_reset=1` — не планировать whole-chip reset (нет ни STP, ни
+  coredump-бэкенда);
+- `t1100_probe_stage` — 1 = только питание, 2 = питание + `wlanProbe` (по
+  умолчанию), чтобы останавливать прогон перед отлаживаемым шагом.
+
+### 28.2 Прогон stage=1 (безопасный) — питание и клоки закрыты
+
+`modprobe wlan_drv_gen3 t1100_probe=1 t1100_probe_stage=1 t1100_no_reset=1`:
+
+```
+t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = 0
+t1100_wlan_probe: stage 1, stop after power on
+t1100_probe: t1100_wlan_probe() = 0            <- без wlanProbe, плата жива
+```
+
+Регистры в этом состоянии (`refs/consys-regs-2026-11-12.md` §7):
+
+```
+0x1000632c = 0x0000010d   0x10006180 = 0x408fff4e   0x100012a0 = 0x18600098
+0x18070008 = 0x00000788   0x18070038 = 0x00000000 (WCIR, ready-бита нет)
+0x18070078 = 0x000055aa   0x18070160 = 0x00001170 (cpupcr)
+0x180f0000 = 0x00000000   0x180f000c = 0xa07f0000
+```
+
+`regulator_summary` (вопрос питания из §26 закрыт):
+
+```
+vcn18   1 use  -> 18070000.consys-vcn18     1800mV
+vcn28   1 use  -> 18070000.consys-vcn28     2800mV
+vcn33   1 use  -> 18070000.consys-vcn33_bt  3500mV
+                 18070000.consys-vcn33_wifi  0mV   <- НЕ включён
+```
+
+То есть `vcn18`/`vcn28`/`vcn33_bt` включает сам consys-драйвер, а
+`vcn33_wifi` (rail TX PA) остаётся выключенным: `consys_hw_wifi_vcn33_ctrl()`
+в вендорском коде целиком под `#if 0`, поэтому `wifi_paldo_ctrl(1)` — no-op.
+Для приёма/скана rail не нужен, для передачи — понадобится (вопрос следующего
+рубежа, не блокер M7).
+
+`clk_summary` (вопрос клока WFDMA):
+
+```
+infra_cqdma        enable=0  prepare=0  156000000 Hz  deviceless
+infra_cqdma_fpc    enable=0
+```
+
+Гейт `CLK_INFRA_CQ_DMA` в mainline-драйвере mt8183 существует, но **никем не
+взят** (`deviceless`, enable=0) — `devm_clk_get(dev, "wifi-dma")` в
+`HifDmaInit()` до этого места не доходит (в логе нет `[CCF]HIF DMA clock = ...`),
+и при этом WFDMA (`0x180f000c = 0xa07f0000`) отвечает. Вывод: для доступа к
+окну WFDMA этот гейт не нужен, `clocks = <&infracfg CLK_INFRA_CQ_DMA>` в DTS
+оставлен как есть (он про CQ-DMA канал, а не про сам блок), правка DTS не
+потребовалась.
+
+### 28.3 Новый блокер: oops в `wlanNetCreate` (stage=2)
+
+Прогон `t1100_probe_stage=2 t1100_no_reset=1` (собран из 0005+0006):
+`wlan rc=139` (SIGSEGV), ядро **не зависло**, а упало в oops и затем
+перезагрузилось (журнал сохранился):
+
+```
+t1100_wlan_probe: paldo on + wlanProbe
+wlanNetCreate: net_device prDev(0x...) allocated
+Unable to handle kernel write to read-only memory at virtual address ffffff80d83cd008
+pc : netif_tx_stop_all_queues+0x2c/0x80
+lr : wlanProbe+0x138/0xeb0 [wlan_drv_gen3]
+```
+
+Это `gl_init.c:1791` (`netif_tx_stop_all_queues(prGlueInfo->prDevHandler)`) сразу
+после `alloc_netdev_mq(..., ether_setup, CFG_MAX_TXQ_NUM)`: запись уходит в
+read-only страницу, т.е. `dev->num_tx_queues`/`dev->_tx` — мусор. В прогоне на
+сборке 0005 этот же код проходил (лог §28 доходил до FW download), поэтому это
+похоже на latent-порчу памяти, чувствительную к раскладке, а не на логику.
+Следующий шаг — `slub_debug=U,F` (или печать `dev`, `num_tx_queues`, `_tx` в
+`wlanNetCreate`) и сверка `sizeof(GLUE_INFO_T)` с размером wiphy priv в
+`createWirelessDevice()`.
+
+### 28.4 Состояние и артефакты
+
+- модули на планшете: `wmt_drv.ko` `de80dcce…b3817`, `wlan_drv_gen3.ko`
+  `43817726…65992` (vermagic `6.12.114-g400cb6f-touch-rot`);
+- ядро и boot **не менялись** (DTS-правок не потребовалось);
+- безопасный прогон: `t1100_probe_stage=1` (питание без probe) — плата жива;
+- шаги прогона пишутся в `/root/probe-stage.log` (`sync` после каждой строки),
+  регистры — в `/root/probe-regs.txt`, oops'ы остаются в журнале
+  (`journalctl -k -b -1`).
