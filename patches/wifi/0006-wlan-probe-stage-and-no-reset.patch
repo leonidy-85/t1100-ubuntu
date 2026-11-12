@@ -1,0 +1,104 @@
+--- a/os/linux/gl_init.c
++++ b/os/linux/gl_init.c
+@@ -2729,6 +2729,26 @@
+ module_param(t1100_probe, int, 0444);
+ MODULE_PARM_DESC(t1100_probe, "T1100: power CONSYS on and call the wlan HIF probe at module init");
+ 
++/*
++ * T1100 (mainline): how far t1100_wlan_probe() may go. A run can then be
++ * stopped before the step under debug, without reflashing or reloading:
++ *   1 - power the chip on only (CONSYS stays powered for register pokes)
++ *   2 - power on and run the whole wlan HIF probe (default)
++ */
++int t1100_probe_stage = 2;
++module_param(t1100_probe_stage, int, 0444);
++MODULE_PARM_DESC(t1100_probe_stage, "T1100: 1 = power CONSYS on only, 2 = power on + wlan HIF probe");
++
++/*
++ * T1100 (mainline): the ready-bit timeout path calls GL_RESET_TRIGGER(), which
++ * schedules a whole-chip reset with a core-dump assert through WMT. This port
++ * has no STP transport and no core-dump backend, so the request cannot work;
++ * with t1100_no_reset=1 the chip is simply left as it is.
++ */
++int t1100_no_reset;
++module_param(t1100_no_reset, int, 0444);
++MODULE_PARM_DESC(t1100_no_reset, "T1100: do not schedule a whole-chip reset when the probe fails");
++
+ /* 1 Module Entry Point */
+ static int initWlan(void)
+ {
+@@ -2753,6 +2773,17 @@
+ 	glP2pCreateWirelessDevice(prGlueInfo);
+ 
+ 	ret = ((glRegisterBus(wlanProbe, wlanRemove) == WLAN_STATUS_SUCCESS) ? 0 : -EIO);
++	/*
++	 * T1100 (mainline): glResetInit() must run *before* the probe. The
++	 * vendor flow never probes at init time, so INIT_WORK() of the reset
++	 * workers used to happen after it; with t1100_probe=1 the failing
++	 * wlanAdapterStart() schedules rst_trigger_work through
++	 * GL_RESET_TRIGGER() while that work is still uninitialised, i.e. it
++	 * runs a NULL function pointer in a kworker (kernel dead, no reboot).
++	 */
++#if (CFG_CHIP_RESET_SUPPORT)
++	glResetInit();
++#endif
+ 	if (ret == 0 && t1100_probe) {
+ 		int probe_ret = t1100_wlan_probe();
+ 
+@@ -2763,10 +2794,6 @@
+ 		kalUninitIOBuffer();
+ 		return ret;
+ 	}
+-#if (CFG_CHIP_RESET_SUPPORT)
+-	glResetInit();
+-#endif
+-
+ 	kalFbNotifierReg(prGlueInfo);
+ #if defined(MT6631)
+ 	/* Set WIFI EMI protection to consys permitted on system boot up */
+--- a/os/linux/gl_rst.c
++++ b/os/linux/gl_rst.c
+@@ -221,10 +221,19 @@
+ 	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
+ }
+ 
++extern int t1100_no_reset;
++
+ BOOLEAN glResetTrigger(P_ADAPTER_T prAdapter, UINT_32 u4RstFlag, const PUINT_8 pucFile, UINT_32 u4Line)
+ {
+ 	BOOLEAN fgResult = TRUE;
+ 
++	if (t1100_no_reset) {
++		DBGLOG(INIT, ERROR,
++		       "T1100: whole-chip reset suppressed (t1100_no_reset=1), %s line %u\n",
++		       pucFile, u4Line);
++		return TRUE;
++	}
++
+ 	if (fgIsResetting || fgResetTriggered) {
+ 		DBGLOG(INIT, ERROR,
+ 		       "Skip trigger whole-chip reset in %s line %u, during resetting! Chip[%04X E%u]\n",
+--- a/os/linux/hif/ahb_sdioLike/ahb.c
++++ b/os/linux/hif/ahb_sdioLike/ahb.c
+@@ -1160,6 +1160,8 @@
+  */
+ extern int wmt_plat_pwr_ctrl(int state);	/* exported by wmt_drv (FUNC_ON = 0) */
+ 
++extern int t1100_probe_stage;
++
+ int t1100_wlan_probe(VOID)
+ {
+ 	int ret;
+@@ -1172,6 +1174,12 @@
+ 		return ret;
+ 	}
+ 
++	if (t1100_probe_stage < 2) {
++		DBGLOG(INIT, INFO, "t1100_wlan_probe: stage %d, stop after power on\n",
++		       t1100_probe_stage);
++		return 0;
++	}
++
+ 	DBGLOG(INIT, INFO, "t1100_wlan_probe: paldo on + wlanProbe\n");
+ 	mtk_wcn_consys_hw_wifi_paldo_ctrl(1);	/* power on WiFi TX PA 3.3V */
+ 	ret = (int) pfWlanProbe((PVOID) &HifAhbPDev->dev);
