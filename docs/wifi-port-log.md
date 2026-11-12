@@ -2627,3 +2627,93 @@ func2: 00=00100788 04=00000000 08=00000001 10=00000000 14=00000000 18=00000000 1
 (`include/nic_init_cmd_event.h:63-65`): он идёт по уже рабочему MCIF, но в
 наших исходниках есть только идентификаторы команд, без форматов структур,
 поэтому это будет угадывание.
+
+## 43. M22: MCIF-канал патча закрыт железом (ROM игнорирует CID 5/0x10); BTIF-исходники найдены (13.11)
+
+### 43.1 Формат `INIT_CMD_ID_PATCH_*` найден — в gen4m, не в gen3
+
+В наших gen3-исходниках есть только идентификаторы
+(`include/nic_init_cmd_event.h:63-65`), структур нет. Полная реализация — в
+публичном дереве `haretic/android-kernel-mt6765-rabbitr1`
+(`/home/l/wifi-src/rb/drivers/staging/mtk-connectivity/gen4m`):
+
+```c
+/* gen4m/include/nic_init_cmd_event.h:137-139 */
+INIT_CMD_ID_PATCH_START, INIT_CMD_ID_PATCH_WRITE, INIT_CMD_ID_PATCH_FINISH,
+...
+INIT_CMD_ID_PATCH_SEMAPHORE_CONTROL = 0x10,      /* :143 */
+
+/* gen4m/include/nic_init_cmd_event.h:227-230 */
+struct INIT_CMD_PATCH_FINISH { uint8_t ucCheckCrc; uint8_t aucReserved[3]; };
+/* :222-225 */
+struct INIT_CMD_PATCH_SEMA_CONTROL { uint8_t ucGetSemaphore; uint8_t aucReserved[3]; };
+/* enum ENUM_INIT_PATCH_STATUS: :165-170
+ *   NO_SEMA_NEED_PATCH / NO_NEED_TO_PATCH / GET_SEMA_NEED_PATCH / RELEASE_SEMA */
+
+/* gen4m/chips/common/fw_dl.c:1183-1204 — PATCH_START переиспользует DOWNLOAD_CONFIG */
+NIC_FILL_CMD_TX_HDR(..., INIT_CMD_ID_PATCH_START, ...);
+prInitCmdDownloadConfig->u4Address  = u4DestAddr;
+prInitCmdDownloadConfig->u4Length   = u4ImgSecSize;
+prInitCmdDownloadConfig->u4DataMode = u4DataMode;
+/* fw_dl.c:1258-1310 — тело секции уходит отдельным пакетом
+ * INIT_CMD_PDA_PACKET_TYPE_ID (0xA0), без заголовка;
+ * fw_dl.c:961-967 — PATCH_FINISH с ucCheckCrc = 0. */
+```
+
+То есть `PATCH_START` = `INIT_CMD_DOWNLOAD_CONFIG {u4Address,u4Length,u4DataMode}`
+с CID 5, тело — «сырыми» пакетами (как у нас `wlanImageSectionDownload()` по
+2048 Б), `PATCH_FINISH` — 4 байта. Всё это реализовано в патче
+`0009-wlan-query-status-and-two-start.patch` (`t1100_rom_patch_send()`):
+`PATCH_SEMAPHORE_CONTROL(0x10, get)` → `PATCH_START {addr, len, ACK}` →
+фрагменты по 2048 Б → `PATCH_FINISH {0}`.
+
+### 43.2 Результат на железе: ROM эти CID не обслуживает
+
+```
+t1100-patch: file=20220615154332a... plat=ALPS hw=0x008a sw=0x008a
+             addr=0x00098022 type=0x0fe3ffff body=229336
+[wlan]nicRxWaitResponse:(RX ERROR) Wait Response packet timeout!
+t1100-patch: PATCH_SEMAPHORE_CONTROL(get) -> result=3221225473 (0=ok)
+[wlan]nicRxWaitResponse:(RX ERROR) Wait Response packet timeout!
+t1100-patch: PATCH_START addr=0x00098022 len=229336 -> result=3221225473 (0=ok)
+t1100-patch: ROM rejected PATCH_START, stop
+```
+
+`3221225473` = `0xC0000001` = `WLAN_STATUS_FAILURE` (`include/typedef.h:69`), но
+важно другое: перед ним стоит `nicRxWaitResponse timeout` — **ROM не ответил
+вообще** (ни `INIT_EVENT_ID_CMD_RESULT`, ни `PATCH_SEMA_CTRL`, mailbox
+`0x02000020`). Для сравнения, `section-config`/`WIFI_START`/`QUERY_PENDING_ERROR`
+на том же канале отвечают `status=0`. Вывод: таблица init-команд ROM'а
+заканчивается на CID 4, патч-команд в ней нет — **дешёвый MCIF-путь закрыт
+железом**, а не форматом.
+
+Попутно уточнён заголовок `ROMv4_be_patch_1_0_hdr.bin` (229 384 Б,
+`83f7e9bc…`): дата `20220615154332a\n`, `ALPS`, hw=sw=`0x008a`,
+`u4PatchAddr=0x00098022`, `u4PatchType=0x0fe3ffff`, тело 229 336 Б (у
+`soc3_0_ram_mcu_e1_hdr.bin` в тех же полях было `0xf0000000`/`0x04000000` —
+файлы одного контейнера, но разных нагрузок).
+
+Прогон (stage=3): `WCIR=0x00100788`, READY=0, `cpupcr` в ROM
+(`0x1170…0x14f08`), `WIFI_START` с `0xa5800`/`0x020a1000` — `status=0`,
+`wlan0` нет, oops нет. `wlan_drv_gen3.ko` `c0566930…63ed5ec3` (2 914 528 Б).
+
+### 43.3 BTIF: исходники есть, объём оценён
+
+Публичный порт BTIF лежит рядом с gen4m:
+`/home/l/wifi-src/rb/drivers/staging/mtk-connectivity/btif/` —
+`mtk_btif.c` 3 671 строк, `mtk_btif_exp.c` 869, `btif_plat.c`/`btif_dma_plat.c`
++ `inc/`, `plat_inc/`, всего 7 457 строк (уже в mainline-стиле, `of_`-совместимый
+`btif_plat.c`). Для запуска нужно:
+1. собрать эти три объекта как модуль/встроенно и отдать `mtk_btif_open/tx/rx`,
+   которых ждёт `common_main/linux/stp_btif.c` (`:80` `mtk_wcn_btif_open()`);
+2. DT-узел `btif@1100c000` (`mediatek,btif`, reg `<0x1100c000 0x1000,
+   0x11000a80 0x80, 0x11000b00 0x80>`, IRQ 0x72/0x8b/0x8c, клоки
+   `btifc`/`apdmac` — сток `refs/stock-mt6771.dts:2198-2204`); регион свободен,
+   ни один наш драйвер его не занимает;
+3. в Kbuild `wmt_drv` добавить `common_main/linux/stp_btif.o` и выбрать
+   `hifType = WMT_HIF_BTIF` — после этого `wmt_core_tx/rx` пойдут по BTIF и
+   `mtk_wcn_soc_normal_patch_dwn()` заработает как у вендора;
+4. часы `btifc`/`apdmac` в нашем `clk-mt6771` (не проверено, есть ли ID) —
+   главный открытый риск вместе с неизвестным смещением регистров BTIF от
+   MT6771 (plat-слой берёт их из DT, но значения `apdma`-регистров в нашем
+   дереве не подтверждены).

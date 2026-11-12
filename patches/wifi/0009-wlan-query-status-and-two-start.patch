@@ -1,6 +1,15 @@
 --- a/common/wlan_lib.c	2026-11-12 23:58:33.995375290 +0300
-+++ b/common/wlan_lib.c	2026-11-13 01:11:09.564837123 +0300
-@@ -161,6 +161,50 @@
++++ b/common/wlan_lib.c	2026-11-13 01:26:29.476229363 +0300
+@@ -30,6 +30,8 @@
+  ********************************************************************************
+  */
+ #include "precomp.h"
++#include <linux/fs.h>
++#include <linux/file.h>
+ /*******************************************************************************
+  *                              C O N S T A N T S
+  ********************************************************************************
+@@ -161,6 +163,262 @@
  			r[i + 4], r[i + 5], r[i + 6], r[i + 7]);
  }
  
@@ -15,6 +24,218 @@
 + * never be confused again.
 + */
 +extern void t1100_stp_probe(void);
++
++int t1100_rom_patch_mcif = 1;
++module_param(t1100_rom_patch_mcif, int, 0444);
++MODULE_PARM_DESC(t1100_rom_patch_mcif,
++		 "T1100: send ROMv4_be_patch_1_0_hdr.bin to the MCU ROM over the MCIF init-cmd channel");
++
++/*
++ * T1100 M22: deliver a ROM patch to the MCU ROM through the *MCIF init-command*
++ * channel -- the same one that carries section-config / WIFI_START, which is
++ * known to work (status=0 from the MCU).
++ *
++ * The command format is not invented: the gen4m driver in the public
++ * haretic/android-kernel-mt6765-rabbitr1 tree (drivers/staging/mtk-connectivity/
++ * gen4m) uses exactly these CIDs and structures:
++ *
++ *   gen4m/include/nic_init_cmd_event.h:137-139
++ *     INIT_CMD_ID_PATCH_START, INIT_CMD_ID_PATCH_WRITE, INIT_CMD_ID_PATCH_FINISH
++ *   gen4m/include/nic_init_cmd_event.h:227-230
++ *     struct INIT_CMD_PATCH_FINISH { uint8_t ucCheckCrc; uint8_t aucReserved[3]; };
++ *   gen4m/chips/common/fw_dl.c:1183-1204  (PATCH_START reuses DOWNLOAD_CONFIG)
++ *     NIC_FILL_CMD_TX_HDR(..., INIT_CMD_ID_PATCH_START, ...);
++ *     prInitCmdDownloadConfig->u4Address  = u4DestAddr;
++ *     prInitCmdDownloadConfig->u4Length   = u4ImgSecSize;
++ *     prInitCmdDownloadConfig->u4DataMode = u4DataMode;
++ *   gen4m/chips/common/fw_dl.c:1258-1310  (payload = raw bytes, own packet)
++ *   gen4m/chips/common/fw_dl.c:961-967    (PATCH_FINISH, ucCheckCrc = 0)
++ *
++ * The file is a WMT rom-patch container (header `struct wmt_rom_patch`,
++ * common_main/core/include/wmt_core.h:427: date[16], plat[4], u16 hw, u16 sw,
++ * u32 patchAddr, u32 patchType, u32 crc[4]; body follows). For
++ * ROMv4_be_patch_1_0_hdr.bin: plat=ALPS, hw=sw=0x108a, patchAddr=0xf0000000,
++ * patchType=0x04000000, body=229336 bytes.
++ */
++struct t1100_patch_finish {
++	UINT_8 ucCheckCrc;
++	UINT_8 aucReserved[3];
++};
++
++#define T1100_ROM_PATCH_FILE "/lib/firmware/ROMv4_be_patch_1_0_hdr.bin"
++
++/* Generic single init command with a payload; returns the MCU CMD_RESULT. */
++static WLAN_STATUS t1100_init_cmd(P_ADAPTER_T prAdapter, UINT_8 ucCID,
++				  PVOID pvPayload, UINT_32 u4PayloadLen,
++				  const char *tag, UINT_32 *pu4Result)
++{
++	P_CMD_INFO_T prCmdInfo;
++	P_INIT_HIF_TX_HEADER_T prHdr;
++	UINT_8 ucTC = TC4_INDEX;
++	UINT_8 ucSeq;
++	WLAN_STATUS u4Status = WLAN_STATUS_SUCCESS;
++
++	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter,
++					  sizeof(INIT_HIF_TX_HEADER_T) + u4PayloadLen);
++	if (!prCmdInfo) {
++		pr_info("t1100-patch[%s]: alloc cmd failed\n", tag);
++		return WLAN_STATUS_FAILURE;
++	}
++	kalMemZero(prCmdInfo->pucInfoBuffer, sizeof(INIT_HIF_TX_HEADER_T) + u4PayloadLen);
++	prCmdInfo->u2InfoBufLen = (UINT_16)(sizeof(INIT_HIF_TX_HEADER_T) + u4PayloadLen);
++
++	ucSeq = nicIncreaseCmdSeqNum(prAdapter);
++	prHdr = (P_INIT_HIF_TX_HEADER_T)prCmdInfo->pucInfoBuffer;
++	prHdr->u2TxByteCount = prCmdInfo->u2InfoBufLen;
++	prHdr->u2PQ_ID = INIT_CMD_PQ_ID;
++	prHdr->rInitWifiCmd.ucCID = ucCID;
++	prHdr->rInitWifiCmd.ucPktTypeID = INIT_CMD_PACKET_TYPE_ID;
++	prHdr->rInitWifiCmd.ucSeqNum = ucSeq;
++	if (u4PayloadLen && pvPayload)
++		kalMemCopy(prHdr->rInitWifiCmd.aucBuffer, pvPayload, u4PayloadLen);
++
++	while (1) {
++		if (nicTxAcquireResource(prAdapter, ucTC,
++					 nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) ==
++		    WLAN_STATUS_RESOURCES) {
++			if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
++				pr_info("t1100-patch[%s]: no TX resource\n", tag);
++				u4Status = WLAN_STATUS_FAILURE;
++				goto out;
++			}
++			continue;
++		}
++		break;
++	}
++	if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++		pr_info("t1100-patch[%s]: nicTxInitCmd failed\n", tag);
++		u4Status = WLAN_STATUS_FAILURE;
++		goto out;
++	}
++	if (pu4Result)
++		*pu4Result = wlanImageSectionDownloadStatus(prAdapter, ucSeq);
++out:
++	cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
++	return u4Status;
++}
++
++static void t1100_rom_patch_send(P_ADAPTER_T prAdapter)
++{
++	struct file *fp;
++	loff_t pos = 0;
++	PUINT_8 buf = NULL;
++	UINT_32 total, body, off, addr, type, hw, sw;
++	UINT_32 u4Tmp = 0;
++	void *cfg = NULL;
++	ssize_t rd;
++	int i;
++
++	if (!t1100_rom_patch_mcif)
++		return;
++
++	fp = filp_open(T1100_ROM_PATCH_FILE, O_RDONLY, 0);
++	if (IS_ERR(fp)) {
++		pr_info("t1100-patch: cannot open %s (%ld)\n", T1100_ROM_PATCH_FILE,
++			(long)PTR_ERR(fp));
++		return;
++	}
++	total = i_size_read(file_inode(fp));
++	if (total <= 48 || total > SZ_1M) {
++		pr_info("t1100-patch: bad size %u\n", total);
++		filp_close(fp, NULL);
++		return;
++	}
++	buf = kalMemAlloc(total, PHY_MEM_TYPE);
++	if (!buf) {
++		pr_info("t1100-patch: no memory for %u\n", total);
++		filp_close(fp, NULL);
++		return;
++	}
++	rd = kernel_read(fp, buf, total, &pos);
++	filp_close(fp, NULL);
++	if (rd != (ssize_t)total) {
++		pr_info("t1100-patch: short read %zd/%u\n", rd, total);
++		goto out;
++	}
++
++	hw = buf[20] | (buf[21] << 8);
++	sw = buf[22] | (buf[23] << 8);
++	addr = buf[24] | (buf[25] << 8) | (buf[26] << 16) | ((UINT_32)buf[27] << 24);
++	type = buf[28] | (buf[29] << 8) | (buf[30] << 16) | ((UINT_32)buf[31] << 24);
++	body = total - 48;
++	pr_info("t1100-patch: file=%.24s plat=%c%c%c%c hw=0x%04x sw=0x%04x addr=0x%08x type=0x%08x body=%u\n",
++		(char *)buf, buf[16], buf[17], buf[18], buf[19], hw, sw, addr, type, body);
++
++	cfg = kalMemAlloc(sizeof(INIT_CMD_DOWNLOAD_CONFIG), PHY_MEM_TYPE);
++	if (!cfg)
++		goto out;
++	((P_INIT_CMD_DOWNLOAD_CONFIG)cfg)->u4Address = addr;
++	((P_INIT_CMD_DOWNLOAD_CONFIG)cfg)->u4Length = body;
++	((P_INIT_CMD_DOWNLOAD_CONFIG)cfg)->u4DataMode = DOWNLOAD_CONFIG_ACK_OPTION;
++
++	/*
++	 * 0. PATCH_SEMAPHORE_CONTROL (CID 0x10) -- the gen4m flow always asks the
++	 * chip first (fw_dl.c:wlanPatchIsDownloaded(), struct
++	 * INIT_CMD_PATCH_SEMA_CONTROL { ucGetSemaphore; aucReserved[3]; }).
++	 * The answer tells whether the patch family is implemented at all.
++	 */
++	{
++		UINT_8 sema[4] = { 1, 0, 0, 0 };	/* PATCH_GET_SEMA_CONTROL */
++
++		/*
++		 * The gen3 enum stops at INIT_CMD_ID_NUM (7) and has no semaphore
++		 * ID, but the gen4m header gives it a concrete value:
++		 * gen4m/include/nic_init_cmd_event.h:143
++		 *     INIT_CMD_ID_PATCH_SEMAPHORE_CONTROL = 0x10,
++		 * so the wire value is known even though this header lacks the name.
++		 */
++		t1100_init_cmd(prAdapter, (UINT_8)0x10, sema, sizeof(sema), "sema", &u4Tmp);
++		pr_info("t1100-patch: PATCH_SEMAPHORE_CONTROL(get) -> result=%u (0=ok)\n", u4Tmp);
++	}
++
++	/* 1. PATCH_START {addr, len, dataMode} */
++	if (t1100_init_cmd(prAdapter, INIT_CMD_ID_PATCH_START, cfg,
++			   sizeof(INIT_CMD_DOWNLOAD_CONFIG), "start", &u4Tmp)) {
++		pr_info("t1100-patch: PATCH_START send failed\n");
++		goto out;
++	}
++	pr_info("t1100-patch: PATCH_START addr=0x%08x len=%u -> result=%u (0=ok)\n",
++		addr, body, u4Tmp);
++	if (u4Tmp) {
++		pr_info("t1100-patch: ROM rejected PATCH_START, stop\n");
++		goto out;
++	}
++
++	/* 2. payload, in CMD_PKT_SIZE_FOR_IMAGE pieces */
++	for (off = 0, i = 0; off < body; off += CMD_PKT_SIZE_FOR_IMAGE, i++) {
++		UINT_32 len = body - off;
++
++		if (len > CMD_PKT_SIZE_FOR_IMAGE)
++			len = CMD_PKT_SIZE_FOR_IMAGE;
++		if (wlanImageSectionDownload(prAdapter, len, buf + 48 + off) !=
++		    WLAN_STATUS_SUCCESS) {
++			pr_info("t1100-patch: chunk %d (off 0x%x len %u) failed\n", i, off, len);
++			break;
++		}
++	}
++	pr_info("t1100-patch: payload sent, %u chunks of <=%u\n", i, CMD_PKT_SIZE_FOR_IMAGE);
++
++	/* 3. PATCH_FINISH {ucCheckCrc = 0} */
++	{
++		struct t1100_patch_finish fin;
++
++		fin.ucCheckCrc = 0;
++		fin.aucReserved[0] = fin.aucReserved[1] = fin.aucReserved[2] = 0;
++		t1100_init_cmd(prAdapter, INIT_CMD_ID_PATCH_FINISH, &fin, sizeof(fin),
++			       "finish", &u4Tmp);
++		pr_info("t1100-patch: PATCH_FINISH -> result=%u (0=ok)\n", u4Tmp);
++	}
++out:
++	if (cfg)
++		kalMemFree(cfg, PHY_MEM_TYPE, sizeof(INIT_CMD_DOWNLOAD_CONFIG));
++	if (buf)
++		kalMemFree(buf, PHY_MEM_TYPE, total);
++}
 +
 +static void t1100_hif_state(P_ADAPTER_T prAdapter, const char *tag)
 +{
@@ -51,7 +272,7 @@
  #if CFG_ENABLE_FW_DIVIDED_DOWNLOAD
  static WLAN_STATUS
  wlanImageDividDownloadByEntry(IN P_ADAPTER_T prAdapter,
-@@ -617,42 +661,81 @@
+@@ -617,42 +875,88 @@
  #endif
  		kalFirmwareImageUnmapping(prAdapter->prGlueInfo, NULL, prFwBuffer);
  		DBGLOG(INIT, INFO, "FW download end\n");
@@ -68,6 +289,13 @@
 +				(UINT_32)u4QueryStatus);
 +		}
 +		t1100_hif_state(prAdapter, "after-download");
++
++		/*
++		 * T1100 M22: hand the ROMv4 patch to the MCU ROM before asking it
++		 * to jump into the WLAN RAM code (see t1100_rom_patch_send()).
++		 */
++		t1100_rom_patch_send(prAdapter);
++		t1100_hif_state(prAdapter, "after-rompatch");
  #endif
  
  		/* 4. send Wi-Fi Start command */
@@ -159,7 +387,7 @@
  		}
  
  		if (u4Status == WLAN_STATUS_SUCCESS) {
-@@ -2922,7 +3005,13 @@
+@@ -2922,7 +3226,13 @@
  	}
  }
  
@@ -174,7 +402,7 @@
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm previously firmware download is done without error
-@@ -3042,7 +3131,8 @@
+@@ -3042,7 +3352,8 @@
  	return u4Status;
  }
  

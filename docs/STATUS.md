@@ -3135,3 +3135,23 @@ status=0, `WCIR=0x00100788` READY=0, `wlan0` нет, oops нет. Модули
   Вывод: DVFS работает; таймауты — отдельная shader-особенность panfrost,
   не частота/напряжение.
 - Откат: `/tmp/opencode/boot_a_before_gpudvfs.img` md5 `886c86cb…`.
+
+## 13.11 (2): Wi-Fi M22 — MCIF-канал патча закрыт железом; BTIF взят в работу
+
+Формат `INIT_CMD_ID_PATCH_*` найден (gen4m: `PATCH_START` = `DOWNLOAD_CONFIG`
+{u4Address,u4Length,u4DataMode} с CID 5, тело пакетами по 2 КБ, `PATCH_FINISH`
+{ucCheckCrc=0}, семафор CID 0x10) и реализован в
+`0009-wlan-query-status-and-two-start.patch` (`t1100_rom_patch_send()`).
+На железе ROM **не ответил ни на 0x10, ни на 5** (`nicRxWaitResponse timeout`,
+mailbox `0x02000020`), тогда как `section-config`/`WIFI_START`/`QUERY` отвечают
+`status=0` — в таблице init-команд ROM'а патч-команд нет, MCIF-путь закрыт не
+форматом, а железом.
+
+Заголовок `ROMv4_be_patch_1_0_hdr.bin` уточнён: `ALPS`, hw=sw=`0x008a`,
+`PatchAddr=0x00098022`, `PatchType=0x0fe3ffff`, тело 229 336 Б. Прогон stage=3:
+READY=0, `wlan0` нет, oops нет, `wlan_drv_gen3.ko` `c0566930…63ed5ec3`.
+
+Дальше — BTIF как транспорт WMT: публичные исходники найдены
+(`/home/l/wifi-src/rb/.../btif/`, 7 457 строк), нужен DT-узел `btif@1100c000`
+(сток `refs/stock-mt6771.dts:2198`), `stp_btif.o` в Kbuild и часы
+`btifc`/`apdmac`.
