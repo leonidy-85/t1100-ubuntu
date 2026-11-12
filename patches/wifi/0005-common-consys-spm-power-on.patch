@@ -1,0 +1,210 @@
+--- a/common_main/platform/mt6771.c
++++ b/common_main/platform/mt6771.c
+@@ -484,21 +484,43 @@
+ 	/*turn on SPM clock gating enable PWRON_CONFG_EN 0x10006000 32'h0b160001 */
+ }
+ 
+-static INT32 consys_hw_power_ctrl(MTK_WCN_BOOL enable)
++/*
++ * SPM-only CONN power domain walk.
++ *
++ * This is the variant the vendor code compiles for SoCs whose
++ * CONSYS_PWR_ON_OFF_API_AVAILABLE is 0, i.e. the one that programs SPM by hand
++ * instead of asking a clock provider to do it.  The T1100 port needs it because
++ * mainline 6.12 has neither a "conn" clock nor a scpsys clock provider for
++ * MT6771 (see consys_hw_power_ctrl() below).  It was verified on the tablet
++ * with mempeek + tools/device/consys-spm-seq.sh: after it runs, 0x18070008
++ * reads 0x0788 (CONNSYS chip id) instead of 0.
++ *
++ * Two things differ from the vendor copy, both measured on hardware:
++ *
++ *  - CONN AXI bus protection.  infracfg 0x100012a0 is PROT_EN (plain RW),
++ *    0x100012a4 is its write-1-to-clear mirror.  The vendor code writes
++ *    `read & ~CONSYS_PROT_MASK' to 0x100012a4, which clears nothing at all:
++ *    bits 13/14 stay set, 0x18070000/0x180f0000 keep reading 0 and the first
++ *    write into the window stalls the AXI transaction (the driver hung there
++ *    in the ROM-deselect step).  Clear by writing the mask to 0x100012a4, arm
++ *    protection again through 0x100012a0.
++ *  - The vendor handshake loops polled forever.  On a half described SoC that
++ *    is a kernel lock-up, so they are bounded here; the functional check stays
++ *    polling_consys_chipid() right after this.
++ *  - conn_top2_pwr_on_ack (bit 30) is in PWR_CONN_ACK (0x10006180), not in
++ *    CONN_TOP1_PWR_CTRL (0x1000632c) where the vendor looked for it: the dump
++ *    shows 0x10006180 going 0x008fff4c -> 0x408fff4e (bits 1 and 30) while
++ *    0x1000632c never gets bit 30.
++ */
++static INT32 consys_hw_power_ctrl_spm(MTK_WCN_BOOL enable)
+ {
+-#if CONSYS_PWR_ON_OFF_API_AVAILABLE
+-	INT32 iRet = -1;
+-#else
+-	INT32 value = 0;
+-#endif
++#define CONSYS_SPM_POLL_US	50
++#define CONSYS_SPM_POLL_MAX	2000	/* 50 us * 2000 = 100 ms */
++
++	UINT32 value;
++	INT32 i;
+ 
+ 	if (enable) {
+-#if CONSYS_PWR_ON_OFF_API_AVAILABLE
+-		iRet = clk_prepare_enable(clk_scp_conn_main);
+-		if (iRet)
+-			WMT_PLAT_PR_ERR("clk_prepare_enable(clk_scp_conn_main) fail(%d)\n", iRet);
+-		WMT_PLAT_PR_DBG("clk_prepare_enable(clk_scp_conn_main) ok\n");
+-#else
+ 		/*2.write conn_top1_pwr_on=1, power on conn_top1 0x1000632C [2]  1'b1 */
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
+@@ -508,17 +530,27 @@
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
+ 				 CONSYS_SPM_PWR_ON_S_BIT);
+ 		/*3.read conn_top1_pwr_on_ack =1, power on ack ready 0x10006180 [1] */
+-		value = CONSYS_PWR_ON_ACK_BIT &
+-			CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET);
+-		while (value == 0)
+-			value = CONSYS_PWR_ON_ACK_BIT &
+-				CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET);
++		for (i = 0; i < CONSYS_SPM_POLL_MAX; i++) {
++			value = CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET);
++			if (value & CONSYS_PWR_ON_ACK_BIT)
++				break;
++			udelay(CONSYS_SPM_POLL_US);
++		}
++		if (i == CONSYS_SPM_POLL_MAX) {
++			WMT_PLAT_PR_ERR("conn_top1_pwr_on_ack timeout(0x%x)\n", value);
++			return -1;
++		}
+ 		/*3.read conn_top1_pwr_on_ack_s =1, power on ack ready 0x10006184 [1] */
+-		value = CONSYS_PWR_ON_ACK_S_BIT &
+-			CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_S_OFFSET);
+-		while (value == 0)
+-			value = CONSYS_PWR_ON_ACK_S_BIT &
+-				CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_S_OFFSET);
++		for (i = 0; i < CONSYS_SPM_POLL_MAX; i++) {
++			value = CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_S_OFFSET);
++			if (value & CONSYS_PWR_ON_ACK_S_BIT)
++				break;
++			udelay(CONSYS_SPM_POLL_US);
++		}
++		if (i == CONSYS_SPM_POLL_MAX) {
++			WMT_PLAT_PR_ERR("conn_top1_pwr_on_ack_s timeout(0x%x)\n", value);
++			return -1;
++		}
+ 		/*6.write conn_clk_dis=0, enable connsys clock 0x1000632C [4]  1'b0 */
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
+@@ -533,29 +565,24 @@
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
+ 				 CONSYS_SPM_PWR_RST_BIT);
+-		/*disable AXI BUS protect 100012a4 [13][14] */
+-		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET,
+-				 CONSYS_REG_READ(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET) &
+-				 ~CONSYS_PROT_MASK);
++		/*disable AXI BUS protect: 0x100012a4 is write-1-to-clear */
++		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_CLR_OFFSET,
++				 CONSYS_PROT_MASK);
+ 		/*read conn_top2_pwr_on_ack =1, power on ack ready 0x10006180 [30] */
+-		value = CONSYS_TOP2_PWR_ON_ACK_BIT &
+-			CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET);
+-		while (value == 0)
+-			value = CONSYS_TOP2_PWR_ON_ACK_BIT &
+-				CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET);
+-		/*read conn_top2_pwr_on_ack_s =1, power on ack ready 0x10006180 [30] */
+-		value = CONSYS_TOP2_PWR_ON_ACK_S_BIT &
+-			CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET);
+-		while (value == 0)
+-			value = CONSYS_TOP2_PWR_ON_ACK_S_BIT &
+-				CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET);
+-#endif /* CONSYS_PWR_ON_OFF_API_AVAILABLE */
++		for (i = 0; i < CONSYS_SPM_POLL_MAX; i++) {
++			value = CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET);
++			if (value & CONSYS_TOP2_PWR_ON_ACK_BIT)
++				break;
++			udelay(CONSYS_SPM_POLL_US);
++		}
++		if (i == CONSYS_SPM_POLL_MAX)
++			WMT_PLAT_PR_ERR("conn_top2_pwr_on_ack timeout(0x%x)\n", value);
++		WMT_PLAT_PR_INFO("CONN SPM power on: 0x%x/0x%x/0x%x\n",
++				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET),
++				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET),
++				 CONSYS_REG_READ(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET));
+ 	} else {
+-#if CONSYS_PWR_ON_OFF_API_AVAILABLE
+-		clk_disable_unprepare(clk_scp_conn_main);
+-		WMT_PLAT_PR_DBG("clk_disable_unprepare(clk_scp_conn_main) calling\n");
+-#else
+-		/*disable AXI BUS protect 0x100012a0 [13][14] */
++		/*arm AXI BUS protect again: 0x100012a0 is a plain RW register */
+ 		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET,
+ 				CONSYS_REG_READ(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET) |
+ 				CONSYS_PROT_MASK);
+@@ -577,14 +604,45 @@
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
+ 				 ~(CONSYS_SPM_PWR_ON_BIT | CONSYS_SPM_PWR_ON_S_BIT));
+-#endif /* CONSYS_PWR_ON_OFF_API_AVAILABLE */
+ 	}
+ 
+-#if CONSYS_PWR_ON_OFF_API_AVAILABLE
+-	return iRet;
+-#else
+ 	return 0;
+-#endif
++#undef CONSYS_SPM_POLL_US
++#undef CONSYS_SPM_POLL_MAX
++}
++
++static INT32 consys_hw_power_ctrl(MTK_WCN_BOOL enable)
++{
++	INT32 iRet;
++
++	/*
++	 * Vendor path: with CONSYS_PWR_ON_OFF_API_AVAILABLE the CONN domain is
++	 * walked in hardware by enabling the "conn" clock of the vendor
++	 * "mediatek,scpsys" clock provider.
++	 *
++	 * Mainline 6.12 has no such provider (mt8183-scpsys exports no clocks and
++	 * there is no clk-mt6771), so devm_clk_get_optional() leaves
++	 * clk_scp_conn_main NULL - and clk_enable(NULL) is a *successful* no-op.
++	 * That is why the power-on reported "finish(0)" while nothing was powered:
++	 * every read of 0x18070000/0x180f0000 returned 0. Fall back to the SPM
++	 * sequence in that case.
++	 */
++	if (!clk_scp_conn_main)
++		return consys_hw_power_ctrl_spm(enable);
++
++	if (enable) {
++		iRet = clk_prepare_enable(clk_scp_conn_main);
++		if (iRet) {
++			WMT_PLAT_PR_ERR("clk_prepare_enable(clk_scp_conn_main) fail(%d)\n", iRet);
++			return iRet;
++		}
++		WMT_PLAT_PR_DBG("clk_prepare_enable(clk_scp_conn_main) ok\n");
++	} else {
++		clk_disable_unprepare(clk_scp_conn_main);
++		WMT_PLAT_PR_DBG("clk_disable_unprepare(clk_scp_conn_main) calling\n");
++	}
++
++	return 0;
+ }
+ 
+ static INT32 consys_ahb_clock_ctrl(MTK_WCN_BOOL enable)
+--- a/common_main/platform/include/mt6771.h
++++ b/common_main/platform/include/mt6771.h
+@@ -73,7 +73,13 @@
+ #define CONSYS_CPUPCR_OFFSET		0x00000160
+ 
+ /*AXI bus*/
+-#define CONSYS_TOPAXI_PROT_EN_OFFSET	0x2a4
++/*
++ * T1100 port: 0x100012a0 is PROT_EN (plain RW), 0x100012a4 is its
++ * write-1-to-clear mirror. The vendor used 0x2a4 for both directions, which
++ * clears nothing and leaves the CONN window dead (see consys_hw_power_ctrl_spm()).
++ */
++#define CONSYS_TOPAXI_PROT_EN_OFFSET	0x2a0
++#define CONSYS_TOPAXI_PROT_CLR_OFFSET	0x2a4
+ #define CONSYS_TOPAXI_PROT_STA1_OFFSET	0x228
+ 
+ /*SPM clock gating control register */
