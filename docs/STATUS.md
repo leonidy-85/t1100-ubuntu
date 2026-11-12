@@ -2556,3 +2556,31 @@ vendor-каталог), и в `/usr/lib/pam.d/` (чтобы правка пер�
 
 **Замечание по безопасности:** root-сессия и пароль из одного символа — это
 временное решение для порта; в образе стоит завести обычного пользователя.
+
+## 12.11 (11): смержены 6 новых коммитов (аудио/PAM/пакеты); оверлей разложен
+
+**Merge.** `fast-forward` на `79d7ded`: патч **0057** (machine-driver
+`mt6771-mt6358` + DTS-узел звука), `configs/t1100.fragment` (`SND_SOC_MT8183`,
+`MT6358`, `MT6771_MT6358`), `rootfs-overlay` (UCM-профиль, pipewire/wireplumber
+конфиги, автозапуск под root, mixer-скрипт, PAM `kde*` для root на экране
+блокировки, `powerdevilrc`), `configs/rootfs-packages.txt` +
+`scripts/rootfs-extra-packages.sh`, `tools/device/{ctlenum,ctlroute,rawplay}.c`.
+
+**Что разложено на планшет:** весь `rootfs-overlay` (UCM
+`/usr/share/alsa/ucm2/conf.d/mt6771-mt6358`, `/etc/pipewire`, `/etc/wireplumber`,
+user-юниты с `90-allow-root.conf`, `/etc/pam.d/kde*`), `ctlenum/ctlroute/rawplay`
+собраны статически под aarch64 (только заголовки `sound/asound.h`, без libasound)
+и положены в `/usr/local/bin`, юнит `t1100-audio-mixer.service` включён и активен.
+
+**Грабли (стоили доступа к плате).** Распаковка `rootfs-overlay` обычным
+`tar -C / -xf -` сохраняет uid/gid репозитория (1000) → `/etc`, `/usr`, `/root`
+становятся чужими, и **sshd с `StrictModes=yes` отказывает в ключе**
+(`bad ownership or modes for directory /root`); пароль не спасает — root-логин по
+паролю запрещён политикой. Лечение — из recovery `chown -R root:root` (сделано).
+Для будущих раскладок добавлен `tools/host/deploy-overlay.sh`
+(`tar --owner=0 --group=0 --numeric-owner` + `--no-same-owner` + chown).
+
+**Звук пока не работает** (`/proc/asound/cards` пуст): в загруженном ядре нет
+machine-driver из 0057 — сборка объединённого ядра (наш Wi-Fi DT + его аудио,
+2 варианта: с включёнными `consys`/`wifi` и «безопасный» только с аудио) идёт
+на build-хосте.
