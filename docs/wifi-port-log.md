@@ -1904,3 +1904,64 @@ common_main/core/wmt_ic_soc.c:3387: mtk_wcn_soc_rom_patch_dwn()
 3. Проверить гипотезу ROM-patch: перенести вызов
    `mtk_wcn_soc_rom_patch_dwn()`-подобного шага для MT6771 с файлом
    `soc3_0_ram_mcu_e1_hdr.bin`.
+
+## 31. M9: прошивка ложится правильно, MCU всё равно в ROM; гейт `wifi-dma` включён (12.11)
+
+### 31.1 Секции загрузки (печать из `wlanImageDividDownload`, патч 0007)
+
+```
+t1100-fw: entries=4 secsz=16
+t1100-fw: sec[0] dest=0x020a1000 len=28032  off=0x58      enc=1
+t1100-fw: sec[1] dest=0x000a5800 len=33776  off=0x6dd8    enc=1
+t1100-fw: sec[2] dest=0xf0000000 len=342320 off=0xf1c8    enc=0
+t1100-fw: sec[3] dest=0xf0055000 len=76512  off=0x62af8   enc=0
+```
+
+Разбор: секции 0 и 1 идут «directly to chip» (`wlanImageSectionConfig()` +
+`wlanImageSectionDownload()`, команды MCIF) — это DLM/ILM в памяти MCU, адрес
+`0x000a5800` из `hardware-values[1]` — как раз **dest секции 1**. Секции 2 и 3
+пишутся в EMI по `u4DestAddr & 0xfffff` → `EMI+0x0` и `EMI+0x55000`.
+
+### 31.2 Что реально в EMI — совпадает байт в байт
+
+```
+0xbfc00000 = bcaa6f3a c080e4ef 10000044 3100ff46   == файл @0x0f1c8  (sec[2])
+0xbfc55000 = 50206f4e 495f544b 5f4f464e 6f662054   == файл @0x62af8  (sec[3])
+```
+
+То есть **«легло туда»**: EMI-часть прошивки записана корректно. Значит виноват
+не путь записи в EMI, а старт MCU: `cpupcr` до и после загрузки одинаков
+(`0x15730`/`0x1572a` — петля в ROM), `WCIR 0x180f0000 = 0x1000f004`
+(`WLAN_READY` = бит21 = 0).
+
+Проверка «а не гейт ли это WFDMA/CQ-DMA»: `HifDmaInit()` берёт
+`devm_clk_get(dev, "wifi-dma")`, но `clk_prepare_enable()` ему никто не делал, и
+`clk_summary` показывал `infra_cqdma enable=0, deviceless`. В патче 0007 гейт
+включается сразу в `HifDmaInit()` — теперь:
+
+```
+t1100-clk: HIF DMA clock enabled, ret=0 rate=156000000
+clk_summary: infra_cqdma  enable=1 prepare=1  180f0000.wifi  wifi-dma
+```
+
+READY при этом не появился (0x1000f004, `cpupcr` тот же) — гейт был выключен, но
+блокером не был. Правку оставляем: гейт принадлежит блоку и должен быть включён.
+
+### 31.3 Стоковый лог: строк про ROM-patch там нет
+
+`zcat refs/device/dmesg-stock.txt.gz | grep -iE "soc3|ram_code|rom|patch|wmt_loader|6759"`
+даёт только общие строки (`security=…`, `migration/0`) — тот лог обрывается на
+`wmt_core_stp_init: no hif info!` (§1.2), до загрузки WLAN дело не доходит.
+Т.е. эталонной последовательности `soc3_0_ram_*` у нас нет; ориентир — код
+`mt6765.c`/`mt6761.c` (`consys_dl_rom_patch()` → `mtk_wcn_soc_rom_patch_dwn()`,
+данные через `osal_memcpy_toio` в EMI) и наличие файла
+`/lib/firmware/soc3_0_ram_mcu_e1_hdr.bin` (165 344 Б, eco E1).
+
+### 31.4 Следующий шаг
+
+MCU не переходит на `0xA5800` — значит либо «direct-to-chip» секции 0/1 не
+доходят до MCU (путь MCIF/H2D), либо нужен ROM-patch перед стартом. Дальше:
+проверить, что `wlanImageSectionConfig()/Download()` возвращают успех (сейчас их
+результат нигде не печатается) и что `wlanConfigWifiFunc()` (WIFI_START, его
+return в `wlan_lib.c:607` игнорируется) реально отправляет команду; затем —
+ROM-patch по образцу `mt6765.c`.

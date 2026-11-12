@@ -2890,3 +2890,25 @@ mainline нет, а `mt_emi_api.h` в compat — пустая заглушка (
 `wlan0` нет. Модули: `wlan_drv_gen3.ko` `4de6e1d9…92ed69`, `wmt_drv.ko`
 `de80dcce…b3817` (собраны против `merge2-out`). Прогоны — только с
 `t1100_no_reset=1 t1100_probe_stage=3`, плата жива.
+
+## 12.11 (23): Wi-Fi M9 — прошивка легла правильно, но MCU остаётся в ROM
+
+Печать таблицы секций (патч 0007, `wlanImageDividDownload`): 4 секции —
+`0x020a1000`/28032 и `0x000a5800`/33776 идут «direct to chip» (MCIF), а
+`0xf0000000`/342320 и `0xf0055000`/76512 — в EMI по `&0xfffff`, т.е. `EMI+0` и
+`EMI+0x55000`. Проверка `mempeek` совпала с файлом байт в байт
+(`0xbfc00000` = файл@0x0f1c8, `0xbfc55000` = файл@0x62af8) → **образ ложится
+правильно**, адрес `0xA5800` из DT — это dest секции 1 (память MCU), а не EMI.
+
+Остаётся старт: `cpupcr` до/после = `0x15730`/`0x1572a` (петля ROM),
+`WCIR 0x180f0000 = 0x1000f004` (READY бит21 = 0). Гейт `infra_cqdma`
+(=`wifi-dma`) раньше был выключен (`enable=0, deviceless`) — в патче 0007
+включается в `HifDmaInit()` (`ret=0 rate=156000000`, в `clk_summary` теперь
+`enable=1`, consumer `180f0000.wifi`), но READY это не изменило: гейт был
+выключен, однако не был блокером.
+
+Стокового baseline по `soc3_0_ram_*` нет: `dmesg-stock.txt.gz` обрывается на
+`wmt_core_stp_init: no hif info!`. Следующий шаг: проверить, что
+`wlanImageSectionConfig()/Download()` и `wlanConfigWifiFunc()` (WIFI_START, его
+return игнорируется) реально доходят до MCU, затем ROM-patch по образцу
+`mt6765.c` с `soc3_0_ram_mcu_e1_hdr.bin`. `wlan0` нет.
