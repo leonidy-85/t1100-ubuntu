@@ -3090,3 +3090,26 @@ EMI-путь — механизм mt6765/6761, в `mt6771.c` такого шаг
 сброса и `PWRON_CONFG_EN`), добавлен `0009-wlan-query-status-and-two-start.patch`.
 Модули `f862e768…c91c63` / `6465d6b1…bcbe7262`, oops нет, плата жива, `wlan0` нет.
 Подробности и следующий шаг (STP over MCR `WTDR1 0x34`) — `docs/wifi-port-log.md` §41.
+## 13.11 (1): GPU DVFS включён (0058/0059), high-OPP 698/743/800
+
+- `0058-soc-mediatek-regulator-coupler-support-MT6771-and-MT8788.patch`:
+  `mediatek_regulator_coupler_init()` разрешает `mediatek,mt6771`/`mt8788`.
+- `0059-arm64-dts-t1100-enable-GPU-DVFS-with-a-safe-OPP-subset.patch`:
+  возвращено наследование `gpu_opp_table`, удалены нижние OPP (остались
+  698/743/800 МГц), добавлены взаимные `regulator-coupled-with` и
+  `regulator-coupled-max-spread = <100000>` для VGPU/VSRAM, с VSRAM снят
+  `regulator-always-on` (иначе `scpsys` power-on получал `-EPERM` от coupler).
+- Образ `build/boot_gpudvfs10.img` sha256 `68c74d1e0a765c877244c1d6eb96278800829bdc9643332a1439ff38499f6bf0`,
+  p29 md5 `d4cdc9ef563139034dda6afff98a6dbb`; Image `82c62a46…`, DTB
+  `2dc07050…`; cmdline `maxcpus=8`.
+- Проверено: `/dev/dri` card0/card1/renderD128, panfrost probe OK,
+  `/sys/class/devfreq/13040000.gpu` `simple_ondemand`, доступны 698/743/800;
+  при 800 МГц VGPU 825 мВ / VSRAM 925 мВ (spread 100).
+- `glmark2-es2-wayland -d 5 -s 800x600`: Score **1409** (high-OPP), при
+  фиксированных 800 — **1583**. В сценах `conditionals`, `function`, `loop`,
+  `logic` — `panfrost ... gpu sched timeout` (js=0, status=0x8) и при 698,
+  и при 800; одиночные `shading`/`bump`/`buffer`/`build`/`texture`/`terrain`/
+  `effect2d`/`desktop`/`refract`/`pulsar`/`jellyfish` проходят без ошибок.
+  Вывод: DVFS работает; таймауты — отдельная shader-особенность panfrost,
+  не частота/напряжение.
+- Откат: `/tmp/opencode/boot_a_before_gpudvfs.img` md5 `886c86cb…`.

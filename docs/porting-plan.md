@@ -61,7 +61,10 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
   MFG power-domain (`spm`), `mfgcfg`-клок.
 - Mesa panfrost; проверка `glmark2`/`es2gears`.
 - **Готово:** Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps, `glmark2` Score 452
-  (всё в `/usr/local`, rootfs не тронут).
+  (всё в `/usr/local`, rootfs не тронут). **DVFS** включён 0058/0059:
+  coupler MT6771/MT8788, high-OPP 698/743/800, VGPU/VSRAM spread 100 мВ;
+  `glmark2` Score 1409/1583, но в отдельных shader-сценах — таймаут panfrost
+  (не DVFS).
 
 ## Фаза 4 — закрыта: Ubuntu 26.04 + KDE Plasma 6.6.4 (12.11)
 
@@ -74,7 +77,7 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
   патч 0051 убрал `inverted-x`/`swapped-x-y`. Осталась задержка выделения
   в приложениях (userspace).
 - **Готово:** рабочий стол на дисплее, ввод с тача.
-- **Осталось:** задержка выделения, DVFS GPU; Wi-Fi/BT — фаза 5.
+- **Осталось:** задержка выделения, panfrost shader timeout; Wi-Fi/BT — фаза 5.
 
 ## Фаза 5 — периферия
 
