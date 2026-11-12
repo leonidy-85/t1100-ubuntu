@@ -2584,3 +2584,37 @@ user-юниты с `90-allow-root.conf`, `/etc/pam.d/kde*`), `ctlenum/ctlroute/r
 machine-driver из 0057 — сборка объединённого ядра (наш Wi-Fi DT + его аудио,
 2 варианта: с включёнными `consys`/`wifi` и «безопасный» только с аудио) идёт
 на build-хосте.
+
+### 12.11 (12): объединённое ядро впервые загрузилось; звук работает; Wi-Fi — дубль символа
+
+**Смержены 6 коммитов** (`79d7ded`): патч **0057** (machine-driver `mt6771-mt6358`),
+SND-опции, `rootfs-overlay` (UCM/pipewire/PAM), список пакетов, `tools/device/*`.
+
+**Объединённое дерево** собрано из патчей (`/home/l/t1100-merge2-src`, локально
+воспроизводимо): 0001–0057, включая **0042** — именно её отсутствие ломало
+прошлые образы: в DTB оставался `ramoops@70000000`, пересекавшийся с LK-резервацией
+`ibc-reserved` → LK ассертил и уходил в цикл. Теперь DTB проходит валидатор
+**с** `LK_EXTRA_RES=0x70000000:0x10000:ibc-reserved`. В дерево влит и **его драйвер
+тача** (`sense_off`, reset 20 мс, без `reload_to_active`) — ровно тот, что работал
+на `boot_merged12`.
+
+**Прошито и загрузилось:**
+- `build/boot_merge_audio_v2.img` (`860ae2b2…`, Wi-Fi-узлы выключены) — первый
+  успешный запуск: `6.12.114-g400cb6f-touch-rot`, `nproc=8`, панель `connected`,
+  тач `Himax`, **звуковая карта `mt6771-mt6358`**, Plasma/SDDM активны;
+  **владелец слышал тестовый тон 440 Гц** (`pw-play`, sink `MT6358 speaker`),
+  `mt6358_codec_dai_hw_params(rate 48000)` в dmesg;
+- `build/boot_merge_audio_wifi_v2.img` (`d1e4a2e9…`, `consys`/`wifi` = okay) —
+  тоже загрузился, `consys@18070000`/`wifi@180f0000` в живом DT присутствуют и
+  включены, `consys-reserve-memory` есть; панель/тач/аудио целы.
+
+**Wi-Fi M3 — первый шаг пройден:** `wmt_drv.ko` грузится
+(`WMT-DETECT: driver(major 154) installed`). Следующий модуль падает:
+`wlan_drv_gen3: exports duplicate symbol connectivity_export_show_stack (owned by
+wmt_drv)` → `Exec format error`. Это наша заглушка `show_stack()` экспортируется
+из обоих модулей; фикс (экспорт только в `wmt_drv`, в `wlan` — внешняя ссылка)
+в работе.
+
+**Инфраструктурная грабля** (см. 12.11 (11)): раскладка `rootfs-overlay` обычным
+`tar` сохраняет uid 1000 и ломает `StrictModes` sshd; теперь есть
+`tools/host/deploy-overlay.sh`.
