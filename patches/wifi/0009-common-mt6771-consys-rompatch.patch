@@ -1,5 +1,5 @@
 --- a/common_main/platform/mt6771.c	2026-11-12 23:58:33.952006350 +0300
-+++ b/common_main/platform/mt6771.c	2026-11-13 00:00:07.341896936 +0300
++++ b/common_main/platform/mt6771.c	2026-11-13 01:14:34.596013278 +0300
 @@ -42,6 +42,10 @@
  #include "osal_typedef.h"
  #include "mt6771.h"
@@ -11,7 +11,20 @@
  
  #ifdef CONFIG_MTK_EMI
  #include <mt_emi_api.h>
-@@ -90,6 +94,7 @@
+@@ -87,9 +91,20 @@
+ static VOID consys_vcn28_hw_mode_ctrl(UINT32 enable);
+ static INT32 consys_hw_vcn28_ctrl(UINT32 enable);
+ static INT32 consys_hw_wifi_vcn33_ctrl(UINT32 enable);
++/*
++ * T1100: off by default. Kept only as a diagnostic: it writes the MCU RAM code
++ * (soc3_0_ram_mcu_e1_hdr.bin) to EMI+0, which is the mechanism mt6765/mt6761
++ * use (mtk_wcn_soc_rom_patch_dwn(), address from userspace), not MT6771's.
++ */
++int t1100_emi_rom_patch;
++module_param(t1100_emi_rom_patch, int, 0444);
++MODULE_PARM_DESC(t1100_emi_rom_patch,
++		 "T1100: write soc3_0_ram_mcu_e1_hdr.bin to EMI+0 before MCU reset (not the vendor ROMv4 path)");
++
  static INT32 consys_hw_bt_vcn33_ctrl(UINT32 enable);
  static UINT32 consys_soc_chipid_get(VOID);
  static INT32 consys_emi_mpu_set_region_protection(VOID);
@@ -19,7 +32,7 @@
  static UINT32 consys_emi_set_remapping_reg(VOID);
  static INT32 bt_wifi_share_v33_spin_lock_init(VOID);
  static INT32 consys_clk_get_from_dts(struct platform_device *pdev);
-@@ -482,6 +487,13 @@
+@@ -482,6 +497,13 @@
  static VOID consys_hw_spm_clk_gating_enable(VOID)
  {
  	/*turn on SPM clock gating enable PWRON_CONFG_EN 0x10006000 32'h0b160001 */
@@ -33,16 +46,21 @@
  }
  
  /*
-@@ -561,10 +573,25 @@
+@@ -561,10 +583,30 @@
  		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
  				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
  				 ~CONSYS_SPM_PWR_ISO_S_BIT);
 +		/*
-+		 * T1100: the ROM patch has to be in EMI *before* the MCU leaves
-+		 * reset, otherwise it boots with an empty patch area and parks in
-+		 * its ROM loop (cpupcr 0x1572a) - measured in §33.
++		 * T1100: writing the MCU RAM code to EMI+0 is NOT the vendor
++		 * mechanism for this chip and is off by default (module param
++		 * t1100_emi_rom_patch). For chip id 0x0788 the vendor downloads a
++		 * ROMv4 patch over the WMT/STP transport
++		 * (mtk_wcn_soc_normal_patch_dwn(), wmt_ic_soc.c:2753: icId 0x0788 ->
++		 * "ROMv4 patch RAM base"), and on MT6771 that transport is BTIF
++		 * (CONFIG_MTK_BTIF=y + btif@1100c000 in the stock tree), which
++		 * mainline does not have. See docs/wifi-port-log.md §41.4 and §42.
 +		 */
-+		if (consys_dl_rom_patch(0))
++		if (t1100_emi_rom_patch && consys_dl_rom_patch(0))
 +			WMT_PLAT_PR_WARN("rompatch: not written, MCU boots unpatched\n");
  		/*10.release SW reset of connsys, conn_ap_sw_rst_b=1  0x1000632C[0]   1'b1 */
  		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
@@ -59,7 +77,7 @@
  		/*disable AXI BUS protect: 0x100012a4 is write-1-to-clear */
  		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_CLR_OFFSET,
  				 CONSYS_PROT_MASK);
-@@ -650,6 +677,109 @@
+@@ -650,6 +692,109 @@
  	return 0;
  }
  
