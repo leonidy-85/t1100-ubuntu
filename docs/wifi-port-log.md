@@ -1158,3 +1158,82 @@ dmesg | grep -i wmt
 Откат: `build/boot_merged12.img` (sha256 `651ab53c…`, проверен на устройстве);
 модули M3/M4 взаимозаменяемы только вместе с ядром своей сборки — vermagic
 одинаков, но `cfg80211.ko` M3 и M4 собраны с разным конфигом.
+
+## 24. M5: `wlan_drv_gen3` не вставлялся — дублирующий экспорт из заглушки (13.11)
+
+Первая загрузка объединённого ядра (аудио + наш Wi-Fi DT, `consys@18070000` и
+`wifi@180f0000` = `okay`): `wmt_drv.ko` грузится, а следом
+
+```
+wlan_drv_gen3: exports duplicate symbol connectivity_export_show_stack (owned by wmt_drv)
+modprobe: ERROR: could not insert 'wlan_drv_gen3': Exec format error
+```
+
+**Причина.** `show_stack()` не экспортируется модулям, поэтому наша заглушка
+подменяет его своей обёрткой `connectivity_export_show_stack()` (её зовёт
+watchdog-путь через `KERNEL_show_stack` в
+`scripts/remote/wifi-compat/connectivity_build_in_adapter.h`). Обёртка лежала
+**в двух** stub-файлах — `wifi-stubs/wmt_stubs.c` и `wifi-stubs/wlan_stubs.c`, —
+и каждый модуль её определял и экспортировал:
+
+```
+wmt_drv.ko        : __ksymtab_connectivity_export_show_stack
+wlan_drv_gen3.ko  : __ksymtab_connectivity_export_show_stack   <- дубль
+```
+
+Ядро при `init_module()` отвергает второй модуль, который экспортирует символ
+уже загруженного: наружу это выглядит как `Exec format error` (а не как
+«duplicate symbol» в `dmesg`, из-за чего ошибка сначала читается как «битый
+ELF/чужой vermagic»). В вендорском дереве обёртка определена один раз — в
+built-in `drivers/misc/mediatek/connectivity/wmt_plat`, то есть «владелец» —
+WMT, а `wlan` только использует её. Так и сделано.
+
+**Правка.** В `scripts/remote/wifi-stubs/wlan_stubs.c` удалены определение и
+`EXPORT_SYMBOL(connectivity_export_show_stack)` (оставлен комментарий,
+почему нельзя); объявление берётся из `connectivity_build_in_adapter.h`.
+Экспорт остался ровно один — в `wmt_stubs.c`, т.е. в `wmt_drv.ko`, который
+грузится первым. `wlan` теперь имеет символ **undefined** и получает его от
+`wmt`: modpost резолвит его через `Module.symvers` common (`KBUILD_EXTRA_SYMBOLS`
+уже передавался в `scripts/remote/build-wifi-remote.sh`), поэтому в `.modinfo`
+появилось `depends=wmt_drv` — `modprobe wlan_drv_gen3` сам поднимет `wmt_drv`.
+
+**Сборка.** Оба модуля собраны одним прогоном (иначе `--prepare` сносит
+`work/` соседнего модуля и второй `.ko` не попадает в `build/wifi/`):
+
+```sh
+KERNEL_OUT=/home/l/t1100-merge2-out LOCALVERSION=-g400cb6f-touch-rot \
+  scripts/build-wifi-remote.sh common wlan
+# common rc=0 errors=0 undefined=0; wlan rc=0 errors=0 undefined=0
+# release after build: 6.12.114-g400cb6f-touch-rot (не изменился)
+```
+
+| модуль | размер, Б | sha256 |
+|---|---|---|
+| `wmt_drv.ko` | 1 111 976 | `8228dd5c28700eea37cf8c8bb4ad833ef30ce406b75c4b381879a9ef849bbead` (не изменился) |
+| `wlan_drv_gen3.ko` | 2 894 616 | `796b4a3283ea5969fd257a15ac57ddd74bc33058ddb105d91c42110440ba53d2` |
+
+**Проверки (офлайн).**
+
+- `nm --defined-only | grep __ksymtab_`: 80 экспортов у `wmt_drv`, 2 у
+  `wlan_drv_gen3` (`register_set_p2p_mode_handler`, `wlanGetFwIDVersion`),
+  пересечение множеств — **пусто**; `connectivity_export_show_stack`
+  экспортируется только `wmt_drv`;
+- `nm -u wlan_drv_gen3.ko`: символ в undefined, вместе с ещё 11 экспортами
+  `wmt_drv` (`mtk_wcn_wmt_*`, `gConEmiPhyBase`, `wmt_plat_read_cpupcr`, …);
+  замыкание по `Module.symvers` ядра + экспортам обоих модулей —
+  **неразрешённых 0**;
+- `vermagic` у всех шести `.ko` — `6.12.114-g400cb6f-touch-rot SMP preempt
+  mod_unload aarch64`;
+- `depmod`/`modprobe --show-depends` в изолированном root:
+  `modules.dep` → `wlan_drv_gen3.ko: wmt_drv.ko cfg80211.ko rfkill.ko`,
+  порядок загрузки `rfkill → cfg80211 → wmt_drv → wlan_drv_gen3`.
+
+**Деплой** (устройство уже с объединённым ядром; `wmt_drv` до этого грузили
+вручную, поэтому сначала выгрузить его — иначе `modprobe` подхватит старый
+экземпляр, а `depmod` обновит только файлы):
+
+```sh
+rmmod wmt_drv 2>/dev/null || true      # старый экземпляр держал бы дубль экспорта
+tools/host/wifi-deploy.sh --apply --load all
+dmesg | grep -iE "wmt|wlan|connectivity_export"
+```
