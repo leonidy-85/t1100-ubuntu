@@ -1,0 +1,10 @@
+[Unit]
+Description=Set MT6358 speaker route on the Fplus T1100
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/t1100-audio-mixer.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

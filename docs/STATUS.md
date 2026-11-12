@@ -2440,3 +2440,54 @@ speaker», маршруты выставляются сами при старт�
 и `setsid wireplumber`. `alsaucm`/`amixer`/`alsactl` в rootfs нет — UCM
 проверяется только через PipeWire. GPIO159 в `/sys/kernel/debug/gpio` не виден,
 но звук работает (усилитель, похоже, включён всегда/через другую линию — уточнить).
+
+### 12.11 (14): звук — автозапуск PipeWire и маршрут динамика на загрузке
+
+**Задача:** после перезагрузки звук должен работать сам, без ручных команд.
+
+**1. PipeWire под root.** Стоковые user-юниты содержат `ConditionUser=!root`,
+поэтому у нас они скипались (`pipewire.socket - skipped, unmet condition
+check ConditionUser=!root`). Добавлены drop-in'ы
+`/etc/systemd/user/{pipewire,pipewire-pulse}.{service,socket}.d/90-allow-root.conf`
+и `wireplumber.service.d/90-allow-root.conf` с
+
+```
+[Unit]
+ConditionUser=
+```
+
+плюс `loginctl enable-linger root` — менеджер пользователя поднимается на
+загрузке, `pipewire.socket`, `pipewire.service`, `wireplumber.service` active.
+
+**2. Sink без ACP.** WirePlumber 0.5 держит у карты профиль `off`
+(`api.acp.auto-profile=false`), а ACP на этой карте не отдаёт профилей, хотя
+UCM парсится (`snd_use_case_mgr_open("mt6771-mt6358") == 0` через
+ctypes/libasound). Поэтому выход создаётся напрямую в
+`/etc/pipewire/pipewire.conf.d/51-alsa-sink.conf`:
+
+```
+context.objects = [
+  { factory = adapter
+    args = { factory.name = api.alsa.pcm.sink
+             node.name = "alsa_speaker"
+             node.description = "MT6358 speaker"
+             media.class = "Audio/Sink"
+             api.alsa.path = "hw:0,0"
+             api.alsa.period-size = 1024
+             audio.position = [ FL FR ] } }
+]
+```
+
+**3. Микшер на загрузке.** `/usr/local/bin/t1100-audio-mixer.sh` ждёт
+`/dev/snd/controlC0` и выставляет `ADDA_DL_CH1 DL1`, `ADDA_DL_CH2 DL1`,
+`DAC In Mux = Normal Path`, `HPL/HPR Mux = LoudSPK Playback`;
+`t1100-audio-mixer.service` (oneshot, `RemainAfterExit=yes`,
+`WantedBy=multi-user.target`).
+
+**Проверено после перезагрузки:** `t1100-audio-mixer.service` active,
+`pipewire`/`wireplumber` active, в Sinks `32. MT6358 speaker` и
+`49. Built-in Audio Internal speaker`; `pw-play /tmp/tone.wav` — слышно тон.
+
+**Инструменты** (`rawplay`, `ctlroute`, `ctlenum`) лежат в `/usr/local/bin`;
+исходники — `tools/device/` (статическая сборка на build-хосте:
+`aarch64-linux-gnu-gcc -O2 -static <src>.c -o <bin>`).
