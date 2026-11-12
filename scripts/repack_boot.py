@@ -77,7 +77,8 @@ def read_ref(path):
     dtb_size = struct.unpack_from("<I", d, 0x670)[0]
     dtb_addr = struct.unpack_from("<I", d, 0x674)[0]
     return dict(
-        d=d, page=ps, kernel_addr=ka, ramdisk_addr=ra, second_addr=sa,
+        d=d, page=ps, ksize=ks, rsize=rs,
+        kernel_addr=ka, ramdisk_addr=ra, second_addr=sa,
         tags_addr=ta, cmdline=cmdline, name=name, dtb_addr=dtb_addr,
         img_size=len(d),
     )
@@ -142,7 +143,18 @@ def main():
 
     ref = read_ref(a.ref)
     kernel = open(a.kernel, "rb").read()
-    ramdisk = open(a.ramdisk, "rb").read() if a.ramdisk else b""
+    if a.ramdisk:
+        ramdisk = open(a.ramdisk, "rb").read()
+    else:
+        # Keep the reference ramdisk by default: an image without it does not
+        # boot on this device (the kernel panics before it can mount root).
+        ps, ks, rs = ref["page"], ref["ksize"], ref["rsize"]
+        off = ps + ((ks + ps - 1) // ps) * ps
+        ramdisk = ref["d"][off:off + rs] if rs else b""
+        if rs:
+            print(f"ramdisk: reusing the reference one ({rs} bytes)")
+        else:
+            print("ramdisk: reference has none, building without an initramfs")
     dtb = wrap_dtb(open(a.dtb, "rb").read())
     cmdline = a.cmdline.encode() if a.cmdline else ref["cmdline"]
 

@@ -1,0 +1,124 @@
+--- a/drivers/power/supply/mt6370-charger.c
++++ b/drivers/power/supply/mt6370-charger.c
+@@ -45,7 +45,9 @@
+ #define MT6370_OTG_OC_MASK		GENMASK(2, 0)
+ 
+ #define MT6370_MIVR_IBUS_TH_100_mA	100000
++#define MT6370_ADC_CHAN_VBAT		3
+ #define MT6370_ADC_CHAN_IBUS		5
++#define MT6370_ADC_CHAN_IBAT		6
+ #define MT6370_ADC_CHAN_MAX		9
+ 
+ enum mt6370_chg_reg_field {
+@@ -566,6 +568,90 @@
+ 	}
+ }
+ 
++/* Mainline has no MT6358 fuel gauge: expose the MT6370 ADC as a battery and
++ * estimate the state of charge from a 1S Li-ion OCV table (coarse, no coulomb
++ * counter, enough for UPower/PowerDevil).
++ */
++static const struct { int mv; int pct; } t1100_ocv[] = {
++	{ 4400, 100 }, { 4300, 95 }, { 4200, 88 }, { 4100, 80 },
++	{ 4000, 70 }, { 3900, 60 }, { 3800, 50 }, { 3750, 45 },
++	{ 3700, 40 }, { 3650, 33 }, { 3600, 25 }, { 3500, 15 },
++	{ 3400, 8 }, { 3300, 3 }, { 3000, 0 },
++};
++
++static int t1100_ocv_to_pct(int mv)
++{
++	int i;
++
++	if (mv >= t1100_ocv[0].mv)
++		return 100;
++	for (i = 1; i < ARRAY_SIZE(t1100_ocv); i++) {
++		if (mv >= t1100_ocv[i].mv) {
++			int hi = t1100_ocv[i - 1].mv, lo = t1100_ocv[i].mv;
++			int ph = t1100_ocv[i - 1].pct, pl = t1100_ocv[i].pct;
++
++			return pl + (mv - lo) * (ph - pl) / (hi - lo);
++		}
++	}
++	return 0;
++}
++
++static int mt6370_bat_get_property(struct power_supply *psy,
++				   enum power_supply_property psp,
++				   union power_supply_propval *val)
++{
++	struct mt6370_priv *priv = power_supply_get_drvdata(psy);
++	int ret, mv = 0, ma = 0;
++
++	switch (psp) {
++	case POWER_SUPPLY_PROP_PRESENT:
++		val->intval = 1;
++		return 0;
++	case POWER_SUPPLY_PROP_TECHNOLOGY:
++		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
++		return 0;
++	case POWER_SUPPLY_PROP_STATUS:
++		return mt6370_chg_get_status(priv, val);
++	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
++		ret = mt6370_chg_read_adc_chan(priv, MT6370_ADC_CHAN_VBAT, &mv);
++		if (ret)
++			return ret;
++		val->intval = mv * 1000;
++		return 0;
++	case POWER_SUPPLY_PROP_CURRENT_NOW:
++		ret = mt6370_chg_read_adc_chan(priv, MT6370_ADC_CHAN_IBAT, &ma);
++		if (ret)
++			return ret;
++		val->intval = ma * 1000;
++		return 0;
++	case POWER_SUPPLY_PROP_CAPACITY:
++		ret = mt6370_chg_read_adc_chan(priv, MT6370_ADC_CHAN_VBAT, &mv);
++		if (ret)
++			return ret;
++		val->intval = t1100_ocv_to_pct(mv);
++		return 0;
++	default:
++		return -EINVAL;
++	}
++}
++
++static enum power_supply_property mt6370_bat_properties[] = {
++	POWER_SUPPLY_PROP_PRESENT,
++	POWER_SUPPLY_PROP_TECHNOLOGY,
++	POWER_SUPPLY_PROP_STATUS,
++	POWER_SUPPLY_PROP_VOLTAGE_NOW,
++	POWER_SUPPLY_PROP_CURRENT_NOW,
++	POWER_SUPPLY_PROP_CAPACITY,
++};
++
++static const struct power_supply_desc mt6370_bat_psy_desc = {
++	.name = "mt6370-battery",
++	.type = POWER_SUPPLY_TYPE_BATTERY,
++	.properties = mt6370_bat_properties,
++	.num_properties = ARRAY_SIZE(mt6370_bat_properties),
++	.get_property = mt6370_bat_get_property,
++};
++
+ static int mt6370_chg_set_property(struct power_supply *psy,
+ 				   enum power_supply_property psp,
+ 				   const union power_supply_propval *val)
+@@ -755,10 +841,19 @@
+ 		.of_node = dev_of_node(priv->dev),
+ 	};
+ 
++	struct power_supply *bat;
++
+ 	priv->psy = devm_power_supply_register(priv->dev, &mt6370_chg_psy_desc,
+ 					       &cfg);
++	if (IS_ERR(priv->psy))
++		return PTR_ERR(priv->psy);
+ 
+-	return PTR_ERR_OR_ZERO(priv->psy);
++	cfg.of_node = NULL;
++	bat = devm_power_supply_register(priv->dev, &mt6370_bat_psy_desc, &cfg);
++	if (IS_ERR(bat))
++		dev_warn(priv->dev, "no battery supply: %ld\n", PTR_ERR(bat));
++
++	return 0;
+ }
+ 
+ static void mt6370_chg_destroy_attach_lock(void *data)
