@@ -3241,3 +3241,17 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
 - Следующее: не трогать dynamic role switch; при необходимости — корректный
   останов xHCI/host controller перед сменой роли, затем оформить 0060/0061
   в git и docs.
+
+## 13.11 (6): M25 — DEVAPC MT6771 распознан, но из Linux недоступен
+
+- Найдены базы/offset'ы DEVAPC MT6771 (сток DT: `devapc@10207000` + APC-инстанс
+  `0x1000e000`, SPI 145, клок `infracfg_ao 45`) и номер слейва **BTIF = 102**
+  (`PERISYS_BTIF` в `devapc_infra_devices[]`, 379 записей; APDMA=90, UART0=92).
+- На устройстве: `APC_CON` (0x10207f00) = 0 и **не пишется** (запись 0x80000000
+  отбрасывается), `VIO_MASK/STA/DBG` = 0 (слово BTIF `0x1020740c` бит6 = 0),
+  APC-таблицы `0x1000e000` и DMPU `0x10015000` = 0, гейт `DEVICE_APC`
+  (INFRA1[20]) **не включается**, хотя соседние биты регистра пишутся.
+- Права на MT6771 задаёт LK/ATF (`MTK_SIP_LK_DAPC 0x82000101`; вендорский
+  `start_devapc()` пишет только APC_CON и комментирует «SMC call is called to
+  set Device APC in LK»). Запись в BTIF после всех попыток по-прежнему
+  отбрасывается ⇒ открыть права из Linux нельзя. Факты — `refs/m25-devapc-mt6771.md`.
