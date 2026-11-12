@@ -1237,3 +1237,95 @@ rmmod wmt_drv 2>/dev/null || true      # старый экземпляр дер�
 tools/host/wifi-deploy.sh --apply --load all
 dmesg | grep -iE "wmt|wlan|connectivity_export"
 ```
+
+## 25. M5: `wiphy_register` WARN на `vendor_commands[].policy` (13.11)
+
+После снятия дубля экспорта `wlan_drv_gen3.ko` грузится и доходит до
+`initWlan`, но `wiphy_register()` падает:
+
+```
+WARNING: CPU: 2 PID: 926 at net/wireless/core.c:999 wiphy_register+0x524/0x860 [cfg80211]
+[wlan]createWirelessDevice:(INIT ERROR) wiphy_register error
+initcall initWlan ... returned -1
+```
+
+`net/wireless/core.c:999` — обязательная проверка 6.12:
+
+```c
+for (i = 0; i < rdev->wiphy.n_vendor_commands; i++) {
+	if (WARN_ON(!rdev->wiphy.vendor_commands[i].policy))
+		return -EINVAL;
+	if (WARN_ON(!rdev->wiphy.vendor_commands[i].doit &&
+		    !rdev->wiphy.vendor_commands[i].dumpit))
+		return -EINVAL;
+}
+```
+
+**Причина.** Вендорский `mtk_wlan_vendor_ops[]` (`os/linux/gl_init.c:310`)
+писался под 4.14, где `policy == NULL` допускался: у записей есть
+`.vendor_id/.subcmd/.flags/.doit`, но `.policy` нет. В 6.12 NULL‑policy —
+`WARN_ON` + `-EINVAL`, т.е. не грузится вообще ни один wiphy (AIS‑интерфейс).
+
+**Правка.** `patches/wifi/0002-wlan-port-6.12-vendor-commands.patch`
+(накладывается после `0001-wlan-port-6.12.patch`): регистрация vendor‑команд
+выключена в обоих wiphy — AIS (`os/linux/gl_init.c`, ~1655) и P2P
+(`os/linux/gl_p2p.c`, ~880):
+
+```c
+-	prWiphy->vendor_commands = mtk_wlan_vendor_ops;
+-	prWiphy->n_vendor_commands = sizeof(mtk_wlan_vendor_ops) / sizeof(struct wiphy_vendor_command);
++	prWiphy->vendor_commands = NULL;
++	prWiphy->n_vendor_commands = 0;
+```
+
+Почему не `.policy = VENDOR_CMD_RAW_DATA`: эти команды — MTK‑приватные
+`iwpriv`‑ioctl'ы (Google OUI subcmd'ы вендорского HAL); nl80211 и
+`wpa_supplicant` их не используют, а `VENDOR_CMD_RAW_DATA` открывал бы
+пользовательскому пространству произвольные атрибуты в драйвер. Если
+когда‑нибудь понадобится `iwpriv` — проще вернуть команды с явными
+`nla_policy` на каждую.
+
+**Сборка** (только `wlan`, ядро не трогалось; одним прогоном, чтобы не снести
+`work/common`, см. §24):
+
+```sh
+KERNEL_OUT=/home/l/t1100-merge2-out LOCALVERSION=-g400cb6f-touch-rot \
+  scripts/build-wifi-remote.sh common wlan
+# -- apply 0002-wlan-port-6.12-vendor-commands.patch
+# common rc=0 undefined=0; wlan rc=0 undefined=0
+```
+
+| модуль | размер, Б | sha256 |
+|---|---|---|
+| `wlan_drv_gen3.ko` | 2 893 304 | `20e64fc06f9260fac0aec6b60390459d8c2e2961d73a65e91cda288e89dc0c93` |
+| `wmt_drv.ko` | 1 111 976 | `8228dd5c28700eea37cf8c8bb4ad833ef30ce406b75c4b381879a9ef849bbead` (не менялся) |
+
+**Офлайн‑проверки.**
+
+- `static const` массивы `mtk_wlan_vendor_ops` / `mtk_p2p_vendor_ops` после
+  правки не используются, и компилятор их выбросил: в `nm` их нет вовсе
+  (остался только `mtk_wlan_vendor_events`), `readelf -rW` — **0** релокаций
+  на них. То есть в бинарнике больше нет ни массива, ни присваивания
+  `vendor_commands`; присваивания NULL/0 в `kzalloc`‑нутую структуру компилятор
+  тоже схлопнул;
+- экспорты: 80 у `wmt_drv`, 2 у `wlan_drv_gen3`, пересечений нет;
+- `nm -u`: неразрешённых 0 (замыкание по `Module.symvers` ядра + экспортам
+  модулей), `depends=cfg80211,wmt_drv`, vermagic `6.12.114-g400cb6f-touch-rot`.
+
+**Что ещё может выстрелить в `wiphy_register` (порядок проверок в 6.12).**
+До строки 999 уже пройдены (и на устройстве прошли): wowlan
+`WIPHY_WOWLAN_GTK_REKEY_FAILURE`/`!flags && !n_patterns && !tcp` (у MTK есть
+`flags = DISCONNECT|ANY`), TDLS_CHANNEL_SWITCH, NAN, WDS, pmsr, regulatory,
+coalesce, `ap_sme_capa`, `addresses`, и главное — `have_band` (bands[2/5GHz]
+заполнены). После цикла vendor‑команд остаются только
+`wowlan->pattern_min_len/max_len` (при `n_patterns == 0` не проверяется),
+`max_num_akm_suites` (0 → дефолт) и `device_add(&wiphy->dev)` — то есть
+`wiphy_register` должен пройти.
+
+Быстрая проверка на устройстве:
+
+```sh
+dmesg | grep -iE "wiphy|wlan0|initWlan|WARNING" | tail -30
+iw phy                      # должен появиться phy0, без WARN в dmesg
+ip -br link | grep wlan0    # интерфейс создаётся при ifconfig up/iw dev
+```
