@@ -37,11 +37,11 @@ def shell(timeout=60, quiet=False):
         c.logfile_read = sys.stdout
     c.expect('desired action', timeout=20)
     c.sendline('3')
-    c.expect(r'\? \[Y/n\]', timeout=20)
+    c.expect(r'\?\s*\[[yY]/[nN]\]', timeout=20)
     c.send('y')
     time.sleep(0.3)
     c.sendline('')
-    c.expect(r'/ # ', timeout=40)
+    c.expect(r'/[ ]*# ?', timeout=40)
     return c
 
 
