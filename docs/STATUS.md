@@ -2618,3 +2618,25 @@ wmt_drv)` → `Exec format error`. Это наша заглушка `show_stack(
 **Инфраструктурная грабля** (см. 12.11 (11)): раскладка `rootfs-overlay` обычным
 `tar` сохраняет uid 1000 и ломает `StrictModes` sshd; теперь есть
 `tools/host/deploy-overlay.sh`.
+
+### 12.11 (13): Wi-Fi M3 — дубль символа устранён, дальше `vendor_commands.policy`
+
+1. **Дубль `connectivity_export_show_stack`** (наш стаб `show_stack()` был
+   определён и экспортирован и в `wmt_drv`, и в `wlan_drv_gen3`):
+   исправлено — экспорт остаётся только в `wmt_drv`, в `wlan` символ
+   undefined и резолвится через `Module.symvers` (`patches/wifi`, коммит
+   `c6ff83c`). Новый `wlan_drv_gen3.ko`: `796b4a32…`, 2 894 616 Б.
+2. **Новый WARN в cfg80211:** `wiphy_register+0x524` →
+   `net/wireless/core.c:999` = `WARN_ON(!rdev->wiphy.vendor_commands[i].policy)`.
+   Вендорский `mtk_wlan_vendor_ops` (`gl_init.c`) не задаёт `.policy` — в 4.14
+   `NULL` допускался, в 6.12 обязателен (для «raw data» есть сентинел
+   `VENDOR_CMD_RAW_DATA = (void *)(long)(-ENODATA)`). Итог:
+   `createWirelessDevice:(INIT ERROR) wiphy_register error`, init возвращает -1
+   и модуль не вставляется. Фикс (vendor-команды отключаем на первом рубеже,
+   они нужны только MTK-`iwpriv`) — в работе.
+
+**Замечание по инструменту:** `wifi-deploy.sh --apply --load all` в одном
+прогоне не положил новый `wlan_drv_gen3.ko` (на устройстве остался старый
+`be1df2ac…`); пришлось копировать `scp` вручную. При следующем деплое смотрим
+вывод `apply` целиком (scp идёт с `-q`, ошибки не видны) — возможно, стоит
+добавить проверку sha256 после копирования.
