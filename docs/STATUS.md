@@ -3594,3 +3594,16 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
   (READY=0) → `wlanProbe -5`; `wlan0` нет. Следующий шаг — последний фрагмент
   патча (229 ack, 230-й молчит) и «patch info» из `wmt_launcher`
   (`refs/m32-best-effort-reset.md`, §54).
+
+## 13.11 (20): M33 — последний фрагмент уходит целиком (347/347), patch info в ядре не используется
+
+- TX-трассировка: последний фрагмент `stp->btif len=347 written=347`
+  (4 STP + 5 WMT + 336 тело + 2 CRC) ⇒ обрезки нет, ROM реально игнорирует
+  230-й фрагмент; `reset ack: no`.
+- `struct wmt_rom_patch` разобран: ядро берёт только 4 байта `u4PatchAddr`
+  (`WMT_PATCH_P_ADDRESS_CMD[12..15]`), `u4PatchType` не используется нигде; наш
+  загрузчик передаёт то же, что вендор ⇒ гипотеза «patch info» закрыта.
+- `cpupcr` в ROM-диапазоне (нормально и для пропатченного ROM); стек (stage=3)
+  доходит до `nicpmSetDriverOwn` (`DRIVER OWN status=0 count=513`) и падает на
+  READY=0; `wlan0` нет. Следующий шаг — прочитать память по `0x98022` через
+  WMT `REG_READ` и сравнить с телом файла (`refs/m33-last-fragment-and-patchinfo.md`).
