@@ -11,36 +11,53 @@ RNDIS stays available, and wire the MT6370 OTG regulator as vbus-supply.
 Local provenance: tested on FPlus T1100 with the adomerle T-PHY software
 role switch; host mode enumerates a USB flash drive, dynamic host->device
 switching remains unstable and is not used.
+
+Rebased on the local 0001-0064 series: the sent version carried a zeroed
+`index 000000000000..000000000000` line, which makes GNU patch treat the hunk
+set as a file creation, and context taken from the mt6771-next board DTS
+(pmic@34 nesting, the old USB section comment). Only the context changed; the
+added regulator node, role-switch properties and graph links are unchanged.
 ---
  arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts | 39 +++++++++++++++++----
- 1 file changed, 29 insertions(+), 10 deletions(-)
+ 1 file changed, 31 insertions(+), 8 deletions(-)
 
 diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
-index 000000000000..000000000000 100644
 --- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
 +++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
-@@ -375,6 +375,13 @@
+@@ -371,12 +371,20 @@
+ 				      <&mt6370_adc MT6370_CHAN_VBUSDIV2>,
+ 				      <&mt6370_adc MT6370_CHAN_VSYS>,
+ 				      <&mt6370_adc MT6370_CHAN_VBAT>,
+ 				      <&mt6370_adc MT6370_CHAN_TS_BAT>,
  				      <&mt6370_adc MT6370_CHAN_IBUS>,
  				      <&mt6370_adc MT6370_CHAN_IBAT>;
- 
-+			mt6370_otg_vbus: usb-otg-vbus-regulator {
-+				regulator-name = "mt6370-usb-otg-vbus";
-+				regulator-min-microvolt = <4350000>;
-+				regulator-max-microvolt = <5800000>;
-+				regulator-min-microamp = <500000>;
-+				regulator-max-microamp = <3000000>;
-+			};
++		};
++
++		mt6370_otg_vbus: usb-otg-vbus-regulator {
++			regulator-name = "mt6370-usb-otg-vbus";
++			regulator-min-microvolt = <4350000>;
++			regulator-max-microvolt = <5800000>;
++			regulator-min-microamp = <500000>;
++			regulator-max-microamp = <3000000>;
  		};
  
  		/*
-@@ -689,18 +696,28 @@
+ 		 * Type-C port controller, sink only.
+ 		 *
+ 		 * The alert pad is GPIO41 (stock DT: mt6370_pd_eint,
+@@ -685,36 +693,51 @@
+ 			pinmux = <PINMUX_GPIO29__FUNC_MSDC1_CLK>;
+ 		};
+ 	};
  };
  
  /*
 - * USB: the port is USB 2.0 only on this board (no SuperSpeed pairs), and the
 - * data role is fixed to peripheral so that the kernel exposes a UDC and the
 - * userspace can bring up an RNDIS/CDC-Ether gadget - the only interactive
-- * channel we have until a rootfs boots on its own.
+- * channel we have until a rootfs boots on its own. Host mode needs the
+- * MT6370 TCPC and role switching in phy-mtk-tphy
+- * (refs/mt6771-next/patches/96fe48bed8), neither of which is in 6.12.
 + * USB: the port is USB 2.0 only on this board (no SuperSpeed pairs).
 + * Keep peripheral as the default role so the RNDIS/CDC-Ether gadget stays
 + * available; software role switching in the T-PHY allows switching to host
@@ -67,12 +84,15 @@ index 000000000000..000000000000 100644
  };
  
  &usb_host {
-@@ -710,7 +727,14 @@
+ 	vusb33-supply = <&mt6358_vusb_reg>;
+ 	status = "okay";
+ };
  
  &u2port0 {
  	mediatek,pre-emphasis = <3>;
+-	status = "okay";
 +	mediatek,software-role-switch;
- 	status = "okay";
++	status = "okay";
 +
 +	port {
 +		u2port0_ep: endpoint {
@@ -82,5 +102,6 @@ index 000000000000..000000000000 100644
  };
  
  /*
--- 
-2.43.0
+  * GPU: Mali-G72 MP3, the same Bifrost core as MT8183, so panfrost binds
+  * through "mediatek,mt8183b-mali" inherited from mt8183.dtsi. That variant
+  * consumes a single supply, "mali" (VGPU), and expects the three MFG power
