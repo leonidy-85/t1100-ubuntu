@@ -1,6 +1,6 @@
 diff -u -r a/common_main/core/wmt_lib.c b/common_main/core/wmt_lib.c
---- a/common_main/core/wmt_lib.c	2026-11-13 13:39:01.751099561 +0000
-+++ b/common_main/core/wmt_lib.c	2026-11-13 13:39:01.752115887 +0000
+--- a/common_main/core/wmt_lib.c	2026-11-13 13:50:53.188853766 +0000
++++ b/common_main/core/wmt_lib.c	2026-11-13 13:50:53.189828874 +0000
 @@ -1171,7 +1171,7 @@
  	}
  	osal_memset(met_dump_buf, 0, MET_DUMP_SIZE);
@@ -14,7 +14,7 @@ diff -u -r a/common_main/core/wmt_lib.c b/common_main/core/wmt_lib.c
  	return wmt_plat_wake_lock_ctrl(WL_OP_PUT);
  }
  
-+extern INT32 consys_hw_warm_reset(VOID);
++extern INT32 mtk_wcn_consys_warm_reset(VOID);
 +
 +/* T1100 M54: the chip is dumping when STP asks for a whole chip reset, so the
 + * WMT-based reset (WMT_OPID_HW_RST) can never be answered.  Use the warm
@@ -31,7 +31,7 @@ diff -u -r a/common_main/core/wmt_lib.c b/common_main/core/wmt_lib.c
 -		wmt_lib_cmb_rst(WMTRSTSRC_RESET_STP);
 +		if (t1100_warm_reset) {
 +			WMT_INFO_FUNC("t1100: warm reset (AP_RGU bit), no power gating\n");
-+			consys_hw_warm_reset();
++			mtk_wcn_consys_warm_reset();
 +		} else {
 +			wmt_lib_cmb_rst(WMTRSTSRC_RESET_STP);
 +		}
@@ -39,8 +39,8 @@ diff -u -r a/common_main/core/wmt_lib.c b/common_main/core/wmt_lib.c
  	} else if (op == BTM_DMP_OP) {
  
 diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
---- a/common_main/platform/mt6771.c	2026-11-13 13:39:01.753156018 +0000
-+++ b/common_main/platform/mt6771.c	2026-11-13 13:39:01.754164038 +0000
+--- a/common_main/platform/mt6771.c	2026-11-13 13:50:53.190925492 +0000
++++ b/common_main/platform/mt6771.c	2026-11-13 13:50:53.191822592 +0000
 @@ -34,6 +34,10 @@
  *                    E X T E R N A L   R E F E R E N C E S
  ********************************************************************************

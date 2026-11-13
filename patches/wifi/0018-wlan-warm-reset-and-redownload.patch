@@ -1,6 +1,6 @@
 diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
---- a/common/wlan_lib.c	2026-11-13 13:43:47.037121095 +0000
-+++ b/common/wlan_lib.c	2026-11-13 13:43:47.037507627 +0000
+--- a/common/wlan_lib.c	2026-11-13 13:50:53.196981539 +0000
++++ b/common/wlan_lib.c	2026-11-13 13:50:53.198225727 +0000
 @@ -30,6 +30,8 @@
   ********************************************************************************
   */
@@ -290,7 +290,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  #if CFG_ENABLE_FW_DIVIDED_DOWNLOAD
  static WLAN_STATUS
  wlanImageDividDownloadByEntry(IN P_ADAPTER_T prAdapter,
-@@ -404,6 +679,35 @@
+@@ -404,6 +679,26 @@
  }
  
  /*----------------------------------------------------------------------------*/
@@ -304,37 +304,29 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 +MODULE_PARM_DESC(t1100_warm_reset, "T1100: use the AP_RGU warm reset instead of whole-chip reset");
 +static int t1100_redownloaded;
 +
++extern int mtk_wcn_consys_warm_reset(void);
++/* T1100 M56: a reset must not hit while the RAM image is being downloaded */
++int t1100_dl_active;
++int t1100_reset_pending;
++
 +void t1100_warm_reset_hw(void)
 +{
-+	void __iomem *r = ioremap(0x10007018, 4);
-+	u32 v;
-+
-+	if (!r) {
-+		pr_info("t1100: warm reset ioremap failed\n");
-+		return;
-+	}
-+	v = readl(r);
-+	writel(v | BIT(12) | (0x88u << 24), r);
-+	mdelay(10);
-+	v = readl(r);
-+	writel((v & ~BIT(12)) | (0x88u << 24), r);
-+	mdelay(50);
-+	iounmap(r);
-+	pr_info("t1100: warm reset done (AP_RGU bit12)\n");
++	mtk_wcn_consys_warm_reset();
 +}
 +
  /*!
  * \brief Initialize the adapter. The sequence is
  *        1. Disable interrupt
-@@ -540,6 +844,7 @@
+@@ -540,6 +835,8 @@
  		nicRxInitialize(prAdapter);
  
  #if CFG_ENABLE_FW_DOWNLOAD
 +t1100_redownload:
++		t1100_dl_active = 1;
  		if (!kalFirmwareImageMapping(prAdapter->prGlueInfo, &prFwBuffer, &u4FwSize)) {
  			DBGLOG(INIT, ERROR, "No valid RAM code found!\n");
  			u4Status = WLAN_STATUS_FAILURE;
-@@ -600,42 +905,98 @@
+@@ -600,42 +897,105 @@
  #endif
  		kalFirmwareImageUnmapping(prAdapter->prGlueInfo, NULL, prFwBuffer);
  		DBGLOG(INIT, INFO, "FW download end\n");
@@ -453,13 +445,19 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  				GL_RESET_TRIGGER(prAdapter, RST_FLAG_DO_CORE_DUMP | RST_FLAG_PREVENT_POWER_OFF);
 -				break;
  			}
--
++		}
+ 
 -			i++;
 -			kalMsleep(10);
++		t1100_dl_active = 0;
++		if (t1100_reset_pending) {
++			t1100_reset_pending = 0;
++			pr_info("t1100: deferred reset now (after the download attempt)\n");
++			t1100_warm_reset_hw();
  		}
  
  		if (u4Status == WLAN_STATUS_SUCCESS) {
-@@ -689,7 +1050,7 @@
+@@ -689,7 +1049,7 @@
  
  		/* Power state initialization */
  		prAdapter->fgWiFiInSleepyState = FALSE;
@@ -468,7 +466,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  		/* Online scan option */
  		if (prRegInfo->fgDisOnlineScan == 0)
-@@ -958,6 +1319,42 @@
+@@ -958,6 +1318,42 @@
  	UINT_8 __iomem *prWifiEmiBaseAddr;
  #endif
  
@@ -511,7 +509,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	/* engage divided firmware downloading */
  	/* DLM + ILM */
  	for (i = 0; i < prFwHead->u4NumOfEntries && i < ENTRY_DIRECTLY_TO_CHIP; i++) {
-@@ -977,7 +1374,7 @@
+@@ -977,7 +1373,7 @@
  	}
  
  	kalSetEmiMpuProtection(gConEmiPhyBase, WIFI_EMI_MEM_SIZE, FALSE);
@@ -520,7 +518,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  	/* IEMI + DEMI */
  	for (i = ENTRY_DIRECTLY_TO_CHIP; i < prFwHead->u4NumOfEntries; i++) {
-@@ -1081,7 +1478,7 @@
+@@ -1081,7 +1477,7 @@
  
  #endif
  
@@ -529,7 +527,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	    !wlanIsChipNoAck(prAdapter) && !kalIsCardRemoved(prAdapter->prGlueInfo)) {
  		UINT_32 u4RegValue = 0;
  		UINT_32 u4RegValueNew = 0;
-@@ -2708,6 +3105,10 @@
+@@ -2708,6 +3104,10 @@
  		/* 7. Wait for INIT_EVENT_ID_CMD_RESULT */
  		u4Status = wlanImageSectionDownloadStatus(prAdapter, ucCmdSeqNum);
  #endif
@@ -540,7 +538,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  		break;
  	}
  
-@@ -2865,7 +3266,13 @@
+@@ -2865,7 +3265,13 @@
  	}
  }
  
@@ -555,7 +553,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm previously firmware download is done without error
-@@ -2985,7 +3392,8 @@
+@@ -2985,7 +3391,8 @@
  	return u4Status;
  }
  
@@ -565,7 +563,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm the status of
-@@ -3119,10 +3527,14 @@
+@@ -3119,10 +3526,14 @@
  			continue;
  		}
  		/* 5.2 Send CMD Info Packet */
@@ -580,7 +578,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  		break;
  	};
-@@ -4754,8 +5166,8 @@
+@@ -4754,8 +5165,8 @@
  *
  * @param prAdapter      Pointer of Adapter Data Structure
  *
@@ -591,7 +589,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  */
  /*----------------------------------------------------------------------------*/
  ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
-@@ -4770,8 +5182,8 @@
+@@ -4770,8 +5181,8 @@
  * @brief This function is to update current ACPI state only
  *
  * @param prAdapter      Pointer of Adapter Data Structure
@@ -602,7 +600,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  *
  * @return none
  */
-@@ -4779,7 +5191,7 @@
+@@ -4779,7 +5190,7 @@
  VOID wlanSetAcpiState(IN P_ADAPTER_T prAdapter, IN ENUM_ACPI_STATE_T ePowerState)
  {
  	ASSERT(prAdapter);
@@ -612,9 +610,9 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	prAdapter->rAcpiState = ePowerState;
  }
 diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
---- a/os/linux/gl_rst.c	2026-11-13 13:43:47.039525612 +0000
-+++ b/os/linux/gl_rst.c	2026-11-13 13:43:47.040374781 +0000
-@@ -221,10 +221,31 @@
+--- a/os/linux/gl_rst.c	2026-11-13 13:50:53.199347312 +0000
++++ b/os/linux/gl_rst.c	2026-11-13 13:50:53.199901556 +0000
+@@ -221,10 +221,42 @@
  	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
  }
  
@@ -627,6 +625,17 @@ diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
  {
  	BOOLEAN fgResult = TRUE;
  
++	extern int t1100_dl_active;
++	extern int t1100_reset_pending;
++
++	if (t1100_warm_reset && t1100_dl_active) {
++		DBGLOG(INIT, ERROR,
++		       "T1100: reset deferred, download in progress (%s line %u)\n",
++		       pucFile, u4Line);
++		t1100_reset_pending = 1;
++		return TRUE;
++	}
++
 +	if (t1100_warm_reset) {
 +
 +		DBGLOG(INIT, ERROR,

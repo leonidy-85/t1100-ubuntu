@@ -1,6 +1,6 @@
 diff -u -r a/common_main/core/stp_core.c b/common_main/core/stp_core.c
---- a/common_main/core/stp_core.c	2026-11-13 13:32:24.941039904 +0000
-+++ b/common_main/core/stp_core.c	2026-11-13 13:32:24.942131082 +0000
+--- a/common_main/core/stp_core.c	2026-11-13 13:50:53.181901202 +0000
++++ b/common_main/core/stp_core.c	2026-11-13 13:50:53.182901221 +0000
 @@ -44,6 +44,18 @@
  
  static INT32 fgEnableNak;	/* 0=enable NAK; 1=disable NAK */
@@ -74,3 +74,17 @@ diff -u -r a/common_main/core/stp_core.c b/common_main/core/stp_core.c
  	i = length;
  	p_data = (PUINT8) buffer;
  
+@@ -2508,6 +2547,13 @@
+ }
+ #ifdef MTK_WCN_WMT_STP_EXP_SYMBOL_ABSTRACT
+ EXPORT_SYMBOL(mtk_wcn_stp_coredump_start_get);
++
++/* T1100 M56: reset the STP sequence/parser state after a warm chip reset */
++VOID mtk_wcn_stp_reset_seq_state(VOID)
++{
++	stp_rest_ctx_state();
++}
++EXPORT_SYMBOL(mtk_wcn_stp_reset_seq_state);
+ #endif
+ 
+ /* mtk_wcn_stp_set_wmt_last_close -- set the state of link(UART or SDIO)
