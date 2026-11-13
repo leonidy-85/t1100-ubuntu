@@ -1,0 +1,21 @@
+#!/bin/sh
+# T1100 USB Type-C role switcher: host (flash drive) or device (RNDIS/cable).
+# Host mode drops the RNDIS/SSH link, so run this from the tablet's desktop.
+
+kdialog --title "USB режим" \
+	--yes-label "USB host (флешка)" \
+	--no-label "USB device (кабель)" \
+	--yesno "Переключить USB Type-C?\n\nHost: планшет читает флешку, RNDIS/SSH пропадает.\nDevice: вернуть кабель и сеть."
+rc=$?
+
+case "$rc" in
+0)
+	/usr/local/sbin/t1100-usb-role host
+	;;
+1)
+	/usr/local/sbin/t1100-usb-role device
+	;;
+*)
+	exit 0
+	;;
+esac

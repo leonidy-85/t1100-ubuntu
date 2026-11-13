@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=USB режим
+Name[en]=USB Mode
+Comment=Переключение USB host/device
+Exec=/usr/local/bin/t1100-usb-ui
+Icon=drive-removable-media-usb
+Terminal=false
+Categories=System;Utility;
+Keywords=USB;host;device;флешка;кабель;

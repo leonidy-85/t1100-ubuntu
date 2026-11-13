@@ -18,7 +18,6 @@
    - [x] 6.2 Точность индикации батареи (патч 0069).
    - [ ] 6.3 Длительный suspend/разряд/wakeup.
    - [x] 6.4 Гарнитура: ручное переключение speaker/headphones (авто-ACCDET — отдельный драйвер).
-   - [ ] 6.5 Задержка выделения тачем (userspace).
 
 ## 6.1 Микрофонный PGA — сделано
 
@@ -70,3 +69,11 @@ amixer -c0 cset numid=78 12
 «Наушники»/«Динамик». Скрипт вызывает `amixer` и переключает
 `HPL/HPR Mux` и `Speaker Switch`. Зависимость — пакет `kdialog`
 (установлен из apt). Проверено пользователем.
+
+### UI «USB режим»
+
+Отдельное KDialog-приложение `/usr/local/bin/t1100-usb-ui` (`.desktop` —
+`USB режим`) с кнопками «USB host (флешка)» и «USB device (кабель)».
+Host вызывает `/usr/local/sbin/t1100-usb-role host` (RNDIS/SSH пропадают,
+планшет питает USB-устройство); device возвращает peripheral/RNDIS и
+размонтирует `/dev/sd*`. KDialog установлен на планшет.
