@@ -1,6 +1,6 @@
 diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
---- a/common/wlan_lib.c	2026-11-13 14:17:07.437840579 +0000
-+++ b/common/wlan_lib.c	2026-11-13 14:17:07.438999114 +0000
+--- a/common/wlan_lib.c	2026-11-13 18:42:56.399132690 +0000
++++ b/common/wlan_lib.c	2026-11-13 18:42:56.400589068 +0000
 @@ -30,6 +30,8 @@
   ********************************************************************************
   */
@@ -632,8 +632,8 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	prAdapter->rAcpiState = ePowerState;
  }
 diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
---- a/os/linux/gl_rst.c	2026-11-13 14:17:07.440171106 +0000
-+++ b/os/linux/gl_rst.c	2026-11-13 14:17:07.441205706 +0000
+--- a/os/linux/gl_rst.c	2026-11-13 18:42:56.408319166 +0000
++++ b/os/linux/gl_rst.c	2026-11-13 18:42:56.409168655 +0000
 @@ -221,10 +221,42 @@
  	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
  }
@@ -677,3 +677,205 @@ diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
  	if (fgIsResetting || fgResetTriggered) {
  		DBGLOG(INIT, ERROR,
  		       "Skip trigger whole-chip reset in %s line %u, during resetting! Chip[%04X E%u]\n",
+diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
+--- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 18:42:56.417037165 +0000
++++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 18:42:56.417922803 +0000
+@@ -22,6 +22,7 @@
+ ********************************************************************************
+ */
+ #include <linux/interrupt.h>
++#include <linux/sched/clock.h>	/* sched_clock() moved here in 4.15 */
+ #include <linux/device.h>
+ #include <linux/platform_device.h>
+ #include <linux/mm.h>
+@@ -87,7 +88,7 @@
+ 
+ static int HifAhbPltmProbe(IN struct platform_device *pDev);
+ 
+-static int HifAhbPltmRemove(IN struct platform_device *pDev);
++static void HifAhbPltmRemove(IN struct platform_device *pDev);
+ 
+ #ifdef CONFIG_PM
+ static int HifAhbPltmSuspend(IN struct platform_device *pDev, pm_message_t message);
+@@ -1141,6 +1142,168 @@
+ 
+ /*----------------------------------------------------------------------------*/
+ /*!
++ * \brief T1100: power CONSYS on and bring the AHB Wi-Fi HIF up (M6 milestone).
++ *
++ * The vendor flow reaches HifAhbProbe() from WMT as the "wmt func on (WIFI)"
++ * callback, after opfunc_pwr_on() has powered the chip. That path runs through
++ * wmt_core_stp_init() and needs an STP transport (UART/SDIO/BTIF); on this
++ * mainline port all of them are stubs, so the callback is never reached and no
++ * netdev is created. AHB Wi-Fi itself does not use STP, so:
++ *   1) power the chip with wmt_plat_pwr_ctrl(FUNC_ON) -- the same per-chip
++ *      power-on opfunc_pwr_on() calls first, no STP involved;
++ *   2) do what HifAhbProbe() does before probing, but without the
++ *      pfWlanRemove() rollback, so a failed attempt leaves the module loaded
++ *      (and the box alive) instead of tearing down a half-initialized glue.
++ *
++ * initWlan() calls this when the module is inserted with t1100_probe=1;
++ * default (0) keeps the vendor behaviour untouched.
++ */
++extern int wmt_plat_pwr_ctrl(int state);	/* exported by wmt_drv (FUNC_ON = 0) */
++
++extern int t1100_probe_stage;
++
++/*
++ * T1100 (M23): when wmt_drv has already brought CONSYS up over BTIF/STP
++ * (t1100_btif_stp=1 in wmt_drv, which also downloads the ROMv4 patch), the
++ * chip must not be powered on a second time: wmt_plat_pwr_ctrl(FUNC_ON) runs
++ * the whole CONSYS power-on sequence again, i.e. it resets the MCU and throws
++ * the patch away.
++ */
++int t1100_pwr_on_done;
++/*
++ * T1100 M63: after an SPM-partial reset the MCU answers REG_READ but its
++ * MCIF/MCR block is unprogrammed (WASR/mbox read as 0), so the first firmware
++ * section never gets a response.  Only a full HIF bring-up reprograms it, and
++ * the vendor does that through wlan_remove_cb + wlan_probe_cb after a chip
++ * reset.  t1100_probe_retry repeats exactly that: wlanRemove + wlanProbe,
++ * without touching the module or the netdev name.
++ */
++static int t1100_probe_retry;
++module_param(t1100_probe_retry, int, 0444);
++MODULE_PARM_DESC(t1100_probe_retry, "T1100: extra wlanProbe attempts after wlanRemove");
++module_param(t1100_pwr_on_done, int, 0444);
++MODULE_PARM_DESC(t1100_pwr_on_done,
++		 "T1100: CONSYS is already powered on (and ROM-patched) by wmt_drv");
++
++/* Read-only probe of the STP function register block (see t1100_stp_probe()). */
++int t1100_stp_probe_en = 1;
++module_param(t1100_stp_probe_en, int, 0444);
++MODULE_PARM_DESC(t1100_stp_probe_en, "T1100: dump the STP/function-0/1/2 HIF registers once after power on");
++
++/*
++ * T1100 M21: STP register block probe.
++ *
++ * The WMT/STP channel of the same chip is an SDIO *function* of its own
++ * (common_main/linux/include/stp_sdio.h):
++ *
++ *   CCIR 0x00  CHLPCR 0x04  CSDIOCSR 0x08  CHCR 0x0c
++ *   CHISR 0x10 CHIER 0x14   CTDR 0x18      CRDR 0x1c  CTFSR 0x20
++ *
++ * i.e. exactly the offsets of the WLAN HIF (WCIR/WHLPCR/WSDIOCSR/WHCR/
++ * WHISR/WHIER/... in include/nic/mt6630_reg.h), which is why the two are easy
++ * to confuse: same block, different function. The WLAN driver only ever talks
++ * to function 1 (SDIO_GEN3_FUNCTION_WIFI, sdio_bus_driver.c:sdio_open()), so
++ * this probe reads the same offsets through CMD53 with function 0/1/2 and
++ * prints what comes back. Read-only; the answer decides whether a minimal STP
++ * transport ("STP over the AHB command port") is possible at all.
++ */
++static UINT32 t1100_cmd53_read(UINT32 func, UINT32 addr)
++{
++	sdio_gen3_cmd53_info info;
++	UINT32 val;
++
++	info.word = 0;
++	info.field.rw_flag = SDIO_GEN3_READ;
++	info.field.func_num = func;
++	info.field.block_mode = SDIO_GEN3_BYTE_MODE;
++	info.field.op_mode = SDIO_GEN3_FIXED_PORT_MODE;
++	info.field.addr = addr;
++	info.field.count = 4;
++
++	writel(info.word, (void *)(*g_pHifRegBaseAddr + SDIO_GEN3_CMD_SETUP));
++	val = readl((void *)(*g_pHifRegBaseAddr + SDIO_GEN3_CMD53_DATA));
++	return val;
++}
++
++void t1100_stp_probe(void)
++{
++	static const UINT32 au4Off[7] = { 0x00, 0x04, 0x08, 0x10, 0x14, 0x18, 0x1c };
++	UINT32 f, i;
++
++	static int done;
++
++	if (done)
++		return;
++	if (!g_pHifRegBaseAddr || !*g_pHifRegBaseAddr) {
++		pr_info("t1100-stp: HIF base not set yet, probe skipped\n");
++		return;
++	}
++	done = 1;
++
++	for (f = 0; f <= 2; f++) {
++		pr_info("t1100-stp: func%u:", f);
++		for (i = 0; i < 7; i++) {
++			UINT32 v = t1100_cmd53_read(f, au4Off[i]);
++
++			pr_info(" %02x=%08x", au4Off[i], v);
++		}
++		pr_info("\n");
++	}
++	pr_info("t1100-stp: func2 CTFSR(0x20)=%08x CHISR(0x10)=%08x CCIR(0x0)=%08x\n",
++		t1100_cmd53_read(2, 0x20), t1100_cmd53_read(2, 0x10),
++		t1100_cmd53_read(2, 0x00));
++}
++
++int t1100_wlan_probe(VOID)
++{
++	int ret;
++
++	if (t1100_pwr_on_done) {
++		DBGLOG(INIT, INFO,
++		       "t1100_wlan_probe: CONSYS already up (wmt_drv BTIF STP)\n");
++	} else {
++		DBGLOG(INIT, INFO, "t1100_wlan_probe: chip power on\n");
++		ret = wmt_plat_pwr_ctrl(0);	/* ENUM_FUNC_STATE: FUNC_ON */
++		DBGLOG(INIT, INFO, "t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = %d\n", ret);
++		if (ret) {
++			DBGLOG(INIT, ERROR, "t1100_wlan_probe: chip power on failed\n");
++			return ret;
++		}
++	}
++
++	if (t1100_probe_stage < 2) {
++		DBGLOG(INIT, INFO, "t1100_wlan_probe: stage %d, stop after power on\n",
++		       t1100_probe_stage);
++		return 0;
++	}
++
++	if (t1100_stp_probe_en)
++		t1100_stp_probe();
++
++	DBGLOG(INIT, INFO, "t1100_wlan_probe: paldo on + wlanProbe\n");
++	mtk_wcn_consys_hw_wifi_paldo_ctrl(1);	/* power on WiFi TX PA 3.3V */
++	ret = (int) pfWlanProbe((PVOID) &HifAhbPDev->dev);
++	DBGLOG(INIT, INFO, "t1100_wlan_probe: wlanProbe returned %d\n", ret);
++	{
++		int i;
++
++		for (i = 1; i <= t1100_probe_retry && ret; i++) {
++			DBGLOG(INIT, ERROR,
++			       "t1100_wlan_probe: retry %d after wlanRemove (probe was %d)\n",
++			       i, ret);
++			pfWlanRemove();
++			mdelay(300);
++			mtk_wcn_consys_hw_wifi_paldo_ctrl(1);
++			ret = (int) pfWlanProbe((PVOID) &HifAhbPDev->dev);
++			DBGLOG(INIT, INFO,
++			       "t1100_wlan_probe: retry %d returned %d\n", i, ret);
++		}
++	}
++	return ret;
++}
++
++/*----------------------------------------------------------------------------*/
++/*!
+ * \brief This function will do module remove.
+ *
+ * \param[in] None
+@@ -1281,10 +1444,10 @@
+ * \return 0
+ */
+ /*----------------------------------------------------------------------------*/
+-static int HifAhbPltmRemove(IN struct platform_device *pDev)
++static void HifAhbPltmRemove(IN struct platform_device *pDev)
+ {
++	/* 6.11: platform_driver.remove() returns void */
+ 	mtk_wcn_wmt_wlan_unreg();
+-	return 0;
+ }
+ 
+ #ifdef CONFIG_PM

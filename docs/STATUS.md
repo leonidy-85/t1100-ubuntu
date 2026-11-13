@@ -4448,3 +4448,17 @@ user != root quiet_success`. Правило отказывает root **до** �
 был в 14:54 (в момент зависания Wi-Fi-прогона M62), последняя перезагрузка —
 штатная (`systemd-shutdown`, watchdog); заряд идёт по профилю `hub`
 (`IAICR 2.5 А`, `ICHG 2 А`, `Charging`).
+
+## 13.11 (55): M63 — wlanRemove+wlanProbe после SPM-partial не оживляет MCR
+
+- Добавлен `t1100_probe_retry` (`os/linux/hif/ahb_sdioLike/ahb.c`): после неудачного probe —
+  `pfWlanRemove()` + 300 мс + повторный `pfWlanProbe()` (вендорская схема remove/probe после
+  ресета чипа). Прогон с `t1100_probe_retry=2`: `retry 1/2 after wlanRemove` → оба раза `-5`.
+- MCR после первой секции (`t1100-mcr[after-first-section-config]`):
+  `00: 00100788 00000000 0000000d 00000000…`, `20/40/60/80/a0/c0: все нули`,
+  `e0: 00010101`. `section-config dst=0x020a1000 len=28032 reset=1 -> status=0xC0000001`.
+- Вывод: после SPM-partial блок MCIF/MCR **недоступен** (читается нулями), и remove/probe его
+  не восстанавливает — значит дело не в «незапрограммированном» HIF, а в том, что WLAN-функция
+  чипа после частичного сброса обесточена/изолирована. При обычном power-on (как при загрузке)
+  секции скачиваются нормально.
+- Модуль `wlan_drv_gen3` `1301f157…`; `wmt_drv` `ef0ea37c…`; `mtk_btif_drv` `e29eaecb…`.
