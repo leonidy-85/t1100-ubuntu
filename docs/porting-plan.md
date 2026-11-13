@@ -95,6 +95,17 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
 - **Осталось:** SVS (efuse-калибровка MT6771 не документирована) и длительный
   soak-тест на максимуме с включённым throttling.
 
+## Образ merge3 (13.11, build-only)
+
+- 0058–0064 (coupler/GPU DVFS, USB role switch, `mediatek-cpufreq`, CPU OPP,
+  thermal) собраны в одно ядро **без участия платы**: release
+  `6.12.114-g400cb6f-touch-rot`, `Image` + `dtbs`, 0 warning. `0020` снята —
+  её роль перешла к 0060/0061 (роль по умолчанию `peripheral`).
+- DTB проходит `tools/lk/verify-dtb.sh` (с `LK_EXTRA_RES`), boot перепакован:
+  `build/xfer/boot_merge3.img` (`64e7fe55…`, с ramdisk). **Не прошивался.**
+- Фазовый статус не меняется: GPU DVFS/CPU DVFS/thermal уже описаны выше как
+  проверенные на железе; здесь подтверждена только сборка и валидность DTB.
+
 ## Suspend (13.11)
 
 - `systemctl suspend` идёт через **s2idle** (`SuspendState=freeze`).

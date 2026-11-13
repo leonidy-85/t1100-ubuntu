@@ -1,6 +1,6 @@
 # STATUS — t1100-ubuntu
 
-Обновлено: 12.11.2026.
+Обновлено: 13.11.2026.
 
 ## Фаза
 
@@ -4192,3 +4192,60 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   прогона пропал USB-линк (`usb0` исчез и на планшете, и на хосте), ping/ssh недоступны.
   Логи снять не удалось. Требуется физический power-cycle (кнопка питания, ~10 с).
 - Модуль `wmt_drv` остался `ef0ea37c…` (M61). `0018` обновлён.
+
+## 13.11 (54): merge3 — ядро с 0058–0064 собрано (build-only), 0020 снята
+
+Собрано **без участия платы** (build-хост, устройство в это время занято Wi-Fi-прогонами).
+Ничего не прошивалось: образ лежит в `build/xfer/boot_merge3.img`.
+
+- **Что влито.** 0058 (coupler MT6771/MT8788), 0059 (GPU DVFS, 698/743/800 МГц),
+  0060 (T-PHY software role switch), 0061 (USB role switch + MT6370 OTG VBUS),
+  0062 (`mediatek-cpufreq` для MT6771/MT8788), 0063 (CPU OPP + `proc`/`sram` supply),
+  0064 (CPU thermal zone). **0065 (btif early probe) не включалась** — это диагностика Wi-Fi.
+- **0020 снята (`patch -R`)**: в `patches/series` её больше нет с коммита 7bceec9 —
+  0060/0061 её заменяют (роль по умолчанию всё та же `peripheral`, плюс host).
+  Без снятия 0060 не накладывалась: конфликт `P2C_FORCE_*`/`force_device_mode` и
+  устаревший контекст `&u2port0`.
+- **0061 перебазирована по контексту** (в репозитории обновлён файл патча): у присланной
+  версии `index 000000000000..000000000000` (GNU patch считает хунк за создание файла) и
+  контекст из mt6771-next board-DTS (вложенность `pmic@34`, старый комментарий USB).
+  Содержимое узлов не менялось.
+- **Конфиг** — реконструкция: `.config` из `out-normal` + `configs/t1100-wifi.fragment`
+  + `olddefconfig` (кросс-компилятор!). Дельта ровно **23 строки**, как в §29.3
+  (`wifi-port-log`), `CONFIG_WIRELESS_EXT=y`, `WEXT_PRIV=y`, `CFG80211=m`,
+  `NL80211_TESTMODE=y`, `DRM_PANFROST=y`, `DRM_MEDIATEK=y`, `SND_SOC_MT6771_MT6358=y`.
+  Release: **`6.12.114-g400cb6f-touch-rot`** (LOCALVERSION задан в `make`).
+- **Сборка:** `Image dtbs`, 12 потоков, **7 мин 52 с**, **0 warning**.
+- **Артефакты (sha256):**
+  - `Image` 40 086 016 Б — `966bd057ca65ab07b9840fb8f6bc1b4dd9d7ad9b03f12811f1ee365718b5272d`
+  - `mt6771-fplus-t1100.dtb` 57 711 Б — `dcb164aaf39b9fd5ddb7181b7e1d5e979efa3e4534210bd12ed010bd28662eb5`
+  - `Image.gz` 14 610 479 Б — `3ca81a92f17ff54caaa670e0c18cfd764d8286c6b1bb96a1dfe7551cd6c38f1a`
+  - `boot_merge3.img` 33 554 432 Б — `64e7fe55e3f5a3b40e37cca5efbcf0da9d3e6185971ef0da4fffc44d48ca91da`
+    (md5 `5aeb7bb5f710c32df8f3adb5587c1cad`); ramdisk от `cur_boot.img` (1 033 291 Б),
+    kernel @ `0x40200000`, cmdline и адреса — от `cur_boot.img`; FDT внутри образа
+    побайтово равен собранному DTB.
+- **Что проверено в DTB** (`dtc -I dtb -O dts`): `opp-table-cluster0_opp_t1100` /
+  `…cluster1_opp_t1100` (по 16 OPP, 793…1989 МГц, 650…1050 мВ) и `proc-supply`/
+  `sram-supply` у всех 8 CPU; `thermal-zones/cpu-thermal` с трипами; GPU
+  `operating-points-v2` (698/743/800 МГц) + `regulator-coupled-with` на VGPU/VSRAM
+  (spread 100 000 мкВ); `ssusb`: `dr_mode=otg`, `usb-role-switch`,
+  `role-switch-default-mode=peripheral`, `vbus-supply=&mt6370_otg_vbus`, graph-линк
+  к `&u2port0` с `mediatek,software-role-switch`. В объектах: `mediatek,mt6771`/
+  `mt8788` в `mediatek-cpufreq.o` и `mtk-regulator-coupler.o`,
+  `software-role-switch` в `phy-mtk-tphy.o`.
+- **LK:** `tools/lk/verify-dtb.sh` с `LK_EXTRA_RES=0x70000000:0x10000:ibc-reserved` —
+  **passed** (overlay применяется, merged 92 885 Б ≤ 512 КиБ, `/chosen/bootargs`,
+  `/memory`, `mediatek,scp`, `/reserved-memory`, 19 mblock).
+- **На железе не проверялось ничего**: USB-роль, CPU DVFS, thermal и GPU DVFS
+  в этой сборке не запускались. Отдельный риск — USB: device-mode теперь целиком
+  зависит от 0060 (graph-линк → role switch mtu3); при отказе RNDIS/SSH пропадут,
+  откат — `cur_boot.img` через recovery.
+
+**Инцидент на build-хосте.** Между ~14:18 и ~14:53 UTC исчезли
+`/home/l/t1100-merge2-out` и только что скопированный `/home/l/t1100-merge3-out`
+(`-src` целы, `t1100-ubuntu-build/out*` целы, cron/таймеров на удаление нет).
+Поэтому эталонный `.config` работающего ядра утрачен — конфиг выше восстановлен
+по `out-normal` + wifi-фрагмент. Wi-Fi-модули собирались против `merge2-out`;
+пока его out-дерево не восстановлено, пересборка модулей невозможна — нужно
+вмешательство владельца хоста/сессии Wi-Fi (на `merge3-src` конфиг уже
+воспроизводится, см. `/home/l/m3/config.final`).
