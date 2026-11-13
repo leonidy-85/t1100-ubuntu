@@ -1,0 +1,105 @@
+02eb94: 68ba8952   mov      w8, #0x4dd3
+02eb9c: 487ca89b   umull    x8, w2, w8
+02eba0: 690340b9   ldr      w9, [x27]
+02eba4: 17fd66d3   lsr      x23, x8, #0x26
+02eba8: 087d8052   mov      w8, #0x3e8
+02ebac: e87e081b   mul      w8, w23, w8
+02ebb0: 1f01026b   cmp      w8, w2
+02ebb4: e8079f1a   cset     w8, ne
+02ebb8: e83f00b9   str      w8, [sp, #0x3c]
+02ebbc: e806971a   cinc     w8, w23, ne
+02ebc0: 3f090071   cmp      w9, #2
+02ebc4: e84300b9   str      w8, [sp, #0x40]
+02ebc8: ab0e0054   b.lt     #0x2ed9c
+02ebcc: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x1fd5f "[WMT-IC][I]%s:normal patch download patch size(%d) fragNum(%d)\n"
+02ebd0: 010080d2   mov      x1, #0   ; RELOC .rodata.str1.1+0x2af3 "mtk_wcn_soc_normal_patch_dwn"
+02ebd4: e34340b9   ldr      w3, [sp, #0x40]
+02ebf0: f71b00f9   str      x23, [sp, #0x30]
+02ebf4: 00000094   bl       #0x2ebf4   ; RELOC .text+0x4f51c
+02ebf8: f71b40f9   ldr      x23, [sp, #0x30]
+02ebfc: 480340f9   ldr      x8, [x26]
+02edb0: 000080d2   mov      x0, #0   ; RELOC .data+0x1251
+02edbc: e2430391   add      x2, sp, #0xd0
+02edc4: 81028052   mov      w1, #0x14
+02edc8: e3031f2a   mov      w3, wzr
+02edcc: 00000094   bl       #0x2edcc   ; RELOC .text+0x1d270
+02edd0: e4d340b9   ldr      w4, [sp, #0xd0]
+02edd4: e303002a   mov      w3, w0
+02edd8: 601a0035   cbnz     w0, #0x2f124
+02eddc: 9f500071   cmp      w4, #0x14
+02ede0: 211a0054   b.ne     #0x2f124
+02ede4: a0e300d1   sub      x0, x29, #0x38
+02ede8: 82018052   mov      w2, #0xc
+02edec: e1031f2a   mov      w1, wzr
+02edf0: 00000094   bl       #0x2edf0   ; RELOC .text+0x4f918
+02edf4: a0e300d1   sub      x0, x29, #0x38
+02edf8: e2430391   add      x2, sp, #0xd0
+02edfc: 01018052   mov      w1, #8
+02ee00: 00000094   bl       #0x2ee00   ; RELOC .text+0x1d3ac
+02ee04: e4d340b9   ldr      w4, [sp, #0xd0]
+02ee08: e303002a   mov      w3, w0
+02ee0c: e0200035   cbnz     w0, #0x2f228
+02ee10: 9f200071   cmp      w4, #8
+02ee14: a1200054   b.ne     #0x2f228
+02ee18: 010080d2   mov      x1, #0   ; RELOC .data+0x1282
+02ee24: a0e300d1   sub      x0, x29, #0x38
+02ee2c: 02018052   mov      w2, #8
+02ee30: 00000094   bl       #0x2ee30   ; RELOC .text+0x4f998
+02ee34: 20310034   cbz      w0, #0x2f458
+02ee38: 680340b9   ldr      w8, [x27]
+02ee3c: 0821f837   tbnz     w8, #0x1f, #0x2f25c
+02ee40: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0xf266 "[WMT-IC][E]%s(%d):wmt_core: write WMT_PATCH_ADDRESS_CMD status fail\n"
+02ee44: 010080d2   mov      x1, #0   ; RELOC .rodata.str1.1+0x2af3 "mtk_wcn_soc_normal_patch_dwn"
+02ee60: 22748152   mov      w2, #0xba1
+02ee64: 00000094   bl       #0x2ee64   ; RELOC .text+0x4f320
+02ee68: fd000014   b        #0x2f25c
+02ee6c: 680340b9   ldr      w8, [x27]
+02f458: 690340b9   ldr      w9, [x27]
+02f45c: a2835338   ldurb    w2, [x29, #-0xc8]
+02f460: 080080d2   mov      x8, #0   ; RELOC .data+0x1271
+02f464: a3935338   ldurb    w3, [x29, #-0xc7]
+02f468: a4a35338   ldurb    w4, [x29, #-0xc6]
+02f46c: a5b35338   ldurb    w5, [x29, #-0xc5]
+02f47c: 3f0d0071   cmp      w9, #3
+02f480: f3d302a9   stp      x19, x20, [sp, #0x28]
+02f484: 02010039   strb     w2, [x8]
+02f488: 03050039   strb     w3, [x8, #1]
+02f48c: 04090039   strb     w4, [x8, #2]
+02f490: 050d0039   strb     w5, [x8, #3]
+02f494: 4b010054   b.lt     #0x2f4bc
+02f498: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x3d1 "[WMT-IC][D]%s:4 bytes address command:0x%02x,0x%02x,0x%02x,0x%02x"
+02f49c: 010080d2   mov      x1, #0   ; RELOC .rodata.str1.1+0x2af3 "mtk_wcn_soc_normal_patch_dwn"
+02f4b8: 00000094   bl       #0x2f4b8   ; RELOC .text+0x4f51c
+02f4bc: 000080d2   mov      x0, #0   ; RELOC .data+0x1265
+02f4c8: e2430391   add      x2, sp, #0xd0
+02f4d0: 81028052   mov      w1, #0x14
+02f4d4: e3031f2a   mov      w3, wzr
+02f4d8: 00000094   bl       #0x2f4d8   ; RELOC .text+0x1d270
+02f4dc: e4d340b9   ldr      w4, [sp, #0xd0]
+02f4e0: e303002a   mov      w3, w0
+02f4e4: e0070035   cbnz     w0, #0x2f5e0
+02f4e8: 9f500071   cmp      w4, #0x14
+02f4ec: a1070054   b.ne     #0x2f5e0
+02f4f0: a0e300d1   sub      x0, x29, #0x38
+02f4f4: 82018052   mov      w2, #0xc
+02f4f8: e1031f2a   mov      w1, wzr
+02f4fc: 00000094   bl       #0x2f4fc   ; RELOC .text+0x4f918
+02f500: a0e300d1   sub      x0, x29, #0x38
+02f504: e2430391   add      x2, sp, #0xd0
+02f508: 01018052   mov      w1, #8
+02f50c: 00000094   bl       #0x2f50c   ; RELOC .text+0x1d3ac
+02f510: e4d340b9   ldr      w4, [sp, #0xd0]
+02f514: e303002a   mov      w3, w0
+02f518: 80130035   cbnz     w0, #0x2f788
+02f51c: 9f200071   cmp      w4, #8
+02f520: 41130054   b.ne     #0x2f788
+02f524: 010080d2   mov      x1, #0   ; RELOC .data+0x128a
+02f530: a0e300d1   sub      x0, x29, #0x38
+02f538: 02018052   mov      w2, #8
+02f53c: 00000094   bl       #0x2f53c   ; RELOC .text+0x4f998
+02f540: f31740f9   ldr      x19, [sp, #0x28]
+02f544: 40c1ff34   cbz      w0, #0x2ed6c
+02f548: 680340b9   ldr      w8, [x27]
+02f54c: 8813f837   tbnz     w8, #0x1f, #0x2f7bc
+02f550: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0xf266 "[WMT-IC][E]%s(%d):wmt_core: write WMT_PATCH_ADDRESS_CMD status fail\n"
+02f554: 010080d2   mov      x1, #0   ; RELOC .rodata.str1.1+0x2af3 "mtk_wcn_soc_normal_patch_dwn"

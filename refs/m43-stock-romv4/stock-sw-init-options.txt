@@ -1,0 +1,60 @@
+02e38c: 00000094   bl       #0x2e38c   ; RELOC .text+0x4f51c
+02e390: 1a0080d2   mov      x26, #0   ; RELOC .data+0xc28
+02e3a0: 48034039   ldrb     w8, [x26]
+02e3a4: 880a0037   tbnz     w8, #0, #0x2e4f4
+02e3a8: 090080d2   mov      x9, #0   ; RELOC .data+0xc2b
+02e3b8: 28014039   ldrb     w8, [x9]
+02e3bc: b8e300d1   sub      x24, x29, #0x38
+02e3c0: 48a91037   tbnz     w8, #2, #0x2f8e8
+02e3c4: a10303d1   sub      x1, x29, #0xc0
+02e4f0: 38080014   b        #0x305d0
+02e4f4: 000080d2   mov      x0, #0   ; RELOC .data+0xc78
+02e504: 61008052   mov      w1, #3
+02e508: 00000094   bl       #0x2e508   ; RELOC .text+0x1e5f4
+02e50c: 680340b9   ldr      w8, [x27]
+02e510: 20050034   cbz      w0, #0x2e5b4
+02e514: 280af837   tbnz     w8, #0x1f, #0x2e658
+02e518: e303002a   mov      w3, w0
+02e51c: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x207f4 "[WMT-IC][E]%s(%d):wmt_power_on_dlm_table fail(%d)\n"
+
+; ---- set_mcuclk_table_3 (icId 0x788) ----
+02e604: e203172a   mov      w2, w23
+02e608: 00000094   bl       #0x2e608   ; RELOC .text+0x4f51c
+02e60c: 480340f9   ldr      x8, [x26]
+02e610: 08030837   tbnz     w8, #1, #0x2e670
+02e614: 48051036   tbz      w8, #2, #0x2e6bc
+02e618: 000080d2   mov      x0, #0   ; RELOC .data+0xd40
+02e628: 81008052   mov      w1, #4
+02e62c: 00000094   bl       #0x2e62c   ; RELOC .text+0x1e5f4
+02e630: 60040034   cbz      w0, #0x2e6bc
+02e634: 680340b9   ldr      w8, [x27]
+02e638: e8b7f837   tbnz     w8, #0x1f, #0x2fd34
+02e63c: e303002a   mov      w3, w0
+02e640: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x20d94 "[WMT-IC][E]%s(%d):set_mcuclk_table_3 fail(%d)\n"
+02e650: 62a18052   mov      w2, #0x50b
+02e654: 16000014   b        #0x2e6ac
+02e658: a0028012   mov      w0, #-0x16
+02e65c: dd070014   b        #0x305d0
+02e660: 60008012   mov      w0, #-4
+02e664: db070014   b        #0x305d0
+02e668: 20028012   mov      w0, #-0x12
+02e66c: d9070014   b        #0x305d0
+02e670: 000080d2   mov      x0, #0   ; RELOC .data+0xcf0
+02e680: 41008052   mov      w1, #2
+02e684: 00000094   bl       #0x2e684   ; RELOC .text+0x1e5f4
+02e688: a0010034   cbz      w0, #0x2e6bc
+02e68c: 680340b9   ldr      w8, [x27]
+02e690: 28b5f837   tbnz     w8, #0x1f, #0x2fd34
+02e694: e303002a   mov      w3, w0
+02e698: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x20e46 "[WMT-IC][E]%s(%d):set_mcuclk_table_1 fail(%d)\n"
+02e6a8: a2a08052   mov      w2, #0x505
+02e6ac: e15b40f9   ldr      x1, [sp, #0xb0]
+02e6b0: 00000094   bl       #0x2e6b0   ; RELOC .text+0x4f320
+02e6b4: c0028012   mov      w0, #-0x17
+02e6b8: c6070014   b        #0x305d0
+02e6bc: e87e4092   and      x8, x23, #0xffffffff
+
+; ---- consys_ic_get_options (mt6771) ----
+005364: a0d68652   mov      w0, #0x36b5
+005368: 8010a072   movk     w0, #0x84, lsl #16
+00536c: c0035fd6   ret      

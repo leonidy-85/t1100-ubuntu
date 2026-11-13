@@ -1,0 +1,60 @@
+
+wmt_launcher:     формат файла elf64-littleaarch64
+
+
+Дизассемблирование раздела .text:
+
+00000000000030cc <.text+0xcc>:
+    30cc:	540002ed 	b.le	3128 <__libc_init@plt-0x3358>
+    30d0:	52940194 	mov	w20, #0xa00c                	// #40972
+    30d4:	2a1f03e2 	mov	w2, wzr
+    30d8:	72b00094 	movk	w20, #0x8004, lsl #16
+    30dc:	2a1403e1 	mov	w1, w20
+    30e0:	94000cec 	bl	6490 <ioctl@plt>
+    30e4:	2a0003f5 	mov	w21, w0
+    30e8:	7115401f 	cmp	w0, #0x550
+    30ec:	540002ec 	b.gt	3148 <__libc_init@plt-0x3338>
+    30f0:	510c86a8 	sub	w8, w21, #0x321
+    30f4:	7100591f 	cmp	w8, #0x16
+    30f8:	54000548 	b.hi	31a0 <__libc_init@plt-0x32e0>  // b.pmore
+    30fc:	d0ffffe9 	adrp	x9, 1000 <__libc_init@plt-0x5480>
+    3100:	f0ffffe2 	adrp	x2, 2000 <__libc_init@plt-0x4480>
+    3104:	91104129 	add	x9, x9, #0x410
+    3108:	91101842 	add	x2, x2, #0x406
+    310c:	1000008a 	adr	x10, 311c <__libc_init@plt-0x3364>
+    3110:	3868692b 	ldrb	w11, [x9, x8]
+    3114:	8b0b094a 	add	x10, x10, x11, lsl #2
+    3118:	d61f0140 	br	x10
+    311c:	f0ffffe2 	adrp	x2, 2000 <__libc_init@plt-0x4480>
+    3120:	9116a842 	add	x2, x2, #0x5aa
+    3124:	1400004a 	b	324c <__libc_init@plt-0x3234>
+    3128:	d0ffffe1 	adrp	x1, 1000 <__libc_init@plt-0x5480>
+    312c:	d0ffffe2 	adrp	x2, 1000 <__libc_init@plt-0x5480>
+    3130:	9125d821 	add	x1, x1, #0x976
+    3134:	91395842 	add	x2, x2, #0xe56
+    3138:	528000c0 	mov	w0, #0x6                   	// #6
+    313c:	94000cd9 	bl	64a0 <__android_log_print@plt>
+    3140:	12800015 	mov	w21, #0xffffffff            	// #-1
+    3144:	14000139 	b	3628 <__libc_init@plt-0x2e58>
+    3148:	711a62bf 	cmp	w21, #0x698
+    314c:	5400014c 	b.gt	3174 <__libc_init@plt-0x330c>
+    3150:	711546bf 	cmp	w21, #0x551
+    3154:	540006c0 	b.eq	322c <__libc_init@plt-0x3254>  // b.none
+    3158:	7118cebf 	cmp	w21, #0x633
+    315c:	54000740 	b.eq	3244 <__libc_init@plt-0x323c>  // b.none
+    3160:	711a42bf 	cmp	w21, #0x690
+    3164:	54000441 	b.ne	31ec <__libc_init@plt-0x3294>  // b.any
+    3168:	d0ffffe2 	adrp	x2, 1000 <__libc_init@plt-0x5480>
+    316c:	91227442 	add	x2, x2, #0x89d
+    3170:	14000037 	b	324c <__libc_init@plt-0x3234>
+    3174:	711a66bf 	cmp	w21, #0x699
+    3178:	54000600 	b.eq	3238 <__libc_init@plt-0x3248>  // b.none
+    317c:	711c4ebf 	cmp	w21, #0x713
+    3180:	540026e0 	b.eq	365c <__libc_init@plt-0x2e24>  // b.none
+    3184:	711e22bf 	cmp	w21, #0x788
+    3188:	54000321 	b.ne	31ec <__libc_init@plt-0x3294>  // b.any
+    318c:	d0ffffe1 	adrp	x1, 1000 <__libc_init@plt-0x5480>
+    3190:	f0ffffe2 	adrp	x2, 2000 <__libc_init@plt-0x4480>
+    3194:	9125d821 	add	x1, x1, #0x976
+    3198:	9121b042 	add	x2, x2, #0x86c
+    319c:	14000134 	b	366c <__libc_init@plt-0x2e14>
