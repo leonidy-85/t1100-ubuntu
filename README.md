@@ -5,7 +5,7 @@
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
 > **Статус (13.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
-> mainline 6.12.114 + патчи 0001–0063 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
+> mainline 6.12.114 + патчи 0001–0064 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
 > заряжается** (`mt6370-charger`), **`poweroff` плату гасит** (0034).
@@ -25,8 +25,10 @@
 > нестабилен (xHCI), поэтому возврат — только перезагрузкой.
 > **CPU DVFS (0062/0063):** `mtk-cpufreq`, 16 OPP 793…1989 МГц с voltage
 > tracking, `schedutil`; максимум 1.989 ГГц при 1.05 В проверен на железе.
-> Thermal/SVS пока выключены.
-> Дальше: thermal/SVS, panfrost shader timeout, Wi-Fi/BT (фаза 5), безопасный
+> **Thermal (0064):** CPU-зона 80/90/115 °C, throttling проверен; efuse-
+> калибровка MT6771 пока не декодируется, драйвер использует дефолты MT8183.
+> SVS пока выключен.
+> Дальше: SVS/soak-тест, panfrost shader timeout, Wi-Fi/BT (фаза 5), безопасный
 > возврат USB-роли, suspend, задержка выделения. Состояние и план — `docs/STATUS.md`,
 > `docs/handover.md`.
 >
@@ -153,7 +155,7 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | Блок | Состояние |
 |---|---|
 | LK / образ boot.img | ✅ LK принимает наш DTB (4 правила, `docs/lk-dtb-rules.md`), перепаковка `scripts/repack_boot.py` |
-| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0063` (0035 отключён, 0020 заменён на 0060) |
+| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0064` (0035 отключён, 0020 заменён на 0060) |
 | Память/PSCI/GIC | ✅ |
 | PMIC MT6358 / power domains | ✅ рельсы и домены поднимаются; зарядка и `poweroff` работают (0031–0034) |
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
@@ -162,7 +164,7 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | Ubuntu rootfs | ✅ Ubuntu 26.04 LTS arm64 + KDE Plasma 6.6.4 на `p54` (ext4, метка `ubuntu`), 8 ядер |
 | DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ панель 1600×2176@58.93 (0038/0046/0052), сдвиг кадра убран |
 | GPU panfrost (Mali-G72) | ✅ Mesa 26.0.3, GLES 3.1; DVFS 698/743/800 МГц (0058/0059), `glmark2` Score 1409/1583 |
-| CPU DVFS | ✅ `mtk-cpufreq` (0062/0063), 793…1989 МГц, 650/700…1050 мВ, `schedutil`; thermal/SVS пока выключены |
+| CPU DVFS | ✅ `mtk-cpufreq` (0062/0063), 793…1989 МГц, 650/700…1050 мВ, `schedutil`; thermal CPU-зона 80/90/115 °C (0064), throttling проверен; SVS пока выключен |
 | Wayland / KDE | ✅ KDE Plasma 6.6.4 + SDDM autologin root; тач (0051) и клавиатура работают |
 | Звук | ✅ динамик и микрофон; маршрут `UL1_CH1/CH2 ADDA_UL`, PipeWire source `alsa_mic` |
 | Wi-Fi / BT | ❌ в mainline не поддержаны (CONNSYS_6771/MT6631); сеть только RNDIS |

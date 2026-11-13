@@ -182,5 +182,8 @@ CONFIG_SND_SOC_MT6771_MT6358=y
 # first and changes the CPU clock without touching vproc/vsram (undervolt hang).
 CONFIG_ARM_MEDIATEK_CPUFREQ=y
 # CONFIG_CPUFREQ_DT is not set
-# MTK thermal efuse calibration is not validated on MT6771 yet; keep it off.
-# CONFIG_MTK_THERMAL is not set
+# MTK thermal: the MT6771 controller is MT8183-compatible, but the efuse
+# calibration is not decoded yet (driver uses its defaults). The board DTS
+# exposes only the CPU zone with 80/90/115 C trips.
+CONFIG_MTK_THERMAL=y
+CONFIG_MTK_SOC_THERMAL=y
