@@ -4290,3 +4290,55 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   аудита и process accounting на хосте нет. Рекомендация: не использовать
   `rm -rf` с масками по `/home/l/t1100-*`; при чистке удалять только `out`-ы,
   для которых есть бэкап конфига и `Module.symvers` (теперь есть).
+
+## 13.11 (54): ПАУЗА по устройству — состояние Wi-Fi-ветки и артефакты (для возврата)
+
+### (54.1) Где остановились (M61/M62)
+
+- **M61 (рабочее):** `wmt_drv` `ef0ea37c…` — между патчами набора выполняется SPM-partial
+  (`0x1000632c`: iso+rst, без power-gating). Результат прогона: `1_1 -> 0` → SPM-partial
+  `hwcode 0x788` → `1_0 -> 0` → SPM-partial `hwcode 0x788` → `patch set redelivered, rc=0`.
+  Впервые весь набор уложен в одном сеансе; дальше `wlanImageSectionConfig` (idx 0) не
+  подтверждается, `wlanProbe -5`.
+- **M62 (задеплоено, прогон упал):** `wlan_drv_gen3` `b746ff24…` — после `rc=0` добавлены
+  `mdelay(300)` + `t1100_hif_state("after-patch-redelivery")` перед повторной закачкой секций.
+  Прогон **повесил плату**: исчез `usb0` (и на планшете, и на хосте), ping/ssh недоступны;
+  лог `/root/m62-slice.txt` остался на плате, снять не успели. Требуется физический power-cycle.
+
+### (54.2) Гипотезы следующего захода
+
+- (а) после SPM-partial на стороне чипа теряется конфигурация **HIF/MCIF** (наш
+  `HifAhbPltmProbe()`/`HifAhbProbe()` выполнялся один раз в `t1100_wlan_probe()`), поэтому
+  `hwcode` (короткий `REG_READ`) проходит, а первая секция — нет;
+- (б) обращение к HIF после сброса **роняет ядро** (что и наблюдалось в M62).
+
+План проверки: тот же прогон **без** `t1100_hif_state` и **без** повторной закачки — понять,
+доходит ли дело до `Firmware download configuration failed! idx 0` или плата падает раньше.
+Дальше — реинициализация HIF отдельным экспортом (`HifAhbProbe()` в
+`os/linux/hif/ahb_sdioLike/ahb.c:1121`, вызывается из `t1100_wlan_probe()` строка 210),
+без пересоздания netdev.
+
+### (54.3) Артефакты (проверено офлайн, без сборки)
+
+Аудит `vendor/` → `work/` по обоим деревьям: **все** изменённые исходники покрыты
+`patches/wifi/*.patch` (0014, 0016, 0017, 0018 и ранние). Единственный пробел — `Makefile`
+обоих деревьев; закрыт новым `patches/wifi/0019-build-makefiles.patch` (795 строк).
+Dry-run применение всех патчей к своим базам — OK.
+
+Ключевые файлы (`sha256`, дерево `/home/l/t1100-wifi-build-m44/work`):
+
+| файл | sha256 |
+|---|---|
+| `common_main/core/wmt_ic_soc.c` | `6e437cb1704d0d4cae0ef71b4a25b2c68542f5eac9d0d8a6355e0bedd038c699` |
+| `common_main/core/stp_core.c` | `8a1857ca8410cb33f9210ac0071c452f00def538119cef98e12cda0a751e18d8` |
+| `common_main/core/wmt_lib.c` | `dd49f262cca7cedee42b26566673930971326f188718cdefaa4913c2c8967929` |
+| `common_main/core/wmt_ctrl.c` | `8bdfe7f421dd2ccbcffefa7eed098d39c021d886fe7f797a226fe21ea4631a4e` |
+| `common_main/linux/stp_btif.c` | `f407b7c2ca49830c6298448084a7c75098fac2a98d57d46c83f46e7e3abff011` |
+| `common_main/platform/mt6771.c` | `b20b4221e8bb11fc7a964a7c4397013da87e4df7567ac4596c6e9f9c0ab84f77` |
+| `wlan/common/wlan_lib.c` | `6a23c84d991514c00d4caaf6630a830140aa117832f45bd2486849bb616b239c` |
+| `wlan/os/linux/gl_rst.c` | `dfba5f6310bfd27a2b003b656395b304284f35877c2ea8368cb8b08670b617c9` |
+
+Модули: `wmt_drv.ko` `ef0ea37c…` (M61, тот, что на плате), `wlan_drv_gen3.ko` `b746ff24…`
+(M62, тот, что на плате), `mtk_btif_drv.ko` на плате `e29eaecb…` — **внимание: на build-хосте
+`/home/l/m23-btif/mtk_btif_drv.ko` сейчас `41d5b871…`**, перед следующим прогоном либо вернуть
+`e29eaecb…`, либо отдельно проверить, что новый btif ведёт себя так же.
