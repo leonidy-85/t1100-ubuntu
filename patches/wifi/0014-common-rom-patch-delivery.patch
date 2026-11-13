@@ -1,25 +1,35 @@
 diff -u -r a/common_main/core/wmt_ctrl.c b/common_main/core/wmt_ctrl.c
---- a/common_main/core/wmt_ctrl.c	2026-11-13 13:07:20.609851669 +0000
-+++ b/common_main/core/wmt_ctrl.c	2026-11-13 13:07:20.612098216 +0000
-@@ -34,6 +34,8 @@
+--- a/common_main/core/wmt_ctrl.c	2026-11-13 13:18:35.486855191 +0000
++++ b/common_main/core/wmt_ctrl.c	2026-11-13 13:18:35.489034932 +0000
+@@ -34,6 +34,11 @@
  #include "osal.h"
  
  #include "wmt_ctrl.h"
 +
 +int t1100_patch_active;
++/* T1100 M51: raw STP RX trace, enabled around the quiet window only */
++int t1100_rx_trace;
++int t1100_rx_bytes;
  #include "wmt_core.h"
  #include "wmt_lib.h"
  #include "wmt_dev.h"
 diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
---- a/common_main/core/wmt_ic_soc.c	2026-11-13 13:07:20.608792642 +0000
-+++ b/common_main/core/wmt_ic_soc.c	2026-11-13 13:07:20.610978564 +0000
-@@ -40,6 +40,20 @@
+--- a/common_main/core/wmt_ic_soc.c	2026-11-13 13:18:35.485924768 +0000
++++ b/common_main/core/wmt_ic_soc.c	2026-11-13 13:18:35.487969353 +0000
+@@ -40,6 +40,27 @@
   */
  #include <linux/firmware.h>
  
 +extern int t1100_patch_active;
 +/* T1100 M49: stock-exact mode - every fragment waits for its EVT, the reset is
 + * one fatal attempt, nothing happens between patches (as in the vendor .ko). */
++extern int t1100_rx_trace;
++extern int t1100_rx_bytes;
++/* T1100 M51: after the last fragment the chip asserts and starts a core dump;
++ * stay quiet for this long so the dump can finish before any command. */
++static int t1100_quiet_ms;
++module_param(t1100_quiet_ms, int, 0444);
++MODULE_PARM_DESC(t1100_quiet_ms, "T1100: quiet window after the last fragment (ms)");
 +static int t1100_stock_exact;
 +module_param(t1100_stock_exact, int, 0444);
 +MODULE_PARM_DESC(t1100_stock_exact, "T1100: behave exactly like the stock driver (RX on every fragment, fatal reset)");
@@ -34,7 +44,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  static char t1100_rom_patch[128];
  module_param_string(t1100_rom_patch, t1100_rom_patch,
  		    sizeof(t1100_rom_patch), 0444);
-@@ -1225,6 +1239,8 @@
+@@ -1225,6 +1246,8 @@
  	/* 6.2 Read patch number */
  	/* If patch number is 0, it's first time connys power on */
  	patch_num = mtk_wcn_soc_get_patch_num();
@@ -43,7 +53,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	if (patch_num == 0) {
  		if (t1100_rom_patch[0]) {
  			/* T1100: the patch comes from /lib/firmware, not from
-@@ -1281,9 +1297,46 @@
+@@ -1281,9 +1304,46 @@
  							    osal_array_size(init_table_3));
  			}
  		}
@@ -55,7 +65,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
 +		/* T1100 M45: best effort - a missing reset EVT must not abort the
 +		 * patch set, otherwise the second patch (seq 2) never runs. */
 +		iRet = 0;
-+		{
++		if (t1100_quiet_ms <= 0) {
 +			UINT32 ra, rv;
 +			int rk;
 +
@@ -73,7 +83,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
 +		 * reset, so re-init STP exactly like wmt_core_stp_init() (the
 +		 * procedure that revived it in M37) before the next patch.
 +		 */
-+		if (patch_index + 1 < patch_num) {
++		if (patch_index + 1 < patch_num && t1100_quiet_ms <= 0) {
 +			ULONG p1, p2;
 +			INT32 rc1, rc2, rc3, rc4, rc5;
 +			UINT32 hw = 0;
@@ -93,7 +103,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  		}
  	}
  
-@@ -1320,7 +1373,7 @@
+@@ -1320,7 +1380,7 @@
  	iRet = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
  	if (iRet) {
  		WMT_ERR_FUNC("init_table_3 fail(%d)\n", iRet);
@@ -102,7 +112,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	}
  #endif
  
-@@ -2934,6 +2987,7 @@
+@@ -2934,6 +2994,7 @@
  	/* send all fragments */
  	offset = sizeof(WMT_PATCH_CMD);
  	fragSeq = 0;
@@ -110,32 +120,64 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	while (fragSeq < fragNum) {
  		WMT_DBG_FUNC("patch size(%d) fragNum(%d)\n", patchSize, fragNum);
  		if (fragSeq == (fragNum - 1)) {
-@@ -2976,7 +3030,7 @@
+@@ -2976,7 +3037,8 @@
  		 * init_table_3) fails with -2 (wmt_ctrl_tx_ex: "STP is not
  		 * enabled yet").  So do not read an EVT for the last fragment.
  		 */
 -		if (fragSeq == fragNum - 1) {
-+		if (fragSeq == fragNum - 1 && t1100_patch_is_last && !t1100_stock_exact) {
++		if (fragSeq == fragNum - 1 &&
++		    (t1100_quiet_ms > 0 || (t1100_patch_is_last && !t1100_stock_exact))) {
  			WMT_INFO_FUNC("t1100: last fragment sent, ROM jumps (no EVT expected)\n");
  			iRet = 0;
  			++fragSeq;
-@@ -2987,6 +3041,9 @@
+@@ -2987,6 +3049,9 @@
  		}
  
  		iRet = wmt_core_rx(evtBuf, sizeof(WMT_PATCH_EVT), &u4Res);
-+		if (t1100_stock_exact)
++		if (t1100_stock_exact && t1100_quiet_ms <= 0)
 +			WMT_INFO_FUNC("t1100: frag %u/%u rx ret=%d len=%u hex=%*phN\n",
 +				      fragSeq, fragNum, iRet, u4Res, (int)(u4Res > 8 ? 8 : u4Res), evtBuf);
  		if (iRet || (u4Res != sizeof(WMT_PATCH_EVT))) {
  			WMT_ERR_FUNC("wmt_core: read WMT_PATCH_EVT length(%d, %d) fail(%d)\n", sizeof(WMT_PATCH_EVT),
  				     u4Res, iRet);
-@@ -3018,7 +3075,22 @@
+@@ -3018,7 +3083,53 @@
  		offset += patchSizePerFrag;
  		++fragSeq;
  	}
 +	t1100_patch_active = 0;
  
-+	if (t1100_stock_exact) {
++	if (t1100_quiet_ms > 0) {
++		void __iomem *btif = ioremap(0x1100c000, 0x1000);
++		int w, n = t1100_quiet_ms / 100;
++		INT32 rc;
++		UINT32 hw = 0;
++
++		t1100_rx_bytes = 0;
++		t1100_rx_trace = 1;
++		WMT_INFO_FUNC("t1100: quiet window %d ms, no reset/readback\n", t1100_quiet_ms);
++		for (w = 0; w < n; w++) {
++			if (w % 20 && w != n - 1) {
++				osal_sleep_ms(100);
++				continue;
++			}
++			WMT_INFO_FUNC("t1100: wq %d/%d lsr=0x%08x iir=0x%08x rxq_empty=%d rx_bytes=%d\n",
++				      w, n, btif ? readl(btif + 0x14) : 0,
++				      btif ? readl(btif + 0x8) : 0,
++				      mtk_wcn_stp_is_rxqueue_empty(WMT_TASK_INDX),
++				      t1100_rx_bytes);
++			osal_sleep_ms(100);
++		}
++		t1100_rx_trace = 0;
++		WMT_INFO_FUNC("t1100: quiet end, rx_bytes=%d\n", t1100_rx_bytes);
++		rc = wmt_core_reg_rw_raw(0, 0x80000008, &hw, 0xffffffff);
++		WMT_INFO_FUNC("t1100: after quiet hwcode 0x%08x (ret %d)\n", hw, rc);
++		rc = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
++		WMT_INFO_FUNC("t1100: after quiet wmt reset: %d\n", rc);
++		if (btif)
++			iounmap(btif);
++	}
++
++	if (t1100_stock_exact && t1100_quiet_ms <= 0) {
 +		void __iomem *btif = ioremap(0x1100c000, 0x1000);
 +		int w;
 +
@@ -152,7 +194,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	WMT_WARN_FUNC("wmt_core: patch dwn:%d frag(%d, %d) %s\n",
  		      iRet, fragSeq, fragSize, (!iRet && (fragSeq == fragNum)) ? "ok" : "fail");
  
-@@ -3180,16 +3252,103 @@
+@@ -3180,16 +3291,103 @@
  	return iRet;
  }
  
