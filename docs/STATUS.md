@@ -3883,3 +3883,41 @@ RNDIS-гаджету), делать при физическом доступе �
 - Модуль `wmt_drv` `a723a4d9…`; `wlan_drv_gen3` `f4723c04…`; `mtk_btif_drv`
   `e29eaecb…`. Патч `0014` обновлён (набор + best-effort reset + reinit между
   патчами + readback).
+### 13.11 (22): M43 — BTIF ожил, power-on проходит, Wi-Fi HIF описан в DTS
+
+Три отдельные причины, найденные подряд:
+
+1. **Полярность гейта BTIF.** На MT6771 бит гейта в INFRACFG_AO означает
+   «gate enable»: **1 = клок выключен**. Наш glue писал в SET (`0x80`/`0x88`) и
+   тем самым гасил BTIF — поэтому все записи в `0x1100c000` отбрасывались
+   (M23–M28 искали причину в DEVAPC/CCF). Теперь `m23_clk_enable()` пишет в
+   CLR (`0x84`/`0x8c`) и проверяет, что биты сброшены
+   (`scripts/remote/m23-btif/m23_board.c`). Результат: `sta2=0x1beffb5d
+   (btif gate open)`, `IER readback 0x00000001`, и чип **ответил по STP**:
+   `wmt_core_hw_check: hwcode (chip id) (0x788)`,
+   `SOC_CONSYS.E1 (0x8a00/0x8a00)`.
+2. **ROM-патч по STP вешает чип.** Патч уходит целиком (230 фрагментов,
+   `patch dwn:0`), но следующий же `wmt reset` не получает ответа
+   (`evt len err(rx:0, exp:5)`) и `init_table_3 fail(-1)`. С новым
+   диагностическим параметром `t1100_no_rom_patch=1`
+   (`patches/wifi/0014-common-skip-rom-patch.patch`) power-on **проходит**:
+   `WMT_OPID_PWR_ON (BTIF STP, ROM patch) -> 1`, EPA/coex настраиваются.
+   Доставка патча через EMI (`t1100_emi_rom_patch=1`) тело в EMI кладёт
+   (`readback 0000dbb0 …`), но ROM его не подхватывает — `cpupcr` остаётся
+   `0x1170`.
+3. **В DTS не было узла Wi-Fi HIF.** `t1100_wlan_probe()` передаёт
+   `&HifAhbPDev->dev`, а `HifAhbPDev` заполняет только probe платформенного
+   драйвера `mt-wifi` (match `mediatek,wifi`) — узла не было, указатель был
+   мусором, и `wlanProbe` падал с `Oops … glSetHifInfo+0x60`. Добавлен узел
+   `wifi@180f0000` (коммит ядра `80cf5d36f`): WFDMA `0x180f0000`, CQDMA
+   `0x10212180`, INFRACFG_AO `0x10001000`, CONN remap `0x180e0000`,
+   IRQ 290/118, `clk wifi-dma`, `hardware-values = <0x788 0xa5800 0xa5800>`.
+
+После этого `wlanAdapterStart` доходит до HIF и читает его правильно
+(`WCIR=0x00100788 chipid=0x0788 POR=1`), но `READY=0`, `cpupcr` остаётся в ROM
+(`0x1170`), `wlanProbe = -5`. То есть **единственный оставшийся блокер —
+доставка ROMv4-патча**: без него ROM не запускает загруженную прошивку.
+
+Ядро на плате: `6.12.114-g80cf5d36fd`; модули `wmt_drv`/`wlan_drv_gen3`/
+`mtk_btif_drv` + `cfg80211` собраны под тот же release. Подробности —
+`docs/wifi-port-log.md` §57.
