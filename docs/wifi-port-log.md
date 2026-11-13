@@ -3731,3 +3731,48 @@ MCU перестаёт обслуживать STP** (`REG_READ -3`, включа
 очередном прогоне **потерялись** (обнаружено в M41: пересборка дала модуль
 эпохи M30). На устройстве остаются модули M40 (sha в STATUS). Правки нужно
 переносить в `patches/wifi/*.patch`.
+
+## 64. M42: патчи консолидированы, сборка из чистого `vendor/` воспроизводится (13.11)
+
+### 64.1 Что сделано
+
+* `patches/wifi/README.md` переписан: таблица всех 18 патчей (common/wlan/BTIF),
+  порядок применения и **как пересобрать с нуля**.
+* Найден и устранён процессный риск: `scripts/build-wifi-remote.sh` каждый раз
+  пересоздаёт `work/` из `vendor/` + патчей, поэтому правки M33–M41, сделанные
+  прямо в `work/`, были потеряны. Их сценарии сохранены в репозитории
+  (`scripts/remote/m23-btif/worktree-edits/`) и описаны в README как кандидаты в
+  `0014-common-rom-patch-delivery.patch`.
+
+### 64.2 Проверка воспроизводимости
+
+`scripts/build-wifi-remote.sh --prepare` → чистое `work/` из `vendor/` + патчей:
+
+```
+-- apply 0001-common-port-6.12.patch … -- apply 0013-common-rom-patch-from-firmware.patch
+work trees ready
+```
+
+в `work/common/common_main/core/wmt_ic_soc.c` — 18 вхождений наших маркеров
+(`t1100_rom_patch`, `last fragment`), в `work/wlan/.../ahb.c` — 4
+(`t1100_pwr_on_done`), т.е. **правки воспроизводятся из чистого `vendor/`**.
+
+### 64.3 Сборка
+
+`scripts/build-wifi-remote.sh` (out-дерево `$WIFI_DIR/out`,
+release `6.12.114-g675178729a-dirty`): common rc=0 errors=0, wlan rc=0 errors=0.
+
+```
+e7a3c40ded9bfb1001eac85dcb0f5c4c987d81e49d2e1e439cfbbd2809461d40  common/wmt_drv.ko
+627f9ab211eae1711754cbb4b8aaed60cc2f9f781d4a835ea0f781bf15a4fa61  wlan/wlan_drv_gen3.ko
+```
+
+Пересборка под деплой (`KERNEL_OUT=/home/l/t1100-merge2-out`) в этом рубеже
+**не завершена**: параллельный прогон другого агента пересоздаёт `work/`
+(`Makefile` и `.ko` исчезают между `--prepare` и сборкой). На устройстве
+остаются модули M40 (не трогали).
+
+### 64.4 Итог
+
+Патчи — единый источник правды; всё остальное (`work/`) — производное.
+Следующий рубеж — по выводу `reverse-engineer`.
