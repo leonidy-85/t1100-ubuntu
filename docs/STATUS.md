@@ -3560,6 +3560,9 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
   отвечает на `WMT_RESET_CMD {01 07 01 00 04}` (`rx:0`) → assert → STP закрыт →
   `init_table_3 fail`; `cpupcr=0x14eea` (ROM), `WLAN_READY=0`, `wlan0` нет.
 - BTIF здоров: `IER=1`, `IIR=1`, `LSR=0x60`, IRQ 395 = 94 028 (RX шёл),
-  `IFR0=0x1befff5d` (клок открыт). Следующее: прогон без reset
-  (`t1100_skip_reset`) и/или подавление assert на время патча —
-  `refs/m30-wmt-reset-blocker.md`, §52 журнала.
+  `IFR0=0x1befff5d` (клок открыт).
+- Прогон без reset (`t1100_skip_reset=1`): патч доставлен, `wlan_drv` доходит до
+  `wlanProbe`, но `cpupcr` остаётся в ROM (`0x14f08`) ⇒ патч **сам не
+  стартует**, стартовая команда нужна, а ROM её не выполняет. Следующее —
+  подавить assert на время патча и/или найти вендорскую «стартовую»
+  последовательность для icId `0x0788` (`refs/m30-wmt-reset-blocker.md`, §52).
