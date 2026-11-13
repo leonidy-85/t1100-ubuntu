@@ -3581,3 +3581,16 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
   всё равно сбрасывается coredump/assert-путём (`set f/w assert`) ⇒ ретраи
   падают с `-2`, `cpupcr=0x14ef8` (ROM), `wlan0` нет. Следующий шаг — заглушить
   весь coredump/assert-путь на время патча (`refs/m31-wmt-loader-and-reset.md`).
+
+## 13.11 (19): M32 — best-effort reset; стек дошёл до MCIF `driver own`, READY не встаёт
+
+- `WMT_RESET_CMD` теперь best-effort (`t1100: reset ack: no`, STP не рвётся),
+  `wmt_lib_hw_rst` не чистит `WMT_STAT_STP_*` при `t1100_patch_active` — `-2`
+  между попытками больше нет.
+- `cpupcr` до/после патча — тот же ROM-цикл (`0x19d8…0x14f12`), патч передан
+  (230/230), но не применён/не стартовал.
+- `wlan_drv` (stage=3) доходит до MCIF: `nicpmSetDriverOwn: DRIVER OWN,
+  status=0 count=513`, затем `wlanAdapterStart: nicpmSetDriverOwn() failed`
+  (READY=0) → `wlanProbe -5`; `wlan0` нет. Следующий шаг — последний фрагмент
+  патча (229 ack, 230-й молчит) и «patch info» из `wmt_launcher`
+  (`refs/m32-best-effort-reset.md`, §54).

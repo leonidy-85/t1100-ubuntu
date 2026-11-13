@@ -3389,3 +3389,45 @@ coredump/assert-путь WMT (`mtk_wcn_stp_coredump_start_ctrl: set f/w assert (
 (`wmt_core_set_coredump_state`, `mtk_wcn_stp_coredump_start_ctrl`,
 `wmt_lib_hw_rst`), чтобы STP дожил до 2-й попытки reset.
 Подробности: `refs/m31-wmt-loader-and-reset.md`.
+
+## 54. M32: best-effort reset — стек доходит до MCIF `driver own`, READY не встаёт (13.11)
+
+### 54.1 Правки
+
+* `wmt_lib_hw_rst()` не чистит `WMT_STAT_STP_OPEN/EN/...` при `t1100_patch_active`
+  (это и давало `-2` на ретраях, `wmt_lib.c:2096-2097`);
+* `WMT_RESET_CMD` — **best-effort**: отправили, EVT не пришёл → печатаем
+  `t1100: reset ack: no` и продолжаем (`iRet = 0`), STP остаётся открытым.
+
+### 54.2 `cpupcr` до/после патча (10 замеров по 10 мс)
+
+```
+during-power-on: 0x019e6 0x14eea 0x14edc 0x019fc 0x14ef8 0x055b4 0x01a02 0x14f08 0x019e6 0x14ef8
+after-patch:     0x14f08 0x019d8 0x14f0e 0x019e6 0x055be 0x01a02 0x14ed0 0x14ee4 0x14f08 0x14f12
+```
+
+Тот же ROM-цикл ⇒ патч передан (230/230), но не применён/не стартовал.
+
+### 54.3 Полный `wlan`-лог (stage=3)
+
+```
+HifAhbPltmProbe; t1100_wlan_probe: CONSYS already up (wmt_drv BTIF STP)
+wlanNetCreate: net_device allocated; glLoadNvram: Nvram not available
+nicpmSetDriverOwn:(NIC ERROR) LP fail, Timeout(516ms) Bus Error[0] Resetting[0] NoAck[0] Cnt[0]
+wlanPollingCpupcr: 00014f08 / 000055c2 / 000055ba / 00014ee4
+nicpmSetDriverOwn:(NIC INFO) DRIVER OWN, status=0 count=513
+wlanAdapterStart:(INIT ERROR) nicpmSetDriverOwn() failed!
+wlanProbe failed → -5 ; mtk_wcn_stp_psm_disable: STP Not Ready
+```
+
+Стек дошёл до MCIF-рукопожатия (существенно дальше M22–M25), но `WLAN_READY`
+(`WCIR[21]`) = 0 ⇒ `wlanAdapterStart` падает, `wlan0` нет.
+
+### 54.4 Вывод и следующий шаг
+
+ROM подтверждает фрагменты 1…229 и **молчит на 230-м** — значит блокер в
+последнем фрагменте, а не в «start»-команде. Проверить, что вендор передаёт в
+ядро как «patch info»: в `wmt_launcher` есть `patch info:0x%02x × 8` (8 байт) и
+`read patch info:0x%02x × 4`; возможно, для ROMv4 нужен ещё `u4PatchType`
+(`0x0fe3ffff` из заголовка), без которого ROM отбрасывает хвост. Факты —
+`refs/m32-best-effort-reset.md`.
