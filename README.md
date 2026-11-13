@@ -5,7 +5,7 @@
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
 > **Статус (14.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
-> mainline 6.12.114 + патчи 0001–0067 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
+> mainline 6.12.114 + патчи 0001–0068 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
 > заряжается** (`mt6370-charger`; драйвера счётчика заряда — battery gauge —
@@ -20,7 +20,8 @@
 > Тач HX83102E работает (`boot_touch8`, native portrait; KWin сам поворачивает —
 > 0051). **Микрофон работает:** маршрут `UL1_CH1/CH2 ADDA_UL` и `PGA L/R = AIN0`
 > применяет `t1100-audio-mixer.service`, PipeWire source `alsa_mic` — по
-> умолчанию; `arecord`/`parecord` дают ненулевой сигнал. Wi-Fi/BT в mainline
+> умолчанию; `arecord`/`parecord` дают ненулевой сигнал. `PGA Volume` (4,4)
+> теперь сохраняется после закрытия capture (патч 0068). Wi-Fi/BT в mainline
 > не поддержаны, сеть — только RNDIS.
 > **USB host/OTG (0060/0061/0067):** Type-C переведён в dual-role, host-режим
 > работает — флешка `Phison 13fe:5500` определяется как `sda` (7.4 GB), MT6370
@@ -162,7 +163,7 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | Блок | Состояние |
 |---|---|
 | LK / образ boot.img | ✅ LK принимает наш DTB (4 правила, `docs/lk-dtb-rules.md`), перепаковка `scripts/repack_boot.py` |
-| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0067` (0035 отключён, 0020 заменён на 0060) |
+| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0068` (0035 отключён, 0020 заменён на 0060) |
 | Память/PSCI/GIC | ✅ |
 | PMIC MT6358 / питание | ✅ регуляторы (rails) MT6358 и power-домены SCPSYS регистрируются (0012); зарядка MT6370 `online=1/Charging`, но без счётчика заряда (battery gauge) — процентов в `/sys/class/power_supply` нет (0031; TCPC dual-role, 0066/0067); `poweroff` снимает питание через RTC MT6358 (0034; при подключённом кабеле плата стартует снова — «boot on charger») |
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |

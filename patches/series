@@ -62,3 +62,4 @@
 0064-arm64-dts-t1100-enable-CPU-thermal-zone.patch
 0066-arm64-dts-t1100-enable-typec-pd.patch
 0067-arm64-dts-t1100-make-the-Type-C-port-dual-role-for-USB-host.patch
+0068-ASoC-mt6358-keep-the-microphone-PGA-gain-on-capture-stop.patch
