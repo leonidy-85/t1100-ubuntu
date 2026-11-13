@@ -4619,3 +4619,27 @@ t1100-sec: dst=0x000a5800 len=33776 ucEnc=1 ucKIdx=0 dataMode=0x80000001
   = **все нули** (файл: `f5efd18e 96eba79e 0d352fae a3b48aec …`).
 - Пакеты: `TxByteCount=2056 PQ_ID=0xc000 PktTypeID=0xa0 seq=0 len=2048` (первые 8).
 - `WIFI_START` → `READY=0`, `POR=1`, `cpupcr` до `0x14eea`; `wlan0` нет.
+
+## 78. M77: константы потока совпадают, TX-дескрипторы не двигаются → вывод (в) (14.11)
+
+Константы (`include/nic_init_cmd_event.h`):
+
+```
+#define INIT_CMD_PQ_ID              (0x8000)
+#define INIT_CMD_PACKET_TYPE_ID     (0xA0)
+#define INIT_CMD_PDA_PQ_ID          (0xC000)     ← мы шлём 0xC000 ✔
+#define INIT_CMD_PDA_PACKET_TYPE_ID (0xA0)       ← мы шлём 0xA0   ✔
+```
+
+Состояние TX-пути после первых 8 пакетов секции:
+
+```
+t1100-tx: WTMCR(0xb4)=0x00000000  WSR(0xd8)=0x00000000  WASR(0x20)=0x00010200
+```
+
+`WTMCR`/`WSR` — нули, то есть счётчики/статус DMA-передачи **не двигаются**; readback
+`0x000a5800` — нули; `WIFI_START` → `READY=0`, `POR=1`.
+
+**Вывод (в): пакеты не уходят в DMA.** Конфигурация секции подтверждается, пакеты формируются и
+принимаются `nicTxInitCmd` локально, но передача по HIF/WFDMA не происходит. Это архитектурный
+вопрос HIF-пути, а не «неверная константа» (вариант (а) снят сверкой).
