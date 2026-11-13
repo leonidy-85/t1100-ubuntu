@@ -4249,3 +4249,46 @@ hdr a3 40 61 44: txseq 4 / txack 3, type 4, len 0x061 = 97 = 5 (WMT cmd 01 01 5d
 **Итог M51:** дамп доходит целиком и заканчивается сам; чип после него молчит 20 с и не
 перезагружается; связь не оживает, потому что STP переведён в assert-режим. Ждать дольше
 бесполезно — вопрос не в таймауте.
+
+## 68. M52: STP больше не блокирует, но чип после дампа не отвечает ни на одну WMT-команду (13.11)
+
+### 68.1 Правка
+
+`t1100_no_assert_mode=1`: ветка `stp_core.c:2255` (`STP_TASK_INDX` + `rx_counter==0` + STP-dbg)
+теперь только логирует `t1100: would set f/w assert (no_assert_mode)` и **не** вызывает
+`mtk_wcn_stp_coredump_start_ctrl(1)`. Проверено, что снят и второй эффект: в логе снова
+`stp_tx_timeout_handler: call retry btm retry wq ...` (ветка «Starting coredump, skip tx retry»
+не срабатывает).
+
+### 68.2 Тайминги (прогон `stock_exact`, `quiet_ms=5000`, оба патча)
+
+```
+116.422  hwcode 0x788
+116.452  downloading 1_1 (seq 1) 314092, addr 218007f0
+116.925  хвост → 34 × type=5 + ;;CONNSYS core dump start ..   (за ~1 мс)
+116.926  would set f/w assert (no_assert_mode) — STP остаётся живым
+117.026  quiet window 5000 ms
+122.225  quiet end, rx_bytes=0                  (50 × 100 мс, ни байта)
+122.226  Tx REG_READ hwcode (01 08 10 00 02 01 00 01 08 00 00 80 …) → ответа нет
+124.294  Tx wmt reset (01 02 01 00 08)          → ответа нет
+126.344  STP-DBG dump package (rx:0), 128.8/131.0 «call retry btm retry wq»
+130.661  wmt_core_init_script_retry: read (wmt reset) iRet(-1) evt len err(rx:0, exp:5)
+```
+
+То есть ретраи идут (STP здоров), но чип **не отвечает вообще** — ни на `REG_READ`, ни на
+`WMT_RESET`. Дальше: `reset ack after patch 0: no`, `1_0` → `download -> -1` уже не мгновенно,
+а по 2-секундному таймауту (адресная команда не подтверждена), затем новый power-cycle
+(`hwcode 0x788`) и всё повторяется.
+
+### 68.3 Что это значит
+
+`-2` из M51 был блокировкой **нашего** слоя; после её снятия картина чистая: чип после дампа
+замолкает полностью, а `cpupcr` нового цикла — `0x0` (ядро в это время ещё не запущено).
+Дамп печатает `;;[CONNSYS]core dump start ..`, но `[core dump end]` (строка есть в
+`ROMv4_be_patch_1_1_hdr.bin`, offset `0x3fdd4`) **не приходит** — код набора патчей
+останавливается внутри процедуры дампа.
+
+При этом наша же обвязка говорит, что дамп никто не вычитывает:
+`wmt_lib_cmb_rst: coredump mode == 0. Connsys coredump is disabled.` и
+`++ start to read paged dump and paged trace ++/--` без единого чтения (флаг
+`CFG_WMT_COREDUMP_ENABLE` = 0, `init_table_6` не отправляется).
