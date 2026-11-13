@@ -1,6 +1,6 @@
 diff -u -r a/common_main/core/wmt_ctrl.c b/common_main/core/wmt_ctrl.c
---- a/common_main/core/wmt_ctrl.c	2026-11-13 14:08:41.457125575 +0000
-+++ b/common_main/core/wmt_ctrl.c	2026-11-13 14:08:41.459243920 +0000
+--- a/common_main/core/wmt_ctrl.c	2026-11-13 14:12:13.109300395 +0000
++++ b/common_main/core/wmt_ctrl.c	2026-11-13 14:12:13.111517296 +0000
 @@ -34,6 +34,11 @@
  #include "osal.h"
  
@@ -14,8 +14,8 @@ diff -u -r a/common_main/core/wmt_ctrl.c b/common_main/core/wmt_ctrl.c
  #include "wmt_lib.h"
  #include "wmt_dev.h"
 diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
---- a/common_main/core/wmt_ic_soc.c	2026-11-13 14:08:41.456056700 +0000
-+++ b/common_main/core/wmt_ic_soc.c	2026-11-13 14:08:41.458201664 +0000
+--- a/common_main/core/wmt_ic_soc.c	2026-11-13 14:12:13.108202344 +0000
++++ b/common_main/core/wmt_ic_soc.c	2026-11-13 14:12:13.110187292 +0000
 @@ -40,6 +40,40 @@
   */
  #include <linux/firmware.h>
@@ -66,7 +66,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  
  #define CFG_WMT_MULTI_PATCH (1)
  
-@@ -1154,6 +1188,104 @@
+@@ -1154,6 +1188,114 @@
  	return 0;
  }
  
@@ -110,10 +110,20 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
 +		WMT_INFO_FUNC("t1100: redownload_patch_set: patch %d/%d -> %d\n", i, cnt, ret);
 +		if (ret)
 +			break;
-+		ret = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
-+		WMT_INFO_FUNC("t1100: redownload_patch_set: reset ack after patch %d: %s\n",
-+			      i, ret ? "no" : "yes");
-+		ret = 0;	/* best effort, as in sw_init */
++		if (t1100_spm_partial) {
++			/* T1100 M61: the tail of a patch leaves the MCU in its
++			 * assert/dump state; only the SPM-partial reset brings it
++			 * back, so use it between the patches. */
++			ret = mtk_wcn_consys_warm_reset();
++			WMT_INFO_FUNC("t1100: redownload_patch_set: spm-partial after patch %d, hwcode ret %d\n",
++				      i, ret);
++			ret = 0;
++		} else {
++			ret = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
++			WMT_INFO_FUNC("t1100: redownload_patch_set: reset ack after patch %d: %s\n",
++				      i, ret ? "no" : "yes");
++			ret = 0;	/* best effort, as in sw_init */
++		}
 +	}
 +	return ret;
 +}
@@ -171,7 +181,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  static INT32 mtk_wcn_soc_sw_init(P_WMT_HIF_CONF pWmtHifConf)
  {
  	INT32 iRet = -1;
-@@ -1225,6 +1357,8 @@
+@@ -1225,6 +1367,8 @@
  	/* 6.2 Read patch number */
  	/* If patch number is 0, it's first time connys power on */
  	patch_num = mtk_wcn_soc_get_patch_num();
@@ -180,7 +190,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	if (patch_num == 0) {
  		if (t1100_rom_patch[0]) {
  			/* T1100: the patch comes from /lib/firmware, not from
-@@ -1259,6 +1393,8 @@
+@@ -1259,6 +1403,8 @@
  	}
  #endif
  	/* 6.3 Multi-patch Patch download */
@@ -189,7 +199,24 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_BEFORE_SEND_DOWNLOAD_PATCH);
  	for (patch_index = 0; patch_index < patch_num; patch_index++) {
  		iRet = mtk_wcn_soc_patch_dwn(patch_index);
-@@ -1281,9 +1417,46 @@
+@@ -1269,6 +1415,16 @@
+ 		if (patch_index == (patch_num - 1))
+ 			WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_BEFORE_CONNSYS_RESET);
+ 
++		if (t1100_spm_partial) {
++			/* T1100 M61: SPM-partial between the patches of the set */
++			int t1100_rc = mtk_wcn_consys_warm_reset();
++
++			WMT_INFO_FUNC("t1100: spm-partial after patch %u: hwcode ret %d\n",
++				      patch_index, t1100_rc);
++			if (patch_index == (patch_num - 1))
++				break;	/* last patch: nothing more to send */
++			continue;
++		}
+ 		/* T1100: the first post-patch command is sometimes swallowed
+ 		 * while the ROM applies the patch; retry it a few times. */
+ 		{
+@@ -1281,9 +1437,46 @@
  							    osal_array_size(init_table_3));
  			}
  		}
@@ -239,7 +266,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  		}
  	}
  
-@@ -1320,7 +1493,7 @@
+@@ -1320,7 +1513,7 @@
  	iRet = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
  	if (iRet) {
  		WMT_ERR_FUNC("init_table_3 fail(%d)\n", iRet);
@@ -248,7 +275,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	}
  #endif
  
-@@ -2934,6 +3107,7 @@
+@@ -2934,6 +3127,7 @@
  	/* send all fragments */
  	offset = sizeof(WMT_PATCH_CMD);
  	fragSeq = 0;
@@ -256,7 +283,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	while (fragSeq < fragNum) {
  		WMT_DBG_FUNC("patch size(%d) fragNum(%d)\n", patchSize, fragNum);
  		if (fragSeq == (fragNum - 1)) {
-@@ -2976,7 +3150,8 @@
+@@ -2976,7 +3170,8 @@
  		 * init_table_3) fails with -2 (wmt_ctrl_tx_ex: "STP is not
  		 * enabled yet").  So do not read an EVT for the last fragment.
  		 */
@@ -266,7 +293,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  			WMT_INFO_FUNC("t1100: last fragment sent, ROM jumps (no EVT expected)\n");
  			iRet = 0;
  			++fragSeq;
-@@ -2987,6 +3162,9 @@
+@@ -2987,6 +3182,9 @@
  		}
  
  		iRet = wmt_core_rx(evtBuf, sizeof(WMT_PATCH_EVT), &u4Res);
@@ -276,7 +303,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  		if (iRet || (u4Res != sizeof(WMT_PATCH_EVT))) {
  			WMT_ERR_FUNC("wmt_core: read WMT_PATCH_EVT length(%d, %d) fail(%d)\n", sizeof(WMT_PATCH_EVT),
  				     u4Res, iRet);
-@@ -3018,7 +3196,71 @@
+@@ -3018,7 +3216,71 @@
  		offset += patchSizePerFrag;
  		++fragSeq;
  	}
@@ -348,7 +375,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	WMT_WARN_FUNC("wmt_core: patch dwn:%d frag(%d, %d) %s\n",
  		      iRet, fragSeq, fragSize, (!iRet && (fragSeq == fragNum)) ? "ok" : "fail");
  
-@@ -3180,16 +3422,103 @@
+@@ -3180,16 +3442,103 @@
  	return iRet;
  }
  

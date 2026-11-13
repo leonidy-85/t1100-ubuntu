@@ -4170,3 +4170,15 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
 - Значит после `1_1` чип опять уходит в assert/dump (M50) — обычный `init_table_3` его не
   возвращает (M45/M46), а SPM-partial возвращает (M59).
 - Модули: `wmt_drv` `48c754dc…`, `wlan_drv_gen3` `156c4688…`, `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (52): M61 — SPM-partial между патчами: **оба патча доставлены** (`1_1 -> 0`, `1_0 -> 0`)
+
+- `mtk_wcn_wmt_redownload_patch_set()` при `t1100_spm_partial=1`: после каждого патча SPM-partial
+  вместо `init_table_3`. Итог прогона: `1_1 -> 0` → SPM-partial `hwcode 0x788 (ret 0)` →
+  **`1_0 -> 0`** → SPM-partial `hwcode 0x788` → `rc=0`. Впервые полный набор уложен в одном
+  сеансе после сброса.
+- Дальше WLAN-секции не пошли: `Firmware download configuration failed! idx 0, dst 0x020a1000,
+  len 28032` через ~1 с после набора; `wlanProbe -5`. `WIFI_START` до этого: оба адреса
+  status=0, `WCIR=0x00100788` READY=0, `mbox0=0x02000020`, `WASR=0x00000300`, `cpupcr=0x5608`.
+- Модуль `wmt_drv` `ef0ea37c…`; `wlan_drv_gen3` `156c4688…`; `mtk_btif_drv` `e29eaecb…`;
+  `wlan0` нет.
