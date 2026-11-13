@@ -3066,3 +3066,73 @@ write в BTIF (`IER ← 0xa5a5a5a5`) не оставил следа: `VIO_STA` �
 нашем коде) и вопрос только в том, почему у нас эти записи не проходят.
 Нули и там ⇒ причина write-dead не в DEVAPC; следующий кандидат —
 `devapc_mpu_ao@10015000` (DMPU, у нас читается нулями) или APB-мост PERI.
+
+## 48. M27: стек собран заново на WEXT-ядре, узлы CONSYS в DTS, STP пошёл в чип (13.11)
+
+### 48.1 Что поменялось в сборке
+
+Вендорский стек собирается только против ядра с `CONFIG_WIRELESS_EXT=y`
+(`struct net_device` в модуле должен совпадать с ядром), поэтому основной
+out-тree теперь собирается сразу с Wi-Fi-фрагментом:
+
+```sh
+EXTRA_FRAGMENTS=configs/t1100-wifi.fragment scripts/build-kernel-remote.sh --modules
+KERNEL_OUT=/home/l/t1100-ubuntu-build/out LOCALVERSION=-g<sha> scripts/build-wifi-remote.sh
+```
+
+Релиз `6.12.114-g92c5e7cc89`, vermagic у `wmt_drv.ko`, `wlan_drv_gen3.ko`,
+`mtk_btif_drv.ko`, `cfg80211.ko`, `mac80211.ko`, `rfkill.ko` совпадает.
+
+### 48.2 Без узлов CONSYS в DTS драйвер не пробнится
+
+`grep -rn "mediatek,mt6771-consys" arch/arm64/boot/dts/mediatek/` не находил
+ничего: узлы жили только в несохранённом `.dts.orig`. Добавлены в
+`mt6771-fplus-t1100.dts` (коммит `92c5e7cc8` в `linux-t1100`): `consys@18070000`
+с четырьмя окнами `reg` (CONN MCU 0x18070000, TOP_RGU 0x10007000,
+INFRACFG_AO 0x10001000, SPM 0x10006000), IRQ 289/291, `vcn18/vcn28/vcn33-supply`
+и `memory-region = <&consys_reserve_memory>`; сама память — 2 МиБ
+`alloc-ranges` (не `reg`, иначе LK виснет в `reserved_memory_conflict_check`).
+
+### 48.3 Вендорский модуль без загрузчика не стартует
+
+В модульной сборке единственный `module_init` — `wmt_detect_driver_init`;
+`WMT_init()` вызывается только через `mtk_wcn_common_drv_init()`, а его зовёт
+ioctl `COMBO_IOCTL_DO_MODULE_INIT` на `/dev/wmtdetect`. На Android это делает
+`wmt_loader`. Написан `tools/device/wmt-loader.c`
+(`SET_CHIP_ID` = `0x6771` → `DO_MODULE_INIT`). Плюс `0011`: без загрузчика
+чип-тип остаётся `INVALID`, и `wmt_plat_init()` идёт combo-путём (SDIO) вместо
+SOC; патч трактует `INVALID` как SOC для MT6631.
+
+### 48.4 WMT_SOC.cfg
+
+`wmt_lib_init()` = -1 без `/lib/firmware/WMT_SOC.cfg`. Конфиг — текст, не блоб;
+`rootfs-overlay/lib/firmware/WMT_SOC.cfg` собрана из имён полей `wmt_conf.c` со
+значениями vendor-default. Формат: `key = value`, `#` не комментарий.
+
+### 48.5 Что видно на железе
+
+`mtk_wmt` регистрируется, probe проходит: EMI-регион найден на `0xbfc00000`
+(как у стока), BTIF после power-on отдаёт реальные значения (`LSR=0x60`,
+`TRI_LVL=0x5a`, `HANDSHAKE=0x03`), `btif_open succeed`, `CONSYS-HW-PWR-ON,
+finish(0)`. STP реально передаёт `Tx:pT<WMT>`, но **чип не отвечает**:
+`wmt_dev_rx_timeout(2000)`, `Rx REG_EVT fail!`, `get hwcode fail (-3)`,
+`stp_init fail`, `Send Assert command`. `0x18070008` (chip id) = 0,
+`0x18070160` (cpupcr) = 0, прерываний 394/395 в `/proc/interrupts` нет.
+
+### 48.6 Диагноз и патч 0012
+
+`cpupcr = 0` — у MCU нет такта: вендорский `consys_clock_buffer_ctrl()` делает
+`KERNEL_clk_buf_ctrl(CLK_BUF_CONN, true)` (XO_WCN, 26 МГц), а наш порт (0001)
+заглушил это в no-op — в mainline нет ни `clk_buf`-драйвера, ни узла буфера.
+Вендорский `clkbuf_v1/mt6771/mtk_clkbuf_hw.c` (realme android-13.0) показывает,
+что это три записи: MT6358 `DCXO_CW00` (0x788) поле `[4:3] = WCN_EN_M`,
+`TOP_SPI_CON1` (0x44e) бит 0 `RG_SRCLKEN_IN3_EN` и AP-сторонний
+`pwrap+0x184` бит 1 `DCXO_CONN_ENABLE`. Реализовано в
+`patches/wifi/0012-common-xo-wcn-clock-buffer.patch` (regmap берётся у
+pwrap-устройства через `of_find_compatible_node("mediatek,mt8183-pwrap")` →
+`of_find_device_by_node` → `dev_get_regmap`; pwrap наследуется из
+`mt8183.dtsi`, своего узла в `mt6771.dtsi` нет).
+
+Модуль собран (`build/wifi/common/wmt_drv.ko`, 1 136 328 Б), на железе ещё не
+проверен — плата после `reboot -f` не вернула USB-гаджет (нет `enx*`,
+`ping 10.42.66.66` — 100% потерь).
