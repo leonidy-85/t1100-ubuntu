@@ -4603,3 +4603,19 @@ power-gating).
 ENCRYPTION_MODE» требует проверки: параметр `wlanImageSectionConfig(..., IN UINT_8 ucEnc, ...)`
 и до правки получал `TRUE`, и после — `ucEnc` из заголовка; если у секции 1 в заголовке `ucEnc=1`,
 `u4DataMode` не изменился бы вообще. Проверка — лог `ucEnc` рядом с `u4DataMode`.
+
+## 77. M76: `ucEnc=1` у обеих секций → правка M74 не влияла; readback после download = нули (13.11)
+
+```
+t1100-sec: dst=0x020a1000 len=28032 ucEnc=1 ucKIdx=0 dataMode=0x80000009
+t1100-sec: dst=0x000a5800 len=33776 ucEnc=1 ucKIdx=0 dataMode=0x80000001
+```
+
+- `ucEnc=1` у секции 1 **и до правки** (аргумент `fgEnc=TRUE`), значит `u4DataMode` не менялся —
+  вывод M74 («всем секциям ставился ENCRYPTION_MODE») был ошибкой интерпретации: бит
+  `ENCRYPTION_MODE` = BIT(0), `0x80000001` = ACK+ENC, `0x80000009` = ACK+ENC+RESET (reset только
+  у `index == 0`). Правка M74 ни на что не повлияла.
+- Readback **сразу после успешного** `wlanImageDividDownloadByEntry`: `0x000a5800 … 0x000a583c`
+  = **все нули** (файл: `f5efd18e 96eba79e 0d352fae a3b48aec …`).
+- Пакеты: `TxByteCount=2056 PQ_ID=0xc000 PktTypeID=0xa0 seq=0 len=2048` (первые 8).
+- `WIFI_START` → `READY=0`, `POR=1`, `cpupcr` до `0x14eea`; `wlan0` нет.
