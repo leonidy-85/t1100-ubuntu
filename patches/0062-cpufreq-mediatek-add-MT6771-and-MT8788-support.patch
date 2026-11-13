@@ -1,0 +1,52 @@
+From 603b8d45df4be36a4ed329ec3dd53f3c68fee15a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=D0=90=D0=BD=D0=B4=D1=80=D0=B5=D0=B9=20=D0=9C=D0=B0=D1=80?=
+ =?UTF-8?q?=D0=BA=D0=B8=D0=BD?= <py6on@yandex.ru>
+Date: Fri, 13 Nov 2026 04:02:29 +0300
+Subject: [PATCH] cpufreq: mediatek: add MT6771 and MT8788 support
+
+
+Local T1100: tested on MT6771 with mtk-cpufreq; CCI devfreq is disabled,
+so ccifreq_supported is false. Without this, cpufreq-dt registers first
+and changes frequency without the CPU voltage supplies.
+
+---
+ drivers/cpufreq/mediatek-cpufreq.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/drivers/cpufreq/mediatek-cpufreq.c b/drivers/cpufreq/mediatek-cpufreq.c
+index 663f615..f12184d 100644
+--- a/drivers/cpufreq/mediatek-cpufreq.c
++++ b/drivers/cpufreq/mediatek-cpufreq.c
+@@ -719,6 +719,20 @@ static const struct mtk_cpufreq_platform_data mt8183_platform_data = {
+ 	.ccifreq_supported = true,
+ };
+ 
++/*
++ * MT6771 has the same CPU DVFS controller as MT8183, but the CCI devfreq
++ * device is deliberately disabled on this port, so do not request the CCI
++ * frequency link (mtk_cpufreq_set_target() would dereference cci_dev).
++ */
++static const struct mtk_cpufreq_platform_data mt6771_platform_data = {
++	.min_volt_shift = 100000,
++	.max_volt_shift = 200000,
++	.proc_max_volt = 1150000,
++	.sram_min_volt = 0,
++	.sram_max_volt = 1150000,
++	.ccifreq_supported = false,
++};
++
+ static const struct mtk_cpufreq_platform_data mt8186_platform_data = {
+ 	.min_volt_shift = 100000,
+ 	.max_volt_shift = 250000,
+@@ -748,6 +762,8 @@ static const struct of_device_id mtk_cpufreq_machines[] __initconst __maybe_unus
+ 	{ .compatible = "mediatek,mt817x", .data = &mt2701_platform_data },
+ 	{ .compatible = "mediatek,mt8173", .data = &mt2701_platform_data },
+ 	{ .compatible = "mediatek,mt8176", .data = &mt2701_platform_data },
++	{ .compatible = "mediatek,mt6771", .data = &mt6771_platform_data },
++	{ .compatible = "mediatek,mt8788", .data = &mt6771_platform_data },
+ 	{ .compatible = "mediatek,mt8183", .data = &mt8183_platform_data },
+ 	{ .compatible = "mediatek,mt8186", .data = &mt8186_platform_data },
+ 	{ .compatible = "mediatek,mt8365", .data = &mt2701_platform_data },
+-- 
+2.53.0
+

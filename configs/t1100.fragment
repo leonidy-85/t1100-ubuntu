@@ -175,3 +175,12 @@ CONFIG_SND_SOC=y
 CONFIG_SND_SOC_MT8183=y
 CONFIG_SND_SOC_MT6358=y
 CONFIG_SND_SOC_MT6771_MT6358=y
+
+# --- CPU DVFS: use mtk-cpufreq, not cpufreq-dt -------------------------------
+# MT6771 has the MT8183-style CPU DVFS controller; the board DTS supplies the
+# OPP tables and proc/sram regulators. cpufreq-dt must stay off: it registers
+# first and changes the CPU clock without touching vproc/vsram (undervolt hang).
+CONFIG_ARM_MEDIATEK_CPUFREQ=y
+# CONFIG_CPUFREQ_DT is not set
+# MTK thermal efuse calibration is not validated on MT6771 yet; keep it off.
+# CONFIG_MTK_THERMAL is not set

@@ -57,3 +57,5 @@
 0059-arm64-dts-t1100-enable-GPU-DVFS-with-a-safe-OPP-subset.patch
 0060-phy-mediatek-tphy-software-role-switch-for-MT6771.patch
 0061-arm64-dts-t1100-enable-USB-role-switch-and-OTG-VBUS.patch
+0062-cpufreq-mediatek-add-MT6771-and-MT8788-support.patch
+0063-arm64-dts-t1100-add-CPU-OPP-tables-and-supplies.patch
