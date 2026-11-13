@@ -1,6 +1,6 @@
 diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
---- a/common/wlan_lib.c	2026-11-13 21:00:53.367669866 +0000
-+++ b/common/wlan_lib.c	2026-11-13 21:00:53.369499399 +0000
+--- a/common/wlan_lib.c	2026-11-13 21:06:14.576835641 +0000
++++ b/common/wlan_lib.c	2026-11-13 21:06:14.577997002 +0000
 @@ -30,6 +30,8 @@
   ********************************************************************************
   */
@@ -644,7 +644,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  		break;
  	}
  
-@@ -2750,6 +3228,15 @@
+@@ -2750,6 +3228,24 @@
  	}
  
  	prCmdInfo->u2InfoBufLen = sizeof(INIT_HIF_TX_HEADER_T) + (UINT_16) u4ImgSecSize;
@@ -655,12 +655,21 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 +			pr_info("t1100-pkt %d: TxByteCount=%u PQ_ID=0x%x PktTypeID=0x%x seq=%u len=%u\n",
 +				t1100_pkt, prCmdInfo->u2InfoBufLen, INIT_CMD_PDA_PQ_ID,
 +				INIT_CMD_PDA_PACKET_TYPE_ID, 0, u4ImgSecSize);
++			if (t1100_pkt == 8) {	/* M77: is the TX path moving? */
++				UINT_32 v_wtmcr = 0, v_wsr = 0, v_wasr = 0;
++
++				HAL_MCR_RD(prAdapter, MCR_WTMCR, &v_wtmcr);
++				HAL_MCR_RD(prAdapter, MCR_WSR, &v_wsr);
++				HAL_MCR_RD(prAdapter, 0x0020, &v_wasr);
++				pr_info("t1100-tx: WTMCR(0xb4)=0x%08x WSR(0xd8)=0x%08x WASR(0x20)=0x%08x\n",
++					v_wtmcr, v_wsr, v_wasr);
++			}
 +		}
 +	}
  
  	/* 2. Setup common CMD Info Packet */
  	prInitHifTxHeader = (P_INIT_HIF_TX_HEADER_T) (prCmdInfo->pucInfoBuffer);
-@@ -2865,7 +3352,13 @@
+@@ -2865,7 +3361,13 @@
  	}
  }
  
@@ -675,7 +684,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm previously firmware download is done without error
-@@ -2985,7 +3478,8 @@
+@@ -2985,7 +3487,8 @@
  	return u4Status;
  }
  
@@ -685,7 +694,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm the status of
-@@ -3119,10 +3613,14 @@
+@@ -3119,10 +3622,14 @@
  			continue;
  		}
  		/* 5.2 Send CMD Info Packet */
@@ -700,7 +709,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  		break;
  	};
-@@ -4754,8 +5252,8 @@
+@@ -4754,8 +5261,8 @@
  *
  * @param prAdapter      Pointer of Adapter Data Structure
  *
@@ -711,7 +720,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  */
  /*----------------------------------------------------------------------------*/
  ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
-@@ -4770,8 +5268,8 @@
+@@ -4770,8 +5277,8 @@
  * @brief This function is to update current ACPI state only
  *
  * @param prAdapter      Pointer of Adapter Data Structure
@@ -722,7 +731,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  *
  * @return none
  */
-@@ -4779,7 +5277,7 @@
+@@ -4779,7 +5286,7 @@
  VOID wlanSetAcpiState(IN P_ADAPTER_T prAdapter, IN ENUM_ACPI_STATE_T ePowerState)
  {
  	ASSERT(prAdapter);
@@ -732,8 +741,8 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	prAdapter->rAcpiState = ePowerState;
  }
 diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
---- a/os/linux/gl_rst.c	2026-11-13 21:00:53.377251239 +0000
-+++ b/os/linux/gl_rst.c	2026-11-13 21:00:53.378287663 +0000
+--- a/os/linux/gl_rst.c	2026-11-13 21:06:14.585707584 +0000
++++ b/os/linux/gl_rst.c	2026-11-13 21:06:14.586578154 +0000
 @@ -221,10 +221,42 @@
  	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
  }
@@ -778,8 +787,8 @@ diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
  		DBGLOG(INIT, ERROR,
  		       "Skip trigger whole-chip reset in %s line %u, during resetting! Chip[%04X E%u]\n",
 diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
---- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 21:00:53.385781014 +0000
-+++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 21:00:53.386758386 +0000
+--- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 21:06:14.594262386 +0000
++++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 21:06:14.595321824 +0000
 @@ -22,6 +22,7 @@
  ********************************************************************************
  */
