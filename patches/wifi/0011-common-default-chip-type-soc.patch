@@ -1,0 +1,41 @@
+From: t1100-ubuntu port
+Subject: [PATCH] common: default the WMT chip type to SOC when no loader set it (MT6631)
+
+On the vendor kernel the chip type is handed over by the userspace loader
+(wmt_loader): it opens /dev/wmtdetect and calls COMBO_IOCTL_SET_CHIP_ID with the
+id it read from the external combo chip, or with -1 when the chip is a SoC
+combo. Only then does anything call wmt_lib_init().
+
+On mainline there is no wmt_loader, and wmt_drv calls wmt_lib_init() straight
+from module_init. g_chip_type is still WMT_CHIP_TYPE_INVALID at that point, so
+wmt_plat_init() runs mtk_wcn_cmb_hw_init() (the SDIO combo path) instead of
+mtk_wcn_consys_hw_init(), and the "mediatek,mt6771-consys" platform driver is
+never registered: no probe, no regulators, no EMI region, chip id stays 0.
+
+MT6631 is CONSYS_6771, i.e. the SoC variant (the Wi-Fi core lives in the CONSYS
+die behind AHB/WFDMA, there is no external SDIO chip on this board), so an unset
+type can only mean SOC here. The log line keeps a real combo chip visible.
+
+--- a/common_detect/wmt_detect.c	2026-11-13 08:09:19.159068966 +0000
++++ b/common_detect/wmt_detect.c	2026-11-13 08:09:19.168724302 +0000
+@@ -267,8 +267,20 @@
+ 	}
+ 	return 0;
+ }
++/*
++ * T1100 port: no userspace wmt_loader exists in mainline, so nothing has
++ * called COMBO_IOCTL_SET_CHIP_ID before wmt_lib_init(). MT6631 is the SoC
++ * variant (CONSYS_6771): treat "not set" as SOC instead of falling into the
++ * SDIO combo path, which registers no CONSYS platform driver at all.
++ */
+ ENUM_WMT_CHIP_TYPE wmt_detect_get_chip_type(void)
+ {
++#ifdef MT6631
++	if (g_chip_type == WMT_CHIP_TYPE_INVALID) {
++		g_chip_type = WMT_CHIP_TYPE_SOC;
++		WMT_DETECT_PR_INFO("chip type not set by a loader, MT6631 is CONSYS_6771 -> SOC\n");
++	}
++#endif
+ 	return g_chip_type;
+ }
+ 

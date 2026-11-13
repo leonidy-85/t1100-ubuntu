@@ -113,29 +113,31 @@ for m in $MODULES; do
 	for dep in common wlan; do
 		[ "$dep" = "$m" ] && continue
 		[ -f "$WIFI_DIR/work/$dep/Module.symvers" ] && \
-			EXTRA="$EXTRA $WIFI_DIR/work/$dep/Module.symvers"
+			EXTRA="$EXTRA ${WIFI_DIR}/work/${dep}/Module.symvers"
 	done
 	# M23: wmt_drv's stp_btif.o calls the mtk_wcn_btif_* exports of the BTIF
 	# driver, which is built separately (scripts/remote/build-btif-remote.sh,
-	# tree $BTIF_DIR). Its Module.symvers has to be on the modpost path too;
-	# KBUILD_EXTRA_SYMBOLS takes a space separated list, so the value is
-	# quoted for make (the quotes survive the unquoted $EXTRA below).
+	# tree $BTIF_DIR). Its Module.symvers has to be on the modpost path too.
 	if [ "$m" = "common" ] && [ -f "${BTIF_DIR:-/home/l/m23-btif}/Module.symvers" ]; then
 		EXTRA="$EXTRA ${BTIF_DIR:-/home/l/m23-btif}/Module.symvers"
 	fi
-	[ -n "$EXTRA" ] && EXTRA="KBUILD_EXTRA_SYMBOLS=\"$EXTRA\""
+	# KBUILD_EXTRA_SYMBOLS is a space separated list, so it cannot go on the
+	# make command line: MAKEOVERRIDES puts it into the sub-make invocation,
+	# which /bin/sh re-parses and dies on ("Syntax error: Unterminated quoted
+	# string", seen 13.11). Handing it over as an environment variable makes
+	# it a plain make variable without touching MAKEOVERRIDES.
 	# Chip selection. In the vendor build glue this was
-	# CONFIG_MTK_COMBO_CHIP="CONSYS_6771" - and it *must* be quoted there:
-	# the vendor Makefile compares against "CONSYS_6771" with the quotes
-	# stripped, and an unquoted value silently selects a different chip
-	# configuration. Our Kbuild wrappers spell the same choice out in ccflags
-	# (-DMT6631 for the A-die 0x6771 -> firmware 6759 mapping in wlan,
-	# common_main/platform/mt6771.o in the WMT object list), so the variable
-	# is kept here only to make the architecture choice visible in the log.
-	echo "-- CONFIG_MTK_COMBO_CHIP=\"CONSYS_6771\""
+	# CONFIG_MTK_COMBO_CHIP="CONSYS_6771". Our Kbuild wrappers spell the same
+	# choice out in ccflags (-DMT6631 for the A-die 0x6771 -> firmware 6759
+	# mapping in wlan, common_main/platform/mt6771.o in the WMT object list),
+	# so the variable itself is not passed to make. Keep it in the log only,
+	# so the architecture choice stays visible.
+	echo "-- chip selection: MT6631 / CONSYS_6771 (spelled out in *.Kbuild)"
+	[ -n "$EXTRA" ] && echo "-- KBUILD_EXTRA_SYMBOLS:$EXTRA"
+	KBUILD_EXTRA_SYMBOLS="${EXTRA# }" \
 	make -C "$KB" M="$WIFI_DIR/work/$m" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
 		LOCALVERSION="$LOCALVERSION" \
-		$EXTRA CONFIG_MTK_COMBO_CHIP='"CONSYS_6771"' -j"$JOBS" modules \
+		-j"$JOBS" modules \
 		> "$LOG/build-$m.log" 2>&1
 	rc=$?
 	echo "$m rc=$rc errors=$(grep -c 'error:' "$LOG/build-$m.log") \
