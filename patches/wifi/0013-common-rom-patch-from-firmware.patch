@@ -1,5 +1,5 @@
---- a/common_main/core/wmt_ic_soc.c	2026-11-13 11:09:53.213779086 +0000
-+++ b/common_main/core/wmt_ic_soc.c	2026-11-13 11:08:16.181923483 +0000
+--- a/common_main/core/wmt_ic_soc.c	2026-11-13 11:15:52.004248367 +0000
++++ b/common_main/core/wmt_ic_soc.c	2026-11-13 11:14:17.268017798 +0000
 @@ -1226,12 +1226,18 @@
  	/* If patch number is 0, it's first time connys power on */
  	patch_num = mtk_wcn_soc_get_patch_num();
@@ -24,27 +24,55 @@
  	}
  #if CFG_WMT_PATCH_DL_OPTM
  	if (wmt_ic_ops_soc.icId != 0x6765 &&
-@@ -2953,6 +2959,19 @@
+@@ -1263,9 +1269,20 @@
+ 		if (patch_index == (patch_num - 1))
+ 			WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_BEFORE_CONNSYS_RESET);
+ 
+-		iRet = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
++		/* T1100: the first post-patch command is sometimes swallowed
++		 * while the ROM applies the patch; retry it a few times. */
++		{
++			int t1100_i;
++
++			for (t1100_i = 0, iRet = -1; t1100_i < 3 && iRet; t1100_i++) {
++				if (t1100_i)
++					osal_sleep_ms(200);
++				iRet = wmt_core_init_script(init_table_3,
++							    osal_array_size(init_table_3));
++			}
++		}
+ 		if (iRet) {
+-			WMT_ERR_FUNC("init_table_3 fail(%d)\n", iRet);
++			WMT_ERR_FUNC("init_table_3 fail(%d) after retries\n", iRet);
+ 			return -8;
+ 		}
+ 	}
+@@ -2951,6 +2968,24 @@
+ 
+ 		osal_memset(evtBuf, 0, sizeof(evtBuf));
  		/* iRet = (*kal_stp_rx)(evtBuf, sizeof(WMT_PATCH_EVT), &u4Res); */
++		/*
++		 * T1100: after the LAST fragment the ROM applies the patch and
++		 * jumps, so no WMT_PATCH_EVT comes back.  Waiting for it makes
++		 * wmt_ctrl_rx time out, wmt_lib_trigger_assert() fires, STP is
++		 * torn down and the very next command ("wmt reset",
++		 * init_table_3) fails with -2 (wmt_ctrl_tx_ex: "STP is not
++		 * enabled yet").  So do not read an EVT for the last fragment.
++		 */
++		if (fragSeq == fragNum - 1) {
++			WMT_INFO_FUNC("t1100: last fragment sent, ROM jumps (no EVT expected)\n");
++			iRet = 0;
++			++fragSeq;
++			/* give the ROM time to apply the patch before the first
++			 * post-patch command (the reset), otherwise it is lost */
++			osal_sleep_ms(100);
++			break;
++		}
++
  		iRet = wmt_core_rx(evtBuf, sizeof(WMT_PATCH_EVT), &u4Res);
  		if (iRet || (u4Res != sizeof(WMT_PATCH_EVT))) {
-+			/*
-+			 * T1100: after the LAST fragment the ROM applies the
-+			 * patch and jumps, so no WMT_PATCH_EVT comes back
-+			 * (observed: 229/230 fragments acked, the 230th times
-+			 * out).  Treat that as success and let the WMT reset
-+			 * command in init_table_3 start the patched code.
-+			 */
-+			if (fragSeq == fragNum - 1) {
-+				WMT_INFO_FUNC("t1100: no EVT for the last fragment (ROM jumps), continuing\n");
-+				iRet = 0;
-+				++fragSeq;
-+				break;
-+			}
  			WMT_ERR_FUNC("wmt_core: read WMT_PATCH_EVT length(%d, %d) fail(%d)\n", sizeof(WMT_PATCH_EVT),
- 				     u4Res, iRet);
- 			mtk_wcn_stp_dbg_dump_package();
-@@ -3089,10 +3108,73 @@
+@@ -3089,10 +3124,73 @@
  	return 0;
  }
  
@@ -118,7 +146,7 @@
  	PUINT8 pBuf = NULL;
  	PUINT8 pPatchBuf = NULL;
  	UINT32 patchSize;
-@@ -3210,62 +3292,6 @@
+@@ -3210,62 +3308,6 @@
  }
  
  #else

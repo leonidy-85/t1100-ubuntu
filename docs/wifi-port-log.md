@@ -3295,3 +3295,56 @@ mtk_wcn_soc_sw_init(1274): init_table_3 fail(-1)
 `cpupcr` остаётся в ROM (`0x19d8…0x14f12`), `WLAN_READY` = 0, `wlan0` нет:
 патч лежит в памяти, но MCU не перезапущен в него (падает команда «WMT reset»).
 Подробности и артефакты — `refs/m29-btif-early-probe.md`.
+
+## 52. M30: `-2` = STP закрыт; причиной был таймаут RX патча; теперь ROM молчит на «wmt reset» (13.11)
+
+### 52.1 Что за `-2` и `err(-2, 5)`
+
+`wmt_core_init_script_retry` печатает `iRet`, `*writtenSize`, `cmdSz`. `-2`
+отдаёт `wmt_ctrl_tx_ex` (`wmt_ctrl.c:345-357`):
+
+```c
+	/* if STP is not enabled yet, can't use this function. Use tx_raw instead */
+	if (!osal_test_bit(WMT_STAT_STP_OPEN, &pDev->state) ||
+	    !osal_test_bit(WMT_STAT_STP_EN, &pDev->state)) {
+		...
+		iRet = -2;
+		if (writtenSize)
+			*writtenSize = iRet;      /* второй аргумент err() */
+		return iRet;
+	}
+```
+
+То есть STP был **закрыт**, и `err(-2, 5)` — это «writtenSize = -2 при ожидаемых 5».
+
+### 52.2 Кто закрыл STP
+
+Таймаут `wmt_core_rx()` на последнем фрагменте патча: `wmt_ctrl_rx` по таймауту
+зовёт `wmt_lib_trigger_assert(WMTDRV_TYPE_WMT, 44)`, in-band assert рвёт STP.
+Правки (`patches/wifi/0013-…`): на последнем фрагменте RX **не читается**
+(`fragSeq == fragNum-1` → break, `++fragSeq`, пауза 100 мс), `init_table_3` — 3
+попытки с паузой 200 мс.
+
+### 52.3 Новый блокер: «wmt reset» без ответа
+
+```
+t1100: ROMv4 patch download -> 0
+wmt_core_init_script_retry(702): read (wmt reset) iRet(-1) evt len err(rx:0, exp:5)
+wmt_core_init_script_retry(691): write (wmt reset) iRet(-2) cmd len err(-2, 5)   (x2)
+mtk_wcn_soc_sw_init(1285): init_table_3 fail(-1) after retries
+```
+
+Команда `WMT_RESET_CMD = {0x01,0x07,0x01,0x00,0x04}` уходит (5 байт), ROM не
+отвечает (`rx:0`), а таймаут снова включает assert → STP закрыт → ретраи не могут
+даже отправить.
+
+Состояние BTIF после отказа: `IER=1`, `IIR=1`, `LSR=0x60`, `DMA_EN=4`,
+IRQ 395 = 94 028 (RX работал), `IFR0=0x1befff5d` (клок открыт), `cpupcr=0x14eea`
+(ROM) ⇒ потерянных байтов нет, ROM действительно молчит на `0x07/0x04`.
+
+### 52.4 Предложение
+
+Проверить, не стартует ли патч **сам** (последним фрагментом) — прогон без
+`init_table_3` (`t1100_skip_reset=1`) с замером `cpupcr` сразу после патча; если
+нет — на время патча подавить `wmt_lib_trigger_assert` и увеличить таймаут RX
+для reset, чтобы ретраи доходили. Подробности: `refs/m30-wmt-reset-blocker.md`.
