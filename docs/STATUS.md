@@ -3362,3 +3362,28 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
   `/tmp/opencode/boot_a_thermal_test_ok.img` (md5 `6a74560f…`).
 - SVS по-прежнему выключен (`&svs` disabled): его efuse-калибровка MT6771
   не документирована; thermal throttling уже работает через CPU cooling.
+
+## 13.11 (11): suspend — s2idle работает, deep mem не восстанавливается
+
+- `freeze` (s2idle) при подключённом RNDIS сначала падал: `11201000.usb`
+  не давал уснуть, `last_failed_errno = -EBUSY`. Причина — MTU3 gadget.
+- Решение: перед сном отцеплять UDC (`echo "" > .../usb_gadget/t1100/UDC`),
+  после пробуждения возвращать `11201000.usb`. Это делает systemd-хук
+  `t1100-usb-gadget.sh`; для штатного `systemctl suspend` используется
+  `SuspendState=freeze` в `sleep.conf.d/10-t1100.conf`.
+- Проверено: `rtcwake -m freeze -s 10` при отцепленном UDC — успешно;
+  `systemctl suspend` с RTC-будильником на 25 с — USB исчезает и возвращается,
+  `systemd-suspend.service` завершается, `suspend_stats.success=2`, KWin,
+  DRM и thermal zone после пробуждения живы.
+- **Deep `mem` (PSCI deep) не восстанавливается**: после `rtcwake -m mem`
+  плата не проснулась ни по RTC, ни по USB; потребовался power-cycle.
+  Поэтому deep не используем, `mem_sleep` принудительно `s2idle` через
+  `t1100-suspend-default.service` (проверено после reboot: `[s2idle] deep`).
+- Sleep/suspend/hibernate/hybrid-sleep таргеты размаскированы скриптом
+  `t1100-suspend-enable.sh`; повторно маскировать не нужно.
+- Rootfs-файлы: `rootfs-overlay/etc/systemd/sleep.conf.d/10-t1100.conf`,
+  `rootfs-overlay/usr/lib/systemd/system-sleep/t1100-usb-gadget.sh`,
+  `rootfs-overlay/usr/local/sbin/t1100-suspend-enable.sh`,
+  `rootfs-overlay/etc/systemd/system/t1100-suspend-default.service`.
+- Boot-образ не менялся: p29 остаётся `boot_thermal_final.img`
+  (md5 `e96c91…`); suspend — это userspace/rootfs-настройка.

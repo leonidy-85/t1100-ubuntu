@@ -1,0 +1,14 @@
+[Unit]
+Description=Prefer s2idle suspend on T1100
+# PSCI deep suspend does not resume on the current firmware, so select
+# s2idle before anything can trigger a suspend.
+After=sysinit.target
+Before=sleep.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo s2idle > /sys/power/mem_sleep'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
