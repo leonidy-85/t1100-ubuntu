@@ -4649,3 +4649,16 @@ shutdown не может добить процесс `rmmod wmt_drv/wlan_drv_gen
 - Значит копать надо в **реальную передачу данных** секций: `wlanImageSectionDownload`
   (`INIT_CMD_PDA_PACKET_TYPE_ID` / `INIT_CMD_PDA_PQ_ID`), а не в адрес старта.
 - Модуль `wlan_drv_gen3` `cd0a1c91…`; `wmt_drv` `d3b83212…`; `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (69): M74 — найдено расхождение: всем секциям ставился `ENCRYPTION_MODE`
+
+- Причина: `wlanImageDividDownloadByEntry` вне `#if defined(MT6631)` передавал `TRUE` в аргумент
+  `fgEnc` **для всех** секций, поэтому `DOWNLOAD_CONFIG.u4DataMode` получал
+  `DOWNLOAD_CONFIG_ENCRYPTION_MODE` даже для незашифрованных секций (IROM/IRAM). Исправлено:
+  берётся `prFwHead->arSection[index].ucEnc` (как для MT6631).
+- Факт после правки: `cfg dst=0x020a1000 len=28032 dataMode=0x80000009`,
+  `cfg dst=0x000a5800 len=33776 dataMode=0x80000001` (было `0x80000009` у обеих).
+- Пакеты секции: `TxByteCount=2056 PQ_ID=0xc000 PktTypeID=0xa0 seq=0 len=2048` (первые 8).
+- `WIFI_START` по трём адресам — `READY=0`, `POR=1`, `cpupcr` до `0x14eea`; `mbox0=0x02000020`;
+  readback в этом прогоне не выполнился (блок не попал в исполняемый путь) — контроль не снят.
+- Модуль `wlan_drv_gen3` `0a10cfcb…`; `wmt_drv` `d3b83212…`; `mtk_btif_drv` `e29eaecb…`.

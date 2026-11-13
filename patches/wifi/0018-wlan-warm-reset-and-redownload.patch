@@ -1,6 +1,6 @@
 diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
---- a/common/wlan_lib.c	2026-11-13 20:48:25.006140477 +0000
-+++ b/common/wlan_lib.c	2026-11-13 20:48:25.007274215 +0000
+--- a/common/wlan_lib.c	2026-11-13 20:54:48.853672660 +0000
++++ b/common/wlan_lib.c	2026-11-13 20:54:48.854930374 +0000
 @@ -30,6 +30,8 @@
   ********************************************************************************
   */
@@ -534,7 +534,23 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  		/* Online scan option */
  		if (prRegInfo->fgDisOnlineScan == 0)
-@@ -958,6 +1386,42 @@
+@@ -900,13 +1328,10 @@
+ 					   prFwHead->arSection[index].u4DestAddr,
+ 					   prFwHead->arSection[index].u4Length,
+ 					   index == 0 ? TRUE : FALSE,
+-#if defined(MT6631)
++					   /* T1100 M74: honour the per-section flag; a blanket
++					    * TRUE made the MCU decrypt plain sections */
+ 					   prFwHead->arSection[index].ucEnc ? TRUE : FALSE,
+ 					   prFwHead->arSection[index].ucKIdx
+-#else
+-					   TRUE,
+-					   0
+-#endif
+ 			) != WLAN_STATUS_SUCCESS) {
+ 
+ 			DBGLOG(INIT, ERROR, "Firmware download configuration failed! idx %u, dst 0x%08x, len %u\n",
+@@ -958,6 +1383,42 @@
  	UINT_8 __iomem *prWifiEmiBaseAddr;
  #endif
  
@@ -577,7 +593,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	/* engage divided firmware downloading */
  	/* DLM + ILM */
  	for (i = 0; i < prFwHead->u4NumOfEntries && i < ENTRY_DIRECTLY_TO_CHIP; i++) {
-@@ -977,7 +1441,7 @@
+@@ -977,7 +1438,7 @@
  	}
  
  	kalSetEmiMpuProtection(gConEmiPhyBase, WIFI_EMI_MEM_SIZE, FALSE);
@@ -586,7 +602,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  	/* IEMI + DEMI */
  	for (i = ENTRY_DIRECTLY_TO_CHIP; i < prFwHead->u4NumOfEntries; i++) {
-@@ -1081,7 +1545,7 @@
+@@ -1081,7 +1542,7 @@
  
  #endif
  
@@ -595,7 +611,18 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	    !wlanIsChipNoAck(prAdapter) && !kalIsCardRemoved(prAdapter->prGlueInfo)) {
  		UINT_32 u4RegValue = 0;
  		UINT_32 u4RegValueNew = 0;
-@@ -2708,6 +3172,10 @@
+@@ -2699,7 +3160,9 @@
+ 			continue;
+ 		}
+ 		/* 6.2 Send CMD Info Packet */
+-		if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++		pr_info("t1100-sec: cfg dst=0x%08x len=%u dataMode=0x%08x\n",
++		u4DestAddr, u4ImgSecSize, prInitCmdDownloadConfig->u4DataMode);
++	if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			DBGLOG(INIT, ERROR, "Fail to transmit download config command\n");
+ 			break;
+@@ -2708,6 +3171,10 @@
  		/* 7. Wait for INIT_EVENT_ID_CMD_RESULT */
  		u4Status = wlanImageSectionDownloadStatus(prAdapter, ucCmdSeqNum);
  #endif
@@ -606,7 +633,23 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  		break;
  	}
  
-@@ -2865,7 +3333,13 @@
+@@ -2750,6 +3217,15 @@
+ 	}
+ 
+ 	prCmdInfo->u2InfoBufLen = sizeof(INIT_HIF_TX_HEADER_T) + (UINT_16) u4ImgSecSize;
++	{
++		static int t1100_pkt;
++		if (t1100_pkt < 8) {
++			t1100_pkt++;
++			pr_info("t1100-pkt %d: TxByteCount=%u PQ_ID=0x%x PktTypeID=0x%x seq=%u len=%u\n",
++				t1100_pkt, prCmdInfo->u2InfoBufLen, INIT_CMD_PDA_PQ_ID,
++				INIT_CMD_PDA_PACKET_TYPE_ID, 0, u4ImgSecSize);
++		}
++	}
+ 
+ 	/* 2. Setup common CMD Info Packet */
+ 	prInitHifTxHeader = (P_INIT_HIF_TX_HEADER_T) (prCmdInfo->pucInfoBuffer);
+@@ -2865,7 +3341,13 @@
  	}
  }
  
@@ -621,7 +664,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm previously firmware download is done without error
-@@ -2985,7 +3459,8 @@
+@@ -2985,7 +3467,8 @@
  	return u4Status;
  }
  
@@ -631,7 +674,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm the status of
-@@ -3119,10 +3594,14 @@
+@@ -3119,10 +3602,14 @@
  			continue;
  		}
  		/* 5.2 Send CMD Info Packet */
@@ -646,7 +689,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  		break;
  	};
-@@ -4754,8 +5233,8 @@
+@@ -4754,8 +5241,8 @@
  *
  * @param prAdapter      Pointer of Adapter Data Structure
  *
@@ -657,7 +700,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  */
  /*----------------------------------------------------------------------------*/
  ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
-@@ -4770,8 +5249,8 @@
+@@ -4770,8 +5257,8 @@
  * @brief This function is to update current ACPI state only
  *
  * @param prAdapter      Pointer of Adapter Data Structure
@@ -668,7 +711,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  *
  * @return none
  */
-@@ -4779,7 +5258,7 @@
+@@ -4779,7 +5266,7 @@
  VOID wlanSetAcpiState(IN P_ADAPTER_T prAdapter, IN ENUM_ACPI_STATE_T ePowerState)
  {
  	ASSERT(prAdapter);
@@ -678,8 +721,8 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	prAdapter->rAcpiState = ePowerState;
  }
 diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
---- a/os/linux/gl_rst.c	2026-11-13 20:48:25.014999716 +0000
-+++ b/os/linux/gl_rst.c	2026-11-13 20:48:25.015984282 +0000
+--- a/os/linux/gl_rst.c	2026-11-13 20:54:48.862767476 +0000
++++ b/os/linux/gl_rst.c	2026-11-13 20:54:48.863830911 +0000
 @@ -221,10 +221,42 @@
  	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
  }
@@ -724,8 +767,8 @@ diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
  		DBGLOG(INIT, ERROR,
  		       "Skip trigger whole-chip reset in %s line %u, during resetting! Chip[%04X E%u]\n",
 diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
---- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 20:48:25.023208874 +0000
-+++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 20:48:25.024269013 +0000
+--- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 20:54:48.871293423 +0000
++++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 20:54:48.872278810 +0000
 @@ -22,6 +22,7 @@
  ********************************************************************************
  */
