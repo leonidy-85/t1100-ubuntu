@@ -4032,3 +4032,18 @@ mempeek 0x18070160 -> 0x644dfe48              <- cpupcr растёт, MCU исп
 ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
 
 Подробности — `docs/wifi-port-log.md` §66.
+
+
+## 13.11 (41): M50 — транспорт чист, хвост вызывает у чипа assert + core dump
+
+- Кадры сняты целиком: обычный `hdr 9a 43 ed ca` + payload 1005 + `crc 4f 20` (1011 Б),
+  хвост `hdr a3 40 61 44` + payload 97 (`01 01 5d 00 03` + 92 Б) + `crc 17 a9` (103 Б).
+  Паддинга нет, CRC = CRC-16/ARC(init 0) **только по payload**, LE — посчитано и совпало
+  для обоих кадров; `written == len`, `LSR=0x60`, BTIF в PIO, `resync = 0`.
+- Повтор хвоста дважды (`wrote=103` оба) — чип не отвечает. Ответ на хвост приходит через
+  205 мс: `asser_type=4`, `R6=0x5C` (92 = длина хвоста), `R1=0xF0078029` (патч-область),
+  `;;[CONNSYS]core dump start ..`, затем RX-таймаут → `patch dwn:-1 frag(314, 92) fail`.
+- Воспроизводимость восстановлена: `patches/wifi/0014` пересобран (включая `t1100_stock_exact`,
+  `t1100_patch_active`), новый `patches/wifi/0015-common-stp-transport-trace.patch`
+  (`t1100_stp_trace`, `t1100_frame_hex`, `t1100_trace_all`, `t1100_tail_resend`).
+- Модуль `wmt_drv` `b67ad482…`; `wlan0` нет.
