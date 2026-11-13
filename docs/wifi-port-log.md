@@ -3547,3 +3547,43 @@ in-band assert.
 Следующий шаг: проверить, восстанавливается ли обслуживание после power-cycle
 домена CONSYS (тогда следующий рубеж — формат передачи и «229 ack / 230-й
 молчит» при целом кадре 347/347). Факты: `refs/m35-control-readback.md`.
+
+## 58. M36: вендор аппаратно домен после патча не сбрасывает; наш power-cycle STP не оживил (13.11)
+
+### 58.1 Вендор после `mtk_wcn_soc_patch_dwn()`
+
+`wmt_ic_soc.c:1283-1330` (multi-patch): после каждого патча —
+`WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_BEFORE_CONNSYS_RESET)`
+(хук фабричного режима, `wmt_step.c` в наш Kbuild не входит) и затем
+`wmt_core_init_script(init_table_3)` → `WMT_RESET_CMD {01 07 01 00 04}`.
+`consys_hw_reset_bit_set()`, `consys_hw_pwr_ctrl()`, `wmt_lib_hw_rst()` в
+`mtk_wcn_soc_sw_init()` **не вызываются**.
+
+### 58.2 Наш power-cycle домена
+
+Добавлен `t1100_pwr_cycle_after_patch` (`wmt_plat_pwr_ctrl(FUNC_OFF/ON)` после
+патча). Лог подтверждает реальный перезапуск домена:
+
+```
+CONSYS-HW-PWR-OFF … finish(0)
+CONSYS-HW-PWR-ON, start … cpupcr right after reset 0x00000000
+```
+
+Но STP после этого по-прежнему мёртв:
+
+```
+after-patch patchmem[0x80098020] = 0 (ret -3)
+after-patch ctrl GEN_HCR         = 0 (ret -3)
+```
+
+### 58.3 Причина (по коду)
+
+После аппаратного сброса чипа STP-состояние хоста остаётся прежним (в M32 мы
+специально заморозили его очистку через `t1100_patch_active`), поэтому кадры
+уходят в никуда. Вендор в этой ситуации не сбрасывает домен, а если бы
+сбрасывал — обязан был бы заново пройти `wmt_core_stp_init()` (open → mode
+`MTKSTP_BTIF_MAND_MODE` → enable).
+
+`cpupcr` в ROM, READY=0, `wlan0` нет. Следующий шаг — переинициализация STP
+после power-cycle и повторный `hw_check`
+(`refs/m36-power-cycle-after-patch.md`).
