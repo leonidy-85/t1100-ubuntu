@@ -3753,3 +3753,16 @@ RNDIS-гаджету), делать при физическом доступе �
   в work/ потеряны; воспроизводится только `patches/wifi/0013`. Модули на плате
   (M40): `wmt_drv` `1e10a898…`, `mtk_btif_drv` `e29eaecb…`, `wlan_drv_gen3`
   `80dafe3d…`. Ждём вывод `reverse-engineer` по стоковому `wmt_drv.ko`.
+
+## 13.11 (31): M42 — патчи консолидированы в `patches/wifi/`, сборка воспроизводится
+
+- `patches/wifi/README.md` описывает все 18 патчей (common/wlan/BTIF), порядок и
+  пересборку с нуля. Проверено: `build-wifi-remote.sh --prepare` создаёт `work/`
+  из чистого `vendor/`, и наши маркеры на месте (`t1100_rom_patch`/`last
+  fragment` ×18, `t1100_pwr_on_done` ×4).
+- Сборка (out `$WIFI_DIR/out`): common rc=0/errors=0, wlan rc=0/errors=0;
+  `wmt_drv.ko` `e7a3c40d…`, `wlan_drv_gen3.ko` `627f9ab2…`.
+- Сценарии утраченных правок M33–M41 сохранены в
+  `scripts/remote/m23-btif/worktree-edits/` (кандидаты в `0014-…`), чтобы не
+  терялись снова. Деплой-сборка под `merge2-out` прервана из-за параллельного
+  прогона, который пересоздаёт `work/`; устройство не трогали (модули M40).
