@@ -4475,3 +4475,17 @@ user != root quiet_success`. Правило отказывает root **до** �
 - Итог: и с SPM-partial (M63), и с полным power-on (M64) доставка набора заканчивается
   assert-состоянием чипа; MCR после этого либо нули (M63), либо недостижим.
 - Модули: `wmt_drv` `87dc76e2…`, `wlan_drv_gen3` `2a02b92d…`, `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (57): M65 — «power-on → патчи → probe» одним проходом: MCR снова нули
+
+- Новый порядок в `t1100_wlan_probe` (`t1100_patches_before_probe=1`): полный power-on →
+  `mtk_wcn_wmt_redownload_patch_set()` → `pfWlanProbe()`; в операции добавлены
+  `t1100_op_no_first_reset` (не сбрасывать перед набором) и `t1100_op_between_spm`
+  (SPM-partial между патчами) + AP-сторонняя `t1100_hif_dma_reinit()` (`sdio_open` + `HifDmaInit`).
+- Результат: набор доставлен, `hif[after-patch-redelivery]` — `cmd52=0 cmd53=0`,
+  `section-config dst=0x020a1000 -> 0xC0000001`, MCR `00: 00100788 00000000 0000000d …`,
+  `20…c0` нули, `e0: 00010101`, `wlanProbe -5`.
+- Вывод: MCR убивает **не порядок**, а сам SPM-partial между патчами. В M55/M56 (без
+  SPM-partial) после набора MCR был живой (`WASR=0x00010200`, `mbox0=0x02000020`) и секции
+  скачивались — там не доходило только до READY.
+- Модули: `wmt_drv` `9d0b8613…`, `wlan_drv_gen3` `597c4e85…`, `mtk_btif_drv` `e29eaecb…`.
