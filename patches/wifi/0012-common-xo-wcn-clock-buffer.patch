@@ -1,0 +1,152 @@
+--- a/common_main/platform/mt6771.c	2026-11-13 08:33:58.404221329 +0000
++++ b/common_main/platform/mt6771.c	2026-11-13 08:33:58.404326568 +0000
+@@ -34,6 +34,10 @@
+ *                    E X T E R N A L   R E F E R E N C E S
+ ********************************************************************************
+ */
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/regmap.h>
+ #include <connectivity_build_in_adapter.h>
+ #include <linux/clk.h>
+ #include <linux/delay.h>
+@@ -431,23 +435,126 @@
+ 	return 0;
+ }
+ 
+-static INT32 consys_clock_buffer_ctrl(MTK_WCN_BOOL enable)
++/*
++ * T1100 port (mainline 6.12): no-op -> real XO_WCN enable.
++ *
++ * The stock kernel reached the PMIC through its mtk_clkbuf driver. What the
++ * MT6631 actually needs is the 26 MHz reference, and on MT6358 that is three
++ * register writes: the DCXO buffer-2 mode has to select the WCN request
++ * (DCXO_CW00[4:3] = WCN_EN_M), the SRCLKEN_IN3 request line has to be enabled
++ * (TOP_SPI_CON1 bit 0), and the AP-side pwrap gate has to be opened
++ * (pwrap+0x184 bit 1, DCXO_CONN_ENABLE). Without them the combo stays
++ * clock-less: CONSYS never answers, chip id 0x18070008 reads 0, cpupcr
++ * 0x18070160 reads 0 and STP times out (docs/wifi-port-log.md M15-M27).
++ */
++#define T1100_PWRAP_PHYS		0x1000d000
++#define T1100_PWRAP_DCXO_ENABLE		0x184
++#define T1100_PWRAP_DCXO_CONN_ENABLE	0x2	/* BIT(1) */
++
++/* MT6358 register map (mt6771/include/mach/upmu_hw.h) */
++#define T1100_MT6358_DCXO_CW00		0x788
++#define T1100_MT6358_TOP_SPI_CON1	0x44e
++#define T1100_XO_EXTBUF2_MODE_MASK	0x3
++#define T1100_XO_EXTBUF2_MODE_SHIFT	3
++#define T1100_XO_EXTBUF2_WCN_EN_M	0x0
++#define T1100_RG_SRCLKEN_IN3_EN_MASK	0x1
++#define T1100_RG_SRCLKEN_IN3_EN_SHIFT	0
++
++static struct regmap *t1100_pmic_regmap(void)
+ {
+-	/* 4.14 vendor: KERNEL_clk_buf_ctrl(CLK_BUF_CONN, ...) -> MTK clock
+-	 * buffer driver (drivers/misc/mediatek/base/power/clkbuf_v1), which
+-	 * gates the 26 MHz XO_WCN reference to CONSYS.
+-	 *
+-	 * 6.12: there is no clkbuf driver in mainline, and the MT6771 DT has no
+-	 * node describing the WCN buffer. Stubbed as a no-op.
+-	 *
+-	 * TODO(power-on): if CONSYS never reports "power on ok", check whether
+-	 * XO_WCN has to be enabled here (likely a CCF gate in infracfg, to be
+-	 * found in the stock DTB - cf. docs/wifi-plan.md §8.3).
++	static struct regmap *pmic;
++	struct device_node *np;
++	struct platform_device *pdev;
++
++	if (pmic)
++		return pmic;
++
++	/* mt6771.dtsi inherits the whole SoC description from mt8183.dtsi, so
++	 * the pwrap node still carries the mt8183 compatible string.
+ 	 */
+-	WMT_PLAT_PR_DBG("clock buffer ctrl (XO_WCN) %d: no-op on mainline\n", enable);
++	np = of_find_compatible_node(NULL, NULL, "mediatek,mt8183-pwrap");
++	if (!np)
++		np = of_find_compatible_node(NULL, NULL, "mediatek,mt6771-pwrap");
++	if (!np) {
++		WMT_PLAT_PR_ERR("no pwrap node, cannot reach the PMIC\n");
++		return NULL;
++	}
++
++	pdev = of_find_device_by_node(np);
++	of_node_put(np);
++	if (!pdev) {
++		WMT_PLAT_PR_ERR("pwrap device not registered yet\n");
++		return NULL;
++	}
++
++	pmic = dev_get_regmap(&pdev->dev, NULL);
++	if (!pmic)
++		WMT_PLAT_PR_ERR("pwrap has no regmap, cannot reach the PMIC\n");
++
++	return pmic;
++}
++
++static INT32 t1100_consys_clk_buf_conn(MTK_WCN_BOOL enable)
++{
++	struct regmap *pmic = t1100_pmic_regmap();
++	void __iomem *pwrap;
++	UINT32 val;
++	INT32 ret;
++
++	if (!enable) {
++		/* Keep the buffer on: VCN33 is always-on in DT and a dangling
++		 * SRCLKEN request from a half-dead chip is worse than a few mA.
++		 */
++		return 0;
++	}
++
++	if (pmic) {
++		/* DCXO buffer 2: request source = WCN (WCN_EN_M) */
++		ret = regmap_update_bits(pmic, T1100_MT6358_DCXO_CW00,
++					 T1100_XO_EXTBUF2_MODE_MASK <<
++					 T1100_XO_EXTBUF2_MODE_SHIFT,
++					 T1100_XO_EXTBUF2_WCN_EN_M <<
++					 T1100_XO_EXTBUF2_MODE_SHIFT);
++		if (ret)
++			WMT_PLAT_PR_ERR("DCXO_CW00 mode write failed(%d)\n", ret);
++
++		/* SRCLKEN_IN3: let the CONN subsystem request the buffer */
++		ret = regmap_update_bits(pmic, T1100_MT6358_TOP_SPI_CON1,
++					 T1100_RG_SRCLKEN_IN3_EN_MASK <<
++					 T1100_RG_SRCLKEN_IN3_EN_SHIFT,
++					 1 << T1100_RG_SRCLKEN_IN3_EN_SHIFT);
++		if (ret)
++			WMT_PLAT_PR_ERR("SRCLKEN_IN3 write failed(%d)\n", ret);
++	}
++
++	pwrap = ioremap(T1100_PWRAP_PHYS, 0x1000);
++	if (pwrap) {
++		val = readl(pwrap + T1100_PWRAP_DCXO_ENABLE);
++		writel(val | T1100_PWRAP_DCXO_CONN_ENABLE,
++		       pwrap + T1100_PWRAP_DCXO_ENABLE);
++		WMT_PLAT_PR_INFO("XO_WCN: pwrap DCXO_ENABLE 0x%08x -> 0x%08x\n",
++				 val, readl(pwrap + T1100_PWRAP_DCXO_ENABLE));
++		iounmap(pwrap);
++	} else {
++		WMT_PLAT_PR_ERR("cannot map pwrap for DCXO_ENABLE\n");
++	}
++
++	WMT_PLAT_PR_INFO("XO_WCN enabled (PMIC %s)\n", pmic ? "ok" : "unreachable");
++
+ 	return 0;
+ }
+ 
++static INT32 consys_clock_buffer_ctrl(MTK_WCN_BOOL enable)
++{
++	/* 4.14 vendor: KERNEL_clk_buf_ctrl(CLK_BUF_CONN, ...) went to
++	 * the MTK clk_buf driver (clkbuf_v1/mt6771) which switches the
++	 * PMIC's XO_WCN buffer - the 26 MHz reference of the combo.
++	 * mainline has no such driver, so the same three writes are done
++	 * on the MT6358/pwrap directly below.
++	 */
++	return t1100_consys_clk_buf_conn(enable);
++}
++
+ static VOID consys_set_if_pinmux(MTK_WCN_BOOL enable)
+ {
+ 	UINT8 *consys_if_pinmux_reg_base = NULL;

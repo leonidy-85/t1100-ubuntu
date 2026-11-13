@@ -18,7 +18,8 @@ set -u
 
 BTIF_DIR=${BTIF_DIR:-/home/l/m23-btif}
 BTIF_SRC=${BTIF_SRC:-/home/l/wifi-src/rb/drivers/staging/mtk-connectivity/btif}
-GLUE=${GLUE:-$BTIF_DIR/glue}
+# The glue must sit outside $BTIF_DIR: the rsync below wipes that directory.
+GLUE=${GLUE:-$BTIF_DIR-glue}
 KB=${KERNEL_OUT:-/home/l/t1100-merge2-out}
 JOBS=${JOBS:-10}
 PREPARE_ONLY=0

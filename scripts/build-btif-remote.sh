@@ -22,6 +22,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_HOST="${BUILD_HOST:-l@172.17.141.172}"
 BUILD_PASS="${BUILD_PASS:-0}"
 BTIF_DIR="${BTIF_DIR:-/home/l/m23-btif}"
+BTIF_GLUE="${BTIF_GLUE:-${BTIF_DIR}-glue}"
 KERNEL_OUT="${KERNEL_OUT:-/home/l/t1100-merge2-out}"
 JOBS="${JOBS:-}"
 
@@ -35,11 +36,13 @@ RSYNC=(rsync -a --delete -e "sshpass -p ${BUILD_PASS} ssh -o StrictHostKeyChecki
 JOBS="${JOBS:-$("${SSH[@]}" nproc)}"
 
 echo "== rsync: glue + патч BTIF =="
-"${SSH[@]}" "mkdir -p '${BTIF_DIR}/glue/patches'" </dev/null
-"${RSYNC[@]}" "${REPO_ROOT}/scripts/remote/m23-btif/" "${BUILD_HOST}:${BTIF_DIR}/glue/" >/dev/null
-"${SSH[@]}" "cp '${BTIF_DIR}/glue/0010-btif-mt6771-glue.patch' '${BTIF_DIR}/glue/patches/'" </dev/null
+# The glue lives *next to* $BTIF_DIR, not inside it: the remote script rsyncs
+# the pristine BTIF tree into $BTIF_DIR with --delete, which would wipe a
+# glue/ subdirectory on every run.
+"${RSYNC[@]}" "${REPO_ROOT}/scripts/remote/m23-btif/" "${BUILD_HOST}:${BTIF_GLUE}/" >/dev/null
+"${SSH[@]}" "mkdir -p '${BTIF_GLUE}/patches' && cp '${BTIF_GLUE}/0010-btif-mt6771-glue.patch' '${BTIF_GLUE}/patches/'" </dev/null
 
 if [ "${1:-}" = "--prepare" ]; then ARG=--prepare-only; else ARG=""; fi
 
-"${SSH[@]}" "BTIF_DIR='${BTIF_DIR}' KERNEL_OUT='${KERNEL_OUT}' JOBS='${JOBS}' \
+"${SSH[@]}" "BTIF_DIR='${BTIF_DIR}' GLUE='${BTIF_GLUE}' KERNEL_OUT='${KERNEL_OUT}' JOBS='${JOBS}' \
 	bash -s ${ARG}" < "${REPO_ROOT}/scripts/remote/build-btif-remote.sh"
