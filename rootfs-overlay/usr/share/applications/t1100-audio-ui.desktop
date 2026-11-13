@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Аудиовыход
+Name[en]=Audio Output
+Comment=Переключить звук между динамиком и наушниками
+Comment[en]=Switch audio between the speaker and headphones
+Exec=/usr/local/bin/t1100-audio-ui
+Icon=audio-card
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=audio;headphones;speaker;наушники;динамик;
