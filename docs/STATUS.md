@@ -3332,3 +3332,33 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
 - **Thermal/SVS пока нет:** `CONFIG_MTK_THERMAL` выключен, thermal zones
   пустые, `&svs` disabled. Длительный soak-тест на максимуме без thermal
   protection не проводился — это следующий шаг.
+
+## 13.11 (10): thermal — CPU-зона работает, throttling проверен
+
+- Первая попытка включить только `CONFIG_MTK_THERMAL=y` не дала драйвера:
+  этот символ — только «ворота», сам AUXADC-драйвер собирается по
+  `CONFIG_MTK_SOC_THERMAL`. После включения обоих символов
+  `mtk-thermal 1100b000.thermal-sensor` успешно пробует устройство.
+- Калибровка MT6771 через efuse не декодируется: драйвер пишет
+  `Device not calibrated, using default calibration values` и использует
+  дефолтные коэффициенты MT8183. Температура при этом правдоподобна:
+  простой 34–38 °C, нагрузка 8 ядер — 76–79 °C.
+- В board DTS включена только `cpu-thermal` (sensor 0), остальные
+  унаследованные MT8183-зоны (`soc`, `gpu`, `md1`, `cpu-little`, `cpu-big`,
+  `tsabb`) выключены до проверки их датчиков/калибровки. Трипы:
+  80 °C passive, 90 °C passive/target, 115 °C critical.
+- Cooling devices: `cpufreq-cpu0` (15 состояний), `cpufreq-cpu4` (15),
+  `devfreq-13040000.gpu` (2). Проверка throttling: временно target-трип
+  снижен до 70 °C; на 70.4 °C cooling state стал 2, частоты снизились
+  с 1.989 ГГц до 1.846/1.924 ГГц, после снятия нагрузки состояние вернулось
+  в 0. Трипы восстановлены (80/90/115).
+- Финальный образ `build/boot_thermal_final.img`, sha256
+  `880ffdbac265ccb358f0d7a76362b07418e62e90e2e996b2dc489d9cd96188bd`,
+  md5 p29 `e96c91f6e67921e82dfa874b4bfa3a87`; kernel `1529250198…`,
+  DTB `8190d9d0…`, initramfs `0cfa596d…`; cmdline `maxcpus=8`,
+  `cpufreq.default_governor=schedutil`.
+- Откат без thermal: `/tmp/opencode/boot_a_before_thermal.img`
+  (md5 `4f2d9aa0…`, boot_cpufreq_sched); тестовый read-only thermal
+  `/tmp/opencode/boot_a_thermal_test_ok.img` (md5 `6a74560f…`).
+- SVS по-прежнему выключен (`&svs` disabled): его efuse-калибровка MT6771
+  не документирована; thermal throttling уже работает через CPU cooling.

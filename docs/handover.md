@@ -61,13 +61,15 @@
 
 ## Текущее состояние платы (13.11)
 
-- `boot_a` = `build/boot_cpufreq_sched.img` (md5 p29
-  `4f2d9aa039a94defa7908cc651f090a9`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+- `boot_a` = `build/boot_thermal_final.img` (md5 p29
+  `e96c91f6e67921e82dfa874b4bfa3a87`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
-  (0058/0059) и CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
-  `schedutil`). USB role switch (0060/0061) в режиме `device`, RNDIS/SSH
+  (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
+  `schedutil`) и CPU thermal zone (0064: 80/90/115 °C, throttling
+  проверен). USB role switch (0060/0061) в режиме `device`, RNDIS/SSH
   работают; host-режим с флешкой проверен, возврат host→device — только
-  перезагрузкой. Thermal/SVS пока выключены (см. STATUS 13.11 (9)).
+  перезагрузкой. SVS пока выключен; efuse-калибровка MT6771 не декодируется,
+  thermal использует дефолтные коэффициенты (см. STATUS 13.11 (10)).
 - **Микрофон работает:** причина прежнего `EINVAL` — выключенный DAPM-маршрут
   `UL1_CH1/CH2 ADDA_UL`, а не формат. Маршрут и муксы (`PGA L/R = AIN0`)
   применяет `t1100-audio-mixer.service`; PipeWire source `alsa_mic` (node 33)
