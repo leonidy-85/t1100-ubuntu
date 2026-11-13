@@ -1,9 +1,11 @@
 --- a/common_main/core/wmt_ic_soc.c	2026-11-13 12:19:55.258002018 +0000
-+++ b/common_main/core/common_main/core/wmt_ic_soc.c	2026-11-13 12:27:34.835546527 +0000
-@@ -40,6 +40,11 @@
++++ b/common_main/core/common_main/core/wmt_ic_soc.c	2026-11-13 12:29:56.517332857 +0000
+@@ -40,6 +40,13 @@
   */
  #include <linux/firmware.h>
  
++extern int t1100_patch_active;
++
 +static int t1100_patch_scan(void);
 +/* T1100: the vendor WMT path skips sizeof(WMT_PATCH) = 28 bytes */
 +static int t1100_patch_hdr_len = 28;
@@ -12,7 +14,7 @@
  static char t1100_rom_patch[128];
  module_param_string(t1100_rom_patch, t1100_rom_patch,
  		    sizeof(t1100_rom_patch), 0444);
-@@ -1225,6 +1230,8 @@
+@@ -1225,6 +1232,8 @@
  	/* 6.2 Read patch number */
  	/* If patch number is 0, it's first time connys power on */
  	patch_num = mtk_wcn_soc_get_patch_num();
@@ -21,23 +23,57 @@
  	if (patch_num == 0) {
  		if (t1100_rom_patch[0]) {
  			/* T1100: the patch comes from /lib/firmware, not from
-@@ -1281,10 +1288,11 @@
+@@ -1281,9 +1290,46 @@
  							    osal_array_size(init_table_3));
  			}
  		}
 -		if (iRet) {
 -			WMT_ERR_FUNC("init_table_3 fail(%d) after retries\n", iRet);
 -			return -8;
--		}
 +		WMT_INFO_FUNC("t1100: reset ack after patch %u: %s\n", patch_index,
 +			      iRet ? "no" : "yes");
 +		/* T1100 M45: best effort - a missing reset EVT must not abort the
 +		 * patch set, otherwise the second patch (seq 2) never runs. */
 +		iRet = 0;
++		{
++			UINT32 ra, rv;
++			int rk;
++
++			for (rk = 0; rk < 3; rk++) {
++				ra = 0x80000000 | (0x00000000u | (0xf0078000u + rk * 4));
++				rv = 0;
++				iRet = wmt_core_reg_rw_raw(0, ra, &rv, 0xffffffff);
++				WMT_INFO_FUNC("t1100: patch%u mem[0x%08x] = 0x%08x (ret %d)\n",
++					      patch_index, ra, rv, iRet);
++			}
++			iRet = 0;
++		}
++		/*
++		 * T1100 M46: between the patches the chip stops answering the
++		 * reset, so re-init STP exactly like wmt_core_stp_init() (the
++		 * procedure that revived it in M37) before the next patch.
++		 */
++		if (patch_index + 1 < patch_num) {
++			ULONG p1, p2;
++			INT32 rc1, rc2, rc3, rc4, rc5;
++			UINT32 hw = 0;
++
++			t1100_patch_active = 0;
++			p1 = 0; p2 = 0;
++			rc1 = wmt_core_ctrl(WMT_CTRL_STP_CLOSE, &p1, &p2);
++			rc2 = wmt_core_ctrl(WMT_CTRL_STP_OPEN, &p1, &p2);
++			p1 = WMT_STP_CONF_MODE; p2 = MTKSTP_BTIF_MAND_MODE;
++			rc3 = wmt_core_ctrl(WMT_CTRL_STP_CONF, &p1, &p2);
++			p1 = WMT_STP_CONF_EN; p2 = 1;
++			rc4 = wmt_core_ctrl(WMT_CTRL_STP_CONF, &p1, &p2);
++			rc5 = wmt_core_reg_rw_raw(0, 0x80000008, &hw, 0xffffffff);
++			WMT_INFO_FUNC("t1100: stp reinit before patch %u: %d/%d/%d/%d hwcode 0x%08x (ret %d)\n",
++				      patch_index + 1, rc1, rc2, rc3, rc4, hw, rc5);
++			t1100_patch_active = 1;
+ 		}
  	}
  
- #if CFG_WMT_PATCH_DL_OPTM
-@@ -1320,7 +1328,7 @@
+@@ -1320,7 +1366,7 @@
  	iRet = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
  	if (iRet) {
  		WMT_ERR_FUNC("init_table_3 fail(%d)\n", iRet);
@@ -46,7 +82,7 @@
  	}
  #endif
  
-@@ -3180,16 +3188,102 @@
+@@ -3180,16 +3226,102 @@
  	return iRet;
  }
  

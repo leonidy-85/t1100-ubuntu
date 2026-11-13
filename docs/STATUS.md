@@ -3869,3 +3869,17 @@ RNDIS-гаджету), делать при физическом доступе �
   отвечает**, но цикл power-on повторяется с `1_1`. `wlan0` нет.
 - Модули: `wmt_drv` `fbd0c565…`, `wlan_drv_gen3` `f4723c04…`, `mtk_btif_drv`
   `e29eaecb…`. Патч `0014` обновлён (M44+M45). Новых гипотез не начинаю.
+
+## 13.11 (35): M46 — STP-reinit между патчами не оживляет чип (в отличие от power-cycle)
+
+- Реализовано: `1_1` → reset (best-effort) → readback `0xf0078000` →
+  STP-reinit (`close/open/mode/en`) → `hw_check` → `1_0`.
+- Прогон: `1_1` 315/315 `download -> 0`; `reset ack after patch 0: no`; readback
+  `0xf0078000` = `ret -2` (STP уже закрыт); reinit коды `0/0/0/0`, но
+  `hwcode = 0 (ret -3)` — **чип не отвечает после reinit**; `1_0` →
+  `download -> -1` (адресная команда не проходит). Следующий power-on снова даёт
+  `hwcode 0x788` (чип жив), цикл повторяется.
+- `wlan0` нет; `wlanAdapterStart` падает на `nicpmSetDriverOwn`.
+- Модуль `wmt_drv` `a723a4d9…`; `wlan_drv_gen3` `f4723c04…`; `mtk_btif_drv`
+  `e29eaecb…`. Патч `0014` обновлён (набор + best-effort reset + reinit между
+  патчами + readback).
