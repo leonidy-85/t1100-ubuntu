@@ -3607,3 +3607,47 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
   доходит до `nicpmSetDriverOwn` (`DRIVER OWN status=0 count=513`) и падает на
   READY=0; `wlan0` нет. Следующий шаг — прочитать память по `0x98022` через
   WMT `REG_READ` и сравнить с телом файла (`refs/m33-last-fragment-and-patchinfo.md`).
+### 13.11 (18): Type-C — `mt6370-tcpc` наконец пробнится (18 Вт всё ещё за PD)
+
+Драйвер `mt6370-tcpc` в дереве был, конфиг (`CONFIG_TYPEC_TCPM/TCPCI/MT6370`)
+тоже, узел `pmic@34/tcpc/connector` — в DTS и в прошитом DTB, но probe
+всегда падал:
+
+```
+mt6370-tcpc mt6370-tcpc.7.auto: error -EINVAL: Failed to register tcpci port
+probe with driver mt6370-tcpc failed with error -22
+```
+
+**Причина — не железо и не DTB, а обязательное свойство.** В нашем коннекторе
+стоит `pd-disable` (PD выключен намеренно: у коннектора нет `usb-role-switch`
+и graph-endpoints, иначе tcpm дёргает роль `mtu3` и рвёт RNDIS-гаджет, через
+который идёт SSH). При этом `tcpm_fw_get_caps()`
+(`drivers/usb/typec/tcpm/tcpm.c`) в non-PD ветке **требует** строковое
+свойство `typec-power-opmode`:
+
+```c
+if (!port->pd_supported) {
+	ret = fwnode_property_read_string(fwnode, "typec-power-opmode", &opmode_str);
+	if (ret)
+		return ret;      /* -EINVAL */
+```
+
+Его не было → `-EINVAL` → `Failed to register tcpci port` → probe `-22`.
+Сообщение `Can't find connector node.` при этом не печаталось: `connector`
+находился, падало позже.
+
+**Фикс** (коммит ядра `c1c0a897d`): `typec-power-opmode = "default";` в узел
+`connector`. После прошивки: `probe of mt6370-tcpc.7.auto returned 0`,
+появился `/sys/class/typec/port0` с `data_role=[device] power_role=[sink]
+usb_typec_revision=1.2`.
+
+**Что это даёт и чего нет.** Детект Type-C-порта теперь работает, но
+PD-негоциации нет (`pd-disable`), `/sys/class/usb_power_delivery` пуст, а
+`usb_type` зарядника по-прежнему `[Unknown] SDP DCP CDP` — класс BC1.2 от
+USB-порта ноутбука не определяется. 18 Вт (9 В × 2 А) требуют **PD-зарядника**
+и снятия `pd-disable` — отдельный шаг с риском потерять USB-сеть (SSH идёт по
+RNDIS-гаджету), делать при физическом доступе к плате.
+
+**Питание сейчас:** лимит входа 900 мА (`IAICR_UA=900000`), при нём вход
+≈750 мА / 3.5 Вт и ≈400 мА идёт в батарею — планшет заряжается (10 → 32 %),
+`t1100-power-guard` больше не гасит.
