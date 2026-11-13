@@ -3566,3 +3566,18 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
   стартует**, стартовая команда нужна, а ROM её не выполняет. Следующее —
   подавить assert на время патча и/или найти вендорскую «стартовую»
   последовательность для icId `0x0788` (`refs/m30-wmt-reset-blocker.md`, §52).
+
+## 13.11 (18): M31 — у вендора нет иной «start»-команды; reset всё ещё без ответа
+
+- Из стока (`/home/l/aurora_root.img`): `wmt_loader` — только `/dev/wmtdetect`
+  (чип-id + module init); `wmt_launcher` — `srh_patch`/`srh_rom_patch` и
+  `patch info` (имя + 4 байта адреса), «BTIF Mode» по умолчанию. Отдельной
+  команды «start patch» в userspace **нет** — старт делает ядро `WMT_RESET_CMD`
+  `{01 07 01 00 04}`, и mt6765 использует те же байты.
+- `P_ADDRESS` подтверждён кодом (обе address-команды до цикла, ошибка → -1;
+  у нас `patch dwn:0` 230/230).
+- Подавление `wmt_lib_trigger_assert` + `mtk_wcn_stp_set_wmt_trg_assert(0)` перед
+  ретраями не помогло: первая отправка reset уходит, ответа нет (`rx:0`), STP
+  всё равно сбрасывается coredump/assert-путём (`set f/w assert`) ⇒ ретраи
+  падают с `-2`, `cpupcr=0x14ef8` (ROM), `wlan0` нет. Следующий шаг — заглушить
+  весь coredump/assert-путь на время патча (`refs/m31-wmt-loader-and-reset.md`).
