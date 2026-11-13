@@ -3691,3 +3691,16 @@ RNDIS-гаджету), делать при физическом доступе �
   (`txseq`/`stp_en`, заморожены через `t1100_patch_active`). Следующий шаг —
   пройти `wmt_core_stp_init()` после power-cycle и повторить `hw_check`
   (`refs/m36-power-cycle-after-patch.md`).
+
+## 13.11 (26): M37 — STP-reinit оживляет чип (hwcode 0x788), power-cycle стирает патч
+
+- После power-cycle пройдена STP-инициализация как в `wmt_core_stp_init()`
+  (`close/open/mode/en` — все rc=0), снята заморозка `t1100_patch_active`:
+  `hwcode after stp reinit = 0x00000788 (ret 0)` ⇒ чип снова обслуживает
+  команды, «молчание» было рассинхронизацией STP.
+- Readback после перезапуска: `patchmem[0x80098020/24/28] = 0` с `ret 0` (чтение
+  работает) ⇒ power-cycle **стирает** патч; перекладывать надо без перезапуска
+  домена.
+- `cpupcr=0x1170` (ROM), READY=0, `wlan0` нет. Следующий шаг — STP-reinit сразу
+  после доставки патча (без power-cycle), затем `hw_check`+readback и «старт»
+  (`refs/m37-stp-reinit.md`).
