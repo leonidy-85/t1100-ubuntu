@@ -4342,3 +4342,58 @@ hdr a3 40 61 44: txseq 4 / txack 3, type 4, len 0x061 = 97 = 5 (WMT cmd 01 01 5d
 чтение), но `[core dump end]` не приходит, страниц никто не отдаёт, чип молчит до
 power-cycle. Виновник найден точнее: единственный «сброс», который пробует стек, — WMT-операция
 к занятому чипу; аппаратный путь (`consys_hw_pwr_ctrl`) в этот момент не используется.
+
+## 70. M54: тёплый AP_RGU-сброс — `1_0` доставлен (первый раз за весь порт) (13.11)
+
+### 70.1 Что сделано
+
+- `platform/mt6771.c`: `consys_hw_warm_reset()` — только `AP_RGU` CPU reset bit
+  (`0x10007018`, bit12, key `0x88`): assert → 10 мс → deassert → 50 мс. **Без** SPM
+  iso/sram-pd и без `wmt_plat_pwr_ctrl(OFF)`.
+- `core/wmt_lib.c`: в `wmt_lib_btm_cb(BTM_RST_OP)` при `t1100_warm_reset=1` вызывается
+  `consys_hw_warm_reset()` вместо `wmt_lib_cmb_rst(WMTRSTSRC_RESET_STP)` (тот слал
+  `WMT_OPID_HW_RST` по WMT занятому дампом чипу и падал по таймауту).
+- `wmt_ic_soc.c`: после тихого окна при `t1100_warm_reset=1` — STP
+  `close/open/MODE=MAND/EN`, `hwcode`, `patchmark[0xf0078000]`, `patchmark[0x80098020]`,
+  затем один `WMT_RESET`.
+
+### 70.2 Прогон (последовательность)
+
+```
+61.789  after quiet hwcode 0x00000788 (ret 0)     ← после тёплого сброса чип отвечает
+61.790  after quiet wmt reset: 0                  ← WMT_RESET впервые прошёл
+61.790  reset ack after patch 0: yes
+61.790  downloading 1_0 (seq 2) 229356, addr 22800900
+62.061  _stp_btm_handler: whole chip reset start! → t1100: warm reset (AP_RGU bit)
+62.061  ;;CONNSYS core dump start ..              ← дамп пришёл и на хвосте 1_0
+62.121  whole chip reset end!
+67.361  post-warm stp reinit 0/0/0/0
+67.361  patchmark[0xf0078000] = 0x00000000 (ret 0)
+67.361  patchmark[0x80098020] = 0x00000000 (ret 0)
+67.361  after quiet hwcode 0x00000788 (ret 0)
+67.362  after quiet wmt reset: 0
+67.362  ROMv4_be_patch_1_0_hdr.bin download -> 0  ← 1_0 доставлен
+67.362  reset ack after patch 1: yes
+```
+
+**Оба патча доставлены в одном сеансе, без полного цикла питания.** `patchmark` читается
+(`ret 0`), но обе ячейки нулевые — при этом ROM принял `1_0`, значит эти адреса не являются
+меткой «патч жив»; критерий — приём второго патча, и он выполнен.
+
+### 70.3 WLAN после патчей
+
+```
+t1100-hif[after-rompatch]: WCIR=0x00100788 chipid=0x0788 rev=0 POR=1 READY=0 WASR=0x00010000
+                           mbox0=0x02000020 cpupcr=0x000026b2
+wlanAdapterStart: Waiting for Ready bit timeout, Device to Host MailBox 0x20
+t1100-start[0]: addr=0x000a5800 cpupcr after 0x0000268a ready=0
+t1100-start[1]: addr=0x020a1000 cpupcr after 0x00000594 ready=0
+glResetTrigger: whole-chip reset suppressed (t1100_no_reset=1)
+wlanPollingCpupcr: 0x00014f08 / 0x000055c0 / 0x00014ee8 / 0x000002a2
+wlanProbe failed (-5)
+```
+
+`WCIR = 0x00100788` — бит21 (`READY`) = 0; `mbox0 = 0x02000020` (Device→Host mailbox 0x20);
+`cpupcr` меняется (ядро исполняет код), но в тех же адресах `0x14f08/0x55c0`, что и
+assert-обработчик в M50 — похоже, прошивка после wifi-start снова уходит в assert-путь.
+`wlan0` нет.

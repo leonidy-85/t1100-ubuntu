@@ -1,0 +1,724 @@
+diff -u -r a/common_main/core/wmt_lib.c b/common_main/core/wmt_lib.c
+--- a/common_main/core/wmt_lib.c	2026-11-13 13:39:01.751099561 +0000
++++ b/common_main/core/wmt_lib.c	2026-11-13 13:39:01.752115887 +0000
+@@ -1171,7 +1171,7 @@
+ 	}
+ 	osal_memset(met_dump_buf, 0, MET_DUMP_SIZE);
+ 
+-	emi_met_base = ioremap_nocache(emi_info->emi_ap_phy_addr + emi_met_offset, emi_met_size);
++	emi_met_base = ioremap(emi_info->emi_ap_phy_addr + emi_met_offset, emi_met_size);
+ 	if (!emi_met_base) {
+ 		osal_free(met_dump_buf);
+ 		WMT_ERR_FUNC("met emi ioremap fail\n");
+@@ -1951,6 +1951,13 @@
+ 	return wmt_plat_wake_lock_ctrl(WL_OP_PUT);
+ }
+ 
++extern INT32 consys_hw_warm_reset(VOID);
++
++/* T1100 M54: the chip is dumping when STP asks for a whole chip reset, so the
++ * WMT-based reset (WMT_OPID_HW_RST) can never be answered.  Use the warm
++ * hardware reset instead: AP_RGU CPU reset bit only, MCU memory survives. */
++extern int t1100_warm_reset;	/* defined in wmt_ic_soc.c (one per module) */
++
+ MTK_WCN_BOOL wmt_lib_btm_cb(MTKSTP_BTM_WMT_OP_T op)
+ {
+ 	MTK_WCN_BOOL bRet = MTK_WCN_BOOL_FALSE;
+@@ -1958,7 +1965,12 @@
+ 	if (op == BTM_RST_OP) {
+ 		/* high priority, not to enqueue into the queue of wmtd */
+ 		WMT_INFO_FUNC("Invoke whole chip reset from stp_btm!!!\n");
+-		wmt_lib_cmb_rst(WMTRSTSRC_RESET_STP);
++		if (t1100_warm_reset) {
++			WMT_INFO_FUNC("t1100: warm reset (AP_RGU bit), no power gating\n");
++			consys_hw_warm_reset();
++		} else {
++			wmt_lib_cmb_rst(WMTRSTSRC_RESET_STP);
++		}
+ 		bRet = MTK_WCN_BOOL_TRUE;
+ 	} else if (op == BTM_DMP_OP) {
+ 
+diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
+--- a/common_main/platform/mt6771.c	2026-11-13 13:39:01.753156018 +0000
++++ b/common_main/platform/mt6771.c	2026-11-13 13:39:01.754164038 +0000
+@@ -34,6 +34,10 @@
+ *                    E X T E R N A L   R E F E R E N C E S
+ ********************************************************************************
+ */
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/regmap.h>
+ #include <connectivity_build_in_adapter.h>
+ #include <linux/clk.h>
+ #include <linux/delay.h>
+@@ -42,6 +46,10 @@
+ #include "osal_typedef.h"
+ #include "mt6771.h"
+ #include "mtk_wcn_consys_hw.h"
++#include "wmt_core.h"
++#include <linux/fs.h>
++#include <linux/file.h>
++#include <linux/slab.h>
+ 
+ #ifdef CONFIG_MTK_EMI
+ #include <mt_emi_api.h>
+@@ -87,9 +95,20 @@
+ static VOID consys_vcn28_hw_mode_ctrl(UINT32 enable);
+ static INT32 consys_hw_vcn28_ctrl(UINT32 enable);
+ static INT32 consys_hw_wifi_vcn33_ctrl(UINT32 enable);
++/*
++ * T1100: off by default. Kept only as a diagnostic: it writes the MCU RAM code
++ * (soc3_0_ram_mcu_e1_hdr.bin) to EMI+0, which is the mechanism mt6765/mt6761
++ * use (mtk_wcn_soc_rom_patch_dwn(), address from userspace), not MT6771's.
++ */
++int t1100_emi_rom_patch;
++module_param(t1100_emi_rom_patch, int, 0444);
++MODULE_PARM_DESC(t1100_emi_rom_patch,
++		 "T1100: write soc3_0_ram_mcu_e1_hdr.bin to EMI+0 before MCU reset (not the vendor ROMv4 path)");
++
+ static INT32 consys_hw_bt_vcn33_ctrl(UINT32 enable);
+ static UINT32 consys_soc_chipid_get(VOID);
+ static INT32 consys_emi_mpu_set_region_protection(VOID);
++static INT32 consys_dl_rom_patch(UINT32 ip_ver);
+ static UINT32 consys_emi_set_remapping_reg(VOID);
+ static INT32 bt_wifi_share_v33_spin_lock_init(VOID);
+ static INT32 consys_clk_get_from_dts(struct platform_device *pdev);
+@@ -359,11 +378,25 @@
+ 
+ static INT32 consys_clk_get_from_dts(struct platform_device *pdev)
+ {
+-	clk_scp_conn_main = devm_clk_get(&pdev->dev, "conn");
++	/*
++	 * T1100 port (mainline 6.12): the vendor DT took this clock from its own
++	 * "mediatek,scpsys" clock provider (consys: clocks = <&scpsys 2>). No
++	 * such provider exists in mainline, and CONSYS_PWR_ON_OFF_API_AVAILABLE
++	 * is 0 for MT6771, so consys_hw_power_ctrl() never calls
++	 * clk_prepare_enable() on this clock: it walks the CONN power domain
++	 * through the SPM registers instead (0x1000632c). The lookup is kept
++	 * for a future clk-mt6771, but it must not fail the probe - otherwise
++	 * wmt_drv cannot power the chip on at all.
++	 */
++	clk_scp_conn_main = devm_clk_get_optional(&pdev->dev, "conn");
+ 	if (IS_ERR(clk_scp_conn_main)) {
+-		WMT_PLAT_PR_ERR("[CCF]cannot get clk_scp_conn_main clock.\n");
+-		return PTR_ERR(clk_scp_conn_main);
++		WMT_PLAT_PR_ERR("[CCF]devm_clk_get_optional(conn) failed(%ld)\n",
++				(long)PTR_ERR(clk_scp_conn_main));
++		clk_scp_conn_main = NULL;
++		return 0;
+ 	}
++	if (!clk_scp_conn_main)
++		WMT_PLAT_PR_WARN("[CCF]no \"conn\" clock in DT, power-on uses the SPM sequence\n");
+ 	WMT_PLAT_PR_DBG("[CCF]clk_scp_conn_main=%p\n", clk_scp_conn_main);
+ 
+ 	return 0;
+@@ -372,18 +405,27 @@
+ static INT32 consys_pmic_get_from_dts(struct platform_device *pdev)
+ {
+ #if CONSYS_PMIC_CTRL_ENABLE
+-	reg_VCN18 = regulator_get(&pdev->dev, "vcn18");
+-	if (!reg_VCN18)
+-		WMT_PLAT_PR_ERR("Regulator_get VCN_1V8 fail\n");
+-	reg_VCN28 = regulator_get(&pdev->dev, "vcn28");
+-	if (!reg_VCN28)
+-		WMT_PLAT_PR_ERR("Regulator_get VCN_2V8 fail\n");
+-	reg_VCN33_BT = regulator_get(&pdev->dev, "vcn33_bt");
+-	if (!reg_VCN33_BT)
+-		WMT_PLAT_PR_ERR("Regulator_get VCN33_BT fail\n");
+-	reg_VCN33_WIFI = regulator_get(&pdev->dev, "vcn33_wifi");
+-	if (!reg_VCN33_WIFI)
+-		WMT_PLAT_PR_ERR("Regulator_get VCN33_WIFI fail\n");
++	/*
++	 * A missing/failed supply comes back as an ERR_PTR, not as NULL: the
++	 * vendor test `if (!reg)' misses it and the next regulator_enable()
++	 * would dereference an error pointer. Normalise to NULL so that the
++	 * (already existing) NULL checks in the power-on path skip the rail.
++	 */
++#define CONSYS_GET_SUPPLY(_reg, _name, _what)					\
++	do {									\
++		(_reg) = regulator_get(&pdev->dev, (_name));			\
++		if (IS_ERR(_reg)) {						\
++			WMT_PLAT_PR_ERR("Regulator_get %s fail(%ld)\n", (_what),	\
++					(long)PTR_ERR(_reg));			\
++			(_reg) = NULL;						\
++		}								\
++	} while (0)
++
++	CONSYS_GET_SUPPLY(reg_VCN18, "vcn18", "VCN_1V8");
++	CONSYS_GET_SUPPLY(reg_VCN28, "vcn28", "VCN_2V8");
++	CONSYS_GET_SUPPLY(reg_VCN33_BT, "vcn33_bt", "VCN33_BT");
++	CONSYS_GET_SUPPLY(reg_VCN33_WIFI, "vcn33_wifi", "VCN33_WIFI");
++#undef CONSYS_GET_SUPPLY
+ #endif
+ 	return 0;
+ }
+@@ -393,22 +435,132 @@
+ 	return 0;
+ }
+ 
+-static INT32 consys_clock_buffer_ctrl(MTK_WCN_BOOL enable)
++/*
++ * T1100 port (mainline 6.12): no-op -> real XO_WCN enable.
++ *
++ * The stock kernel reached the PMIC through its mtk_clkbuf driver. What the
++ * MT6631 actually needs is the 26 MHz reference, and on MT6358 that is three
++ * register writes: the DCXO buffer-2 mode has to select the WCN request
++ * (DCXO_CW00[4:3] = WCN_EN_M), the SRCLKEN_IN3 request line has to be enabled
++ * (TOP_SPI_CON1 bit 0), and the AP-side pwrap gate has to be opened
++ * (pwrap+0x184 bit 1, DCXO_CONN_ENABLE). Without them the combo stays
++ * clock-less: CONSYS never answers, chip id 0x18070008 reads 0, cpupcr
++ * 0x18070160 reads 0 and STP times out (docs/wifi-port-log.md M15-M27).
++ */
++#define T1100_PWRAP_PHYS		0x1000d000
++#define T1100_PWRAP_DCXO_ENABLE		0x184
++#define T1100_PWRAP_DCXO_CONN_ENABLE	0x2	/* BIT(1) */
++
++/* MT6358 register map (mt6771/include/mach/upmu_hw.h) */
++#define T1100_MT6358_DCXO_CW00		0x788
++#define T1100_MT6358_TOP_SPI_CON1	0x44e
++#define T1100_XO_EXTBUF2_MODE_MASK	0x3
++#define T1100_XO_EXTBUF2_MODE_SHIFT	3
++#define T1100_XO_EXTBUF2_WCN_EN_M	0x0
++#define T1100_RG_SRCLKEN_IN3_EN_MASK	0x1
++#define T1100_RG_SRCLKEN_IN3_EN_SHIFT	0
++
++static struct regmap *t1100_pmic_regmap(void)
++{
++	static struct regmap *pmic;
++	struct device_node *np;
++	struct platform_device *pdev;
++
++	if (pmic)
++		return pmic;
++
++	/* mt6771.dtsi inherits the whole SoC description from mt8183.dtsi, so
++	 * the pwrap node still carries the mt8183 compatible string.
++	 */
++	np = of_find_compatible_node(NULL, NULL, "mediatek,mt8183-pwrap");
++	if (!np)
++		np = of_find_compatible_node(NULL, NULL, "mediatek,mt6771-pwrap");
++	if (!np) {
++		WMT_PLAT_PR_ERR("no pwrap node, cannot reach the PMIC\n");
++		return NULL;
++	}
++
++	pdev = of_find_device_by_node(np);
++	of_node_put(np);
++	if (!pdev) {
++		WMT_PLAT_PR_ERR("pwrap device not registered yet\n");
++		return NULL;
++	}
++
++	pmic = dev_get_regmap(&pdev->dev, NULL);
++	if (!pmic)
++		WMT_PLAT_PR_ERR("pwrap has no regmap, cannot reach the PMIC\n");
++
++	return pmic;
++}
++
++static INT32 t1100_consys_clk_buf_conn(MTK_WCN_BOOL enable)
+ {
+-	if (enable)
+-		KERNEL_clk_buf_ctrl(CLK_BUF_CONN, true);	/*open XO_WCN*/
+-	else
+-		KERNEL_clk_buf_ctrl(CLK_BUF_CONN, false);	/*close XO_WCN*/
++	struct regmap *pmic = t1100_pmic_regmap();
++	void __iomem *pwrap;
++	UINT32 val;
++	INT32 ret;
++
++	if (!enable) {
++		/* Keep the buffer on: VCN33 is always-on in DT and a dangling
++		 * SRCLKEN request from a half-dead chip is worse than a few mA.
++		 */
++		return 0;
++	}
++
++	if (pmic) {
++		/* DCXO buffer 2: request source = WCN (WCN_EN_M) */
++		ret = regmap_update_bits(pmic, T1100_MT6358_DCXO_CW00,
++					 T1100_XO_EXTBUF2_MODE_MASK <<
++					 T1100_XO_EXTBUF2_MODE_SHIFT,
++					 T1100_XO_EXTBUF2_WCN_EN_M <<
++					 T1100_XO_EXTBUF2_MODE_SHIFT);
++		if (ret)
++			WMT_PLAT_PR_ERR("DCXO_CW00 mode write failed(%d)\n", ret);
++
++		/* SRCLKEN_IN3: let the CONN subsystem request the buffer */
++		ret = regmap_update_bits(pmic, T1100_MT6358_TOP_SPI_CON1,
++					 T1100_RG_SRCLKEN_IN3_EN_MASK <<
++					 T1100_RG_SRCLKEN_IN3_EN_SHIFT,
++					 1 << T1100_RG_SRCLKEN_IN3_EN_SHIFT);
++		if (ret)
++			WMT_PLAT_PR_ERR("SRCLKEN_IN3 write failed(%d)\n", ret);
++	}
++
++	pwrap = ioremap(T1100_PWRAP_PHYS, 0x1000);
++	if (pwrap) {
++		val = readl(pwrap + T1100_PWRAP_DCXO_ENABLE);
++		writel(val | T1100_PWRAP_DCXO_CONN_ENABLE,
++		       pwrap + T1100_PWRAP_DCXO_ENABLE);
++		WMT_PLAT_PR_INFO("XO_WCN: pwrap DCXO_ENABLE 0x%08x -> 0x%08x\n",
++				 val, readl(pwrap + T1100_PWRAP_DCXO_ENABLE));
++		iounmap(pwrap);
++	} else {
++		WMT_PLAT_PR_ERR("cannot map pwrap for DCXO_ENABLE\n");
++	}
++
++	WMT_PLAT_PR_INFO("XO_WCN enabled (PMIC %s)\n", pmic ? "ok" : "unreachable");
+ 
+ 	return 0;
+ }
+ 
++static INT32 consys_clock_buffer_ctrl(MTK_WCN_BOOL enable)
++{
++	/* 4.14 vendor: KERNEL_clk_buf_ctrl(CLK_BUF_CONN, ...) went to
++	 * the MTK clk_buf driver (clkbuf_v1/mt6771) which switches the
++	 * PMIC's XO_WCN buffer - the 26 MHz reference of the combo.
++	 * mainline has no such driver, so the same three writes are done
++	 * on the MT6358/pwrap directly below.
++	 */
++	return t1100_consys_clk_buf_conn(enable);
++}
++
+ static VOID consys_set_if_pinmux(MTK_WCN_BOOL enable)
+ {
+ 	UINT8 *consys_if_pinmux_reg_base = NULL;
+ 
+ 	/* Switch D die pinmux for connecting A die */
+-	consys_if_pinmux_reg_base = ioremap_nocache(CONSYS_IF_PINMUX_REG_BASE, 0x1000);
++	consys_if_pinmux_reg_base = ioremap(CONSYS_IF_PINMUX_REG_BASE, 0x1000);
+ 	if (!consys_if_pinmux_reg_base) {
+ 		WMT_PLAT_PR_ERR("consys_if_pinmux_reg_base(%x) ioremap fail\n", CONSYS_IF_PINMUX_REG_BASE);
+ 		return;
+@@ -434,6 +586,20 @@
+ 		iounmap(consys_if_pinmux_reg_base);
+ }
+ 
++/*
++ * T1100 M54: warm CONSYS reset - only the AP_RGU CPU reset bit, without SPM
++ * isolation, SRAM power-down or power gating.  The MCU memory (and therefore
++ * the patch downloaded into it) is supposed to survive it.
++ */
++INT32 consys_hw_warm_reset(VOID)
++{
++	consys_hw_reset_bit_set(MTK_WCN_BOOL_TRUE);
++	mdelay(10);
++	consys_hw_reset_bit_set(MTK_WCN_BOOL_FALSE);
++	mdelay(50);
++	return 0;
++}
++
+ static VOID consys_hw_reset_bit_set(MTK_WCN_BOOL enable)
+ {
+ 	if (enable) {
+@@ -452,23 +618,52 @@
+ static VOID consys_hw_spm_clk_gating_enable(VOID)
+ {
+ 	/*turn on SPM clock gating enable PWRON_CONFG_EN 0x10006000 32'h0b160001 */
++	/*
++	 * T1100: left empty as in the vendor source. The value from the comment
++	 * (CONSYS_PWRON_CONFG_EN_VALUE) was tried and the hardware only kept
++	 * bit 0 of it, i.e. it is not the CONN main clock gate and changed
++	 * nothing (cpupcr 0x1170 -> 0x1572c, READY still 0): see
++	 * docs/wifi-port-log.md §36.
++	 */
+ }
+ 
+-static INT32 consys_hw_power_ctrl(MTK_WCN_BOOL enable)
++/*
++ * SPM-only CONN power domain walk.
++ *
++ * This is the variant the vendor code compiles for SoCs whose
++ * CONSYS_PWR_ON_OFF_API_AVAILABLE is 0, i.e. the one that programs SPM by hand
++ * instead of asking a clock provider to do it.  The T1100 port needs it because
++ * mainline 6.12 has neither a "conn" clock nor a scpsys clock provider for
++ * MT6771 (see consys_hw_power_ctrl() below).  It was verified on the tablet
++ * with mempeek + tools/device/consys-spm-seq.sh: after it runs, 0x18070008
++ * reads 0x0788 (CONNSYS chip id) instead of 0.
++ *
++ * Two things differ from the vendor copy, both measured on hardware:
++ *
++ *  - CONN AXI bus protection.  infracfg 0x100012a0 is PROT_EN (plain RW),
++ *    0x100012a4 is its write-1-to-clear mirror.  The vendor code writes
++ *    `read & ~CONSYS_PROT_MASK' to 0x100012a4, which clears nothing at all:
++ *    bits 13/14 stay set, 0x18070000/0x180f0000 keep reading 0 and the first
++ *    write into the window stalls the AXI transaction (the driver hung there
++ *    in the ROM-deselect step).  Clear by writing the mask to 0x100012a4, arm
++ *    protection again through 0x100012a0.
++ *  - The vendor handshake loops polled forever.  On a half described SoC that
++ *    is a kernel lock-up, so they are bounded here; the functional check stays
++ *    polling_consys_chipid() right after this.
++ *  - conn_top2_pwr_on_ack (bit 30) is in PWR_CONN_ACK (0x10006180), not in
++ *    CONN_TOP1_PWR_CTRL (0x1000632c) where the vendor looked for it: the dump
++ *    shows 0x10006180 going 0x008fff4c -> 0x408fff4e (bits 1 and 30) while
++ *    0x1000632c never gets bit 30.
++ */
++static INT32 consys_hw_power_ctrl_spm(MTK_WCN_BOOL enable)
+ {
+-#if CONSYS_PWR_ON_OFF_API_AVAILABLE
+-	INT32 iRet = -1;
+-#else
+-	INT32 value = 0;
+-#endif
++#define CONSYS_SPM_POLL_US	50
++#define CONSYS_SPM_POLL_MAX	2000	/* 50 us * 2000 = 100 ms */
++
++	UINT32 value;
++	INT32 i;
+ 
+ 	if (enable) {
+-#if CONSYS_PWR_ON_OFF_API_AVAILABLE
+-		iRet = clk_prepare_enable(clk_scp_conn_main);
+-		if (iRet)
+-			WMT_PLAT_PR_ERR("clk_prepare_enable(clk_scp_conn_main) fail(%d)\n", iRet);
+-		WMT_PLAT_PR_DBG("clk_prepare_enable(clk_scp_conn_main) ok\n");
+-#else
+ 		/*2.write conn_top1_pwr_on=1, power on conn_top1 0x1000632C [2]  1'b1 */
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
+@@ -478,17 +673,27 @@
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
+ 				 CONSYS_SPM_PWR_ON_S_BIT);
+ 		/*3.read conn_top1_pwr_on_ack =1, power on ack ready 0x10006180 [1] */
+-		value = CONSYS_PWR_ON_ACK_BIT &
+-			CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET);
+-		while (value == 0)
+-			value = CONSYS_PWR_ON_ACK_BIT &
+-				CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET);
++		for (i = 0; i < CONSYS_SPM_POLL_MAX; i++) {
++			value = CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET);
++			if (value & CONSYS_PWR_ON_ACK_BIT)
++				break;
++			udelay(CONSYS_SPM_POLL_US);
++		}
++		if (i == CONSYS_SPM_POLL_MAX) {
++			WMT_PLAT_PR_ERR("conn_top1_pwr_on_ack timeout(0x%x)\n", value);
++			return -1;
++		}
+ 		/*3.read conn_top1_pwr_on_ack_s =1, power on ack ready 0x10006184 [1] */
+-		value = CONSYS_PWR_ON_ACK_S_BIT &
+-			CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_S_OFFSET);
+-		while (value == 0)
+-			value = CONSYS_PWR_ON_ACK_S_BIT &
+-				CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_S_OFFSET);
++		for (i = 0; i < CONSYS_SPM_POLL_MAX; i++) {
++			value = CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_S_OFFSET);
++			if (value & CONSYS_PWR_ON_ACK_S_BIT)
++				break;
++			udelay(CONSYS_SPM_POLL_US);
++		}
++		if (i == CONSYS_SPM_POLL_MAX) {
++			WMT_PLAT_PR_ERR("conn_top1_pwr_on_ack_s timeout(0x%x)\n", value);
++			return -1;
++		}
+ 		/*6.write conn_clk_dis=0, enable connsys clock 0x1000632C [4]  1'b0 */
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
+@@ -499,33 +704,48 @@
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
+ 				 ~CONSYS_SPM_PWR_ISO_S_BIT);
++		/*
++		 * T1100: writing the MCU RAM code to EMI+0 is NOT the vendor
++		 * mechanism for this chip and is off by default (module param
++		 * t1100_emi_rom_patch). For chip id 0x0788 the vendor downloads a
++		 * ROMv4 patch over the WMT/STP transport
++		 * (mtk_wcn_soc_normal_patch_dwn(), wmt_ic_soc.c:2753: icId 0x0788 ->
++		 * "ROMv4 patch RAM base"), and on MT6771 that transport is BTIF
++		 * (CONFIG_MTK_BTIF=y + btif@1100c000 in the stock tree), which
++		 * mainline does not have. See docs/wifi-port-log.md §41.4 and §42.
++		 */
++		if (t1100_emi_rom_patch && consys_dl_rom_patch(0))
++			WMT_PLAT_PR_WARN("rompatch: not written, MCU boots unpatched\n");
+ 		/*10.release SW reset of connsys, conn_ap_sw_rst_b=1  0x1000632C[0]   1'b1 */
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
+ 				 CONSYS_SPM_PWR_RST_BIT);
+-		/*disable AXI BUS protect 100012a4 [13][14] */
+-		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET,
+-				 CONSYS_REG_READ(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET) &
+-				 ~CONSYS_PROT_MASK);
++		WMT_PLAT_PR_INFO("rompatch: cpupcr right after reset 0x%08x\n",
++				 CONSYS_REG_READ(conn_reg.mcu_base + CONSYS_CPUPCR_OFFSET));
++		mdelay(50);
++		WMT_PLAT_PR_INFO("rompatch: cpupcr +50ms 0x%08x\n",
++				 CONSYS_REG_READ(conn_reg.mcu_base + CONSYS_CPUPCR_OFFSET));
++		mdelay(50);
++		WMT_PLAT_PR_INFO("rompatch: cpupcr +100ms 0x%08x\n",
++				 CONSYS_REG_READ(conn_reg.mcu_base + CONSYS_CPUPCR_OFFSET));
++		/*disable AXI BUS protect: 0x100012a4 is write-1-to-clear */
++		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_CLR_OFFSET,
++				 CONSYS_PROT_MASK);
+ 		/*read conn_top2_pwr_on_ack =1, power on ack ready 0x10006180 [30] */
+-		value = CONSYS_TOP2_PWR_ON_ACK_BIT &
+-			CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET);
+-		while (value == 0)
+-			value = CONSYS_TOP2_PWR_ON_ACK_BIT &
+-				CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET);
+-		/*read conn_top2_pwr_on_ack_s =1, power on ack ready 0x10006180 [30] */
+-		value = CONSYS_TOP2_PWR_ON_ACK_S_BIT &
+-			CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET);
+-		while (value == 0)
+-			value = CONSYS_TOP2_PWR_ON_ACK_S_BIT &
+-				CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET);
+-#endif /* CONSYS_PWR_ON_OFF_API_AVAILABLE */
++		for (i = 0; i < CONSYS_SPM_POLL_MAX; i++) {
++			value = CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET);
++			if (value & CONSYS_TOP2_PWR_ON_ACK_BIT)
++				break;
++			udelay(CONSYS_SPM_POLL_US);
++		}
++		if (i == CONSYS_SPM_POLL_MAX)
++			WMT_PLAT_PR_ERR("conn_top2_pwr_on_ack timeout(0x%x)\n", value);
++		WMT_PLAT_PR_INFO("CONN SPM power on: 0x%x/0x%x/0x%x\n",
++				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET),
++				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_PWR_CONN_ACK_OFFSET),
++				 CONSYS_REG_READ(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET));
+ 	} else {
+-#if CONSYS_PWR_ON_OFF_API_AVAILABLE
+-		clk_disable_unprepare(clk_scp_conn_main);
+-		WMT_PLAT_PR_DBG("clk_disable_unprepare(clk_scp_conn_main) calling\n");
+-#else
+-		/*disable AXI BUS protect 0x100012a0 [13][14] */
++		/*arm AXI BUS protect again: 0x100012a0 is a plain RW register */
+ 		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET,
+ 				CONSYS_REG_READ(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET) |
+ 				CONSYS_PROT_MASK);
+@@ -547,14 +767,45 @@
+ 		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
+ 				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
+ 				 ~(CONSYS_SPM_PWR_ON_BIT | CONSYS_SPM_PWR_ON_S_BIT));
+-#endif /* CONSYS_PWR_ON_OFF_API_AVAILABLE */
+ 	}
+ 
+-#if CONSYS_PWR_ON_OFF_API_AVAILABLE
+-	return iRet;
+-#else
+ 	return 0;
+-#endif
++#undef CONSYS_SPM_POLL_US
++#undef CONSYS_SPM_POLL_MAX
++}
++
++static INT32 consys_hw_power_ctrl(MTK_WCN_BOOL enable)
++{
++	INT32 iRet;
++
++	/*
++	 * Vendor path: with CONSYS_PWR_ON_OFF_API_AVAILABLE the CONN domain is
++	 * walked in hardware by enabling the "conn" clock of the vendor
++	 * "mediatek,scpsys" clock provider.
++	 *
++	 * Mainline 6.12 has no such provider (mt8183-scpsys exports no clocks and
++	 * there is no clk-mt6771), so devm_clk_get_optional() leaves
++	 * clk_scp_conn_main NULL - and clk_enable(NULL) is a *successful* no-op.
++	 * That is why the power-on reported "finish(0)" while nothing was powered:
++	 * every read of 0x18070000/0x180f0000 returned 0. Fall back to the SPM
++	 * sequence in that case.
++	 */
++	if (!clk_scp_conn_main)
++		return consys_hw_power_ctrl_spm(enable);
++
++	if (enable) {
++		iRet = clk_prepare_enable(clk_scp_conn_main);
++		if (iRet) {
++			WMT_PLAT_PR_ERR("clk_prepare_enable(clk_scp_conn_main) fail(%d)\n", iRet);
++			return iRet;
++		}
++		WMT_PLAT_PR_DBG("clk_prepare_enable(clk_scp_conn_main) ok\n");
++	} else {
++		clk_disable_unprepare(clk_scp_conn_main);
++		WMT_PLAT_PR_DBG("clk_disable_unprepare(clk_scp_conn_main) calling\n");
++	}
++
++	return 0;
+ }
+ 
+ static INT32 consys_ahb_clock_ctrl(MTK_WCN_BOOL enable)
+@@ -562,6 +813,109 @@
+ 	return 0;
+ }
+ 
++/*
++ * T1100 port: ROM patch for the CONNSYS MCU.
++ *
++ * This file (mt6771) has no ROM patch step at all, while the sibling platforms
++ * call consys_dl_rom_patch() -> mtk_wcn_soc_rom_patch_dwn() from
++ * polling_consys_chipid(), i.e. right after the MCU answers its chip id and
++ * *before* the WLAN driver downloads its own RAM code (mt6765.c:681,
++ * mt6761.c:682; the common downloader is wmt_ic_soc.c:3387).
++ *
++ * Nothing here is invented:
++ *  - the patch file starts with `struct wmt_rom_patch`
++ *    (common_main/core/include/wmt_core.h:427: ucDateTime[16], ucPLat[4],
++ *    u2HwVer, u2SwVer, u4PatchAddr, u4PatchType, u4CRC[4]) and the body
++ *    follows it - mtk_wcn_soc_rom_patch_dwn() strips exactly
++ *    sizeof(struct wmt_rom_patch) ("patchSize -= sizeof(struct wmt_rom_patch)");
++ *  - the destination is the file's own u4PatchAddr, which lives in the same
++ *    MCU/EMI address space the WLAN sections use (sections are 0xf0000000 and
++ *    0xf0055000, and wlan_lib.c indexes them with `& 0xfffff`), so the same
++ *    masking applies here;
++ *  - soc3_0_ram_mcu_e1_hdr.bin decodes as ucPLat="ALPS", u2HwVer=u2SwVer=0x8a10,
++ *    u4PatchAddr=0xf0000000, u4PatchType=0x04000000, body=165296 bytes; the
++ *    three *_mcu_*_hdr.bin files on the device are byte identical, so the eco
++ *    suffix in the name does not select different content.
++ *
++ * The vendor table (patch name + address) normally comes from the userspace
++ * wmt_loader daemon via wmt_ctrl_ul_cmd("srh_rom_patch"), which this port does
++ * not have - hence reading the file directly.
++ */
++static INT32 consys_dl_rom_patch(UINT32 ip_ver)
++{
++#define T1100_ROM_PATCH_FILE "/lib/firmware/soc3_0_ram_mcu_e1_hdr.bin"
++	struct wmt_rom_patch *hdr;
++	struct file *fp;
++	loff_t pos = 0;
++	PUINT8 buf = NULL;
++	UINT32 total, body, off;
++	void __iomem *dst;
++	ssize_t rd;
++	INT32 ret = -1;
++
++	fp = filp_open(T1100_ROM_PATCH_FILE, O_RDONLY, 0);
++	if (IS_ERR(fp)) {
++		WMT_PLAT_PR_ERR("rompatch: cannot open %s (%ld)\n",
++				T1100_ROM_PATCH_FILE, (long)PTR_ERR(fp));
++		return -1;
++	}
++
++	total = i_size_read(file_inode(fp));
++	if (total <= sizeof(struct wmt_rom_patch) || total > SZ_2M) {
++		WMT_PLAT_PR_ERR("rompatch: bad file size %u\n", total);
++		goto out;
++	}
++
++	buf = osal_malloc(total);
++	if (!buf) {
++		WMT_PLAT_PR_ERR("rompatch: out of memory (%u)\n", total);
++		goto out;
++	}
++
++	rd = kernel_read(fp, buf, total, &pos);
++	if (rd != (ssize_t)total) {
++		WMT_PLAT_PR_ERR("rompatch: short read %zd/%u\n", rd, total);
++		goto out;
++	}
++
++	hdr = (struct wmt_rom_patch *)buf;
++	body = total - sizeof(*hdr);
++	off = hdr->u4PatchAddr & 0xfffff;
++
++	WMT_PLAT_PR_INFO("rompatch: ip_ver=0x%x plat=%c%c%c%c hw=0x%x sw=0x%x addr=0x%08x off=0x%x type=0x%x total=%u body=%u\n",
++			 ip_ver, hdr->ucPLat[0], hdr->ucPLat[1], hdr->ucPLat[2], hdr->ucPLat[3],
++			 hdr->u2HwVer, hdr->u2SwVer, hdr->u4PatchAddr, off,
++			 hdr->u4PatchType, total, body);
++	WMT_PLAT_PR_INFO("rompatch: body head %08x %08x %08x %08x\n",
++			 ((PUINT32)(buf + sizeof(*hdr)))[0], ((PUINT32)(buf + sizeof(*hdr)))[1],
++			 ((PUINT32)(buf + sizeof(*hdr)))[2], ((PUINT32)(buf + sizeof(*hdr)))[3]);
++
++	if (!gConEmiPhyBase || off + body > gConEmiSize) {
++		WMT_PLAT_PR_ERR("rompatch: destination out of EMI (base 0x%llx size 0x%llx)\n",
++				(u64)gConEmiPhyBase, (u64)gConEmiSize);
++		goto out;
++	}
++
++	dst = ioremap(gConEmiPhyBase + off, body);
++	if (!dst) {
++		WMT_PLAT_PR_ERR("rompatch: ioremap failed\n");
++		goto out;
++	}
++	osal_memcpy_toio(dst, buf + sizeof(*hdr), body);
++	WMT_PLAT_PR_INFO("rompatch: EMI 0x%llx readback %08x %08x %08x %08x\n",
++			 (u64)(gConEmiPhyBase + off),
++			 readl(dst), readl(dst + 4), readl(dst + 8), readl(dst + 12));
++	iounmap(dst);
++
++	ret = 0;
++out:
++	if (buf)
++		osal_free(buf);
++	filp_close(fp, NULL);
++	return ret;
++#undef T1100_ROM_PATCH_FILE
++}
++
+ static INT32 polling_consys_chipid(VOID)
+ {
+ 	UINT32 retry = 10;
+@@ -691,7 +1045,7 @@
+ 	UINT8 *consys_afe_reg_base = NULL;
+ 
+ 	/*15.default no need,update ANA_WBG(AFE) CR if needed, CONSYS_AFE_REG */
+-	consys_afe_reg_base = ioremap_nocache(CONSYS_AFE_REG_BASE, 0x100);
++	consys_afe_reg_base = ioremap(CONSYS_AFE_REG_BASE, 0x100);
+ 	if (consys_afe_reg_base) {
+ 		CONSYS_REG_WRITE(consys_afe_reg_base + CONSYS_AFE_RG_WBG_PLL_03_OFFSET,
+ 				CONSYS_AFE_RG_WBG_PLL_03_VALUE);
+@@ -714,11 +1068,12 @@
+ {
+ #if CONSYS_PMIC_CTRL_ENABLE
+ 	if (enable) {
+-		/*need PMIC driver provide new API protocol */
+-		/*1.AP power on VCN_1V8 LDO (with PMIC_WRAP API) VCN_1V8  */
+-		/*set vcn18 SW mode*/
+-		KERNEL_upmu_set_reg_value(MT6358_LDO_VCN18_OP_EN, 0x1);
+-
++		/* 4.14 vendor additionally poked the PMIC register
++		 * MT6358_LDO_VCN18_OP_EN to put the LDO in SW mode before
++		 * enabling it. In mainline the MT6358 regulator driver owns that
++		 * register and regulator_enable() does the equivalent, so the
++		 * poking is dropped (keeping it would fight the regmap cache).
++		 */
+ 		if (reg_VCN18) {
+ 			regulator_set_voltage(reg_VCN18, 1800000, 1800000);
+ 			if (regulator_enable(reg_VCN18))
+@@ -727,9 +1082,7 @@
+ 				WMT_PLAT_PR_DBG("enable VCN18 ok\n");
+ 		}
+ 
+-		/*set vcn33 SW mode*/
+-		KERNEL_upmu_set_reg_value(MT6358_LDO_VCN33_OP_EN, 0x1);
+-
++		/* ditto for VCN33 (MT6358_LDO_VCN33_OP_EN) */
+ 		if (reg_VCN33_BT) {
+ 			regulator_set_voltage(reg_VCN33_BT, 3500000, 3500000);
+ 			if (regulator_enable(reg_VCN33_BT))
+@@ -754,15 +1107,18 @@
+ 
+ static VOID consys_vcn28_hw_mode_ctrl(UINT32 enable)
+ {
+-#if CONSYS_PMIC_CTRL_ENABLE
+-	if (enable) {
+-		KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_OP_EN, 1);
+-		KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_OP_CFG, 0);
+-	} else {
+-		KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_OP_EN, 0);
+-		KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_OP_CFG, 0);
+-	}
+-#endif
++	/* 4.14 vendor: KERNEL_pmic_set_register_value(PMIC_RG_LDO_VCN28_HW0_*
++	 * ...) -- switch the VCN28 LDO between HW (PMIC-internal) and SW control.
++	 * That is MTK-PMIC-internal API (upmu_common) which has no mainline
++	 * equivalent; the MT6358 regulator driver always drives VCN28 in SW mode.
++	 *
++	 * Stubbed as a no-op with an explicit message so that a power-on failure
++	 * in FM/co-clock mode is not silently attributed to the wrong place.
++	 *
++	 * TODO(port): if VCN28 needs HW mode on MT6771, this has to become a
++	 * regulator mode request (regulator_set_mode()).
++	 */
++	WMT_PLAT_PR_DBG("vcn28 hw mode ctrl %u: no-op on mainline\n", enable);
+ }
+ 
+ static INT32 consys_hw_vcn28_ctrl(UINT32 enable)
+@@ -1034,7 +1390,7 @@
+ static INT32 consys_emi_coredump_remapping(UINT8 __iomem **addr, UINT32 enable)
+ {
+ 	if (enable) {
+-		*addr = ioremap_nocache(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
++		*addr = ioremap(gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET, CONSYS_EMI_MEM_SIZE);
+ 		if (*addr) {
+ 			WMT_PLAT_PR_INFO("COREDUMP EMI mapping OK virtual(0x%p) physical(0x%x)\n",
+ 					   *addr, (UINT32) gConEmiPhyBase + CONSYS_EMI_COREDUMP_OFFSET);
