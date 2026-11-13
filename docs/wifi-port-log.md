@@ -3242,3 +3242,56 @@ CONNSYS (MCU ещё не разрешил интерфейс); (3) write-protect
 (DMPU/ATF) без VIO; (4) `IER/DMA_EN/TRI_LVL` могут быть RO — но 40 записей в
 `THR` не заполняют FIFO (`LSR=0x60`), т.е. записи действительно не доходят.
 Подробности: `refs/m28-btif-ccf.md`.
+
+## 51. M29: записи в BTIF пошли — гейт MT6771 инвертирован; ROM отвечает, ROMv4-патч доставлен (13.11)
+
+### 51.1 Проба на трёх стадиях initcall (патч 0065)
+
+Ядро `6.12.114-g400cb6f-touch-rot` (merge2-out), boot перепакован **с ramdisk**,
+DTB прошёл `verify-dtb.sh` (+`LK_EXTRA_RES`), прошит в `p29` через `dd`, sha
+раздела сверен. В dmesg осталась только поздняя стадия (лог начинается с
+0.209 с):
+
+```
+t1100-btif-early: stage=late_initcall IER=00000000->00000001 TRI=0000005a->000000da(write-accepted)
+  IFR0 set=00004800 clr=00004800 sta=00004800 PROT=00006098 APC_CON=00000000
+```
+
+`TRI_LVL` принят, `IFR0=0x4800` — **бит31 = 0**.
+
+### 51.2 Причина: полярность гейта на MT6771 обратная
+
+| `IFR0[31]` | `TRI_LVL ← 0x18` | `IER ← 0x1` |
+|---|---|---|
+| 1 (`0x9befff5d`) | `0x5a` — отброшено | `0x0` — отброшено |
+| 0 (`0x1befff5d`) | **`0x18` — принято** | **`0x1` — принято** |
+
+Бит «CG» = 1 **закрывает** клок; mt8183-драйвер (наследуется портом) считает
+наоборот. Наш `m23_clk_enable()` (SET бита31) выключал BTIF — это и был
+«write-dead» с M23. Glue исправлен: `m23_clk_enable()` пишет **CLR** (0x84),
+CCF-включение `infra_btif` убрано (CCF пишет SET).
+
+### 51.3 Результат по цепочке
+
+```
+wmt_core_hw_check: get hwcode (chip id) (0x788)      <- ROM ответил по STP/BTIF
+mtk_wcn_soc_normal_patch_dwn: patch size(229336) fragNum(230)
+t1100: no EVT for the last fragment (ROM jumps), continuing
+wmt_core: patch dwn:0 frag(230, 336) ok
+t1100: ROMv4 patch download -> 0                     <- ПАТЧ ДОСТАВЛЕН
+```
+
+Для этого в вендорском пути (патч `0013-common-rom-patch-from-firmware.patch`):
+multi-patch берёт файл из `/lib/firmware` без userspace (`patch_num = 1`), и
+отсутствие `WMT_PATCH_EVT` на последнем фрагменте считается успехом.
+
+### 51.4 Текущий блокер
+
+```
+wmt_core_init_script_retry: write (wmt reset) iRet(-2) cmd len err(-2, 5)
+mtk_wcn_soc_sw_init(1274): init_table_3 fail(-1)
+```
+
+`cpupcr` остаётся в ROM (`0x19d8…0x14f12`), `WLAN_READY` = 0, `wlan0` нет:
+патч лежит в памяти, но MCU не перезапущен в него (падает команда «WMT reset»).
+Подробности и артефакты — `refs/m29-btif-early-probe.md`.

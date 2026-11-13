@@ -1,0 +1,125 @@
+From: t1100 bringup <bringup@t1100>
+Subject: [PATCH] soc: mediatek: T1100 M29 BTIF early write probe (diagnostic)
+
+M29: answer "are writes to 0x1100c000 dead from the first initcall, or does
+our own bring-up kill them?"  Three probes (early/device/late_initcall) write
+a marker into IER and TRI_LVL, read it back, and dump the infra gate and
+DEVAPC registers.  One line per stage, prefix "t1100-btif-early:".
+
+Remove: delete the file and the t1100_btif_early.o line in
+drivers/soc/mediatek/Makefile (both marked T1100_DIAG).
+
+--- /dev/null
++++ b/drivers/soc/mediatek/t1100_btif_early.c
+@@ -0,0 +1,102 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * T1100 (M29): are writes to the BTIF window dropped from the very first
++ * initcall, or does something in our own bring-up kill them later?
++ *
++ * Three probes (early/device/late_initcall) do the same thing: write a
++ * marker into IER and TRI_LVL, read it back, and dump the infra gate and
++ * DEVAPC registers.  Read-back equal to the marker means "the write landed".
++ *
++ * Remove: delete this file and the t1100_btif_early.o line in
++ * drivers/soc/mediatek/Makefile (both are marked T1100_DIAG).
++ */
++
++#include <linux/init.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/types.h>
++
++#define T1100_BTIF_PA		0x1100c000
++#define T1100_INFRA_AO_PA	0x10001000	/* IFR0 set/clr/sta, PROT_EN */
++#define T1100_DEVAPC_PA		0x10207000	/* APC_CON at +0xf00 */
++
++#define T1100_IER		0x004
++#define T1100_TRI_LVL		0x060
++#define T1100_MARK_IER		0xa5a5a5a5
++#define T1100_MARK_TRI		0x000000da	/* bit7 = internal loopback */
++
++struct t1100_probe {
++	u32 ier_before, ier_after, tri_before, tri_after;
++	u32 ifr0_set, ifr0_clr, ifr0_sta, prot_en, apc_con;
++};
++
++static void __init t1100_btif_probe(const char *stage)
++{
++	struct t1100_probe p;
++	void __iomem *btif, *infra, *dapc;
++
++	btif = ioremap(T1100_BTIF_PA, 0x1000);
++	infra = ioremap(T1100_INFRA_AO_PA, 0x1000);
++	dapc = ioremap(T1100_DEVAPC_PA, 0x1000);
++	if (!btif || !infra || !dapc) {
++		pr_err("t1100-btif-early: stage=%s ioremap failed (%p %p %p)\n",
++		       stage, btif, infra, dapc);
++		if (btif)
++			iounmap(btif);
++		if (infra)
++			iounmap(infra);
++		if (dapc)
++			iounmap(dapc);
++		return;
++	}
++
++	p.ier_before = readl(btif + T1100_IER);
++	writel(T1100_MARK_IER, btif + T1100_IER);
++	mb();
++	p.ier_after = readl(btif + T1100_IER);
++	writel(p.ier_before, btif + T1100_IER);		/* restore */
++
++	p.tri_before = readl(btif + T1100_TRI_LVL);
++	writel(T1100_MARK_TRI, btif + T1100_TRI_LVL);
++	mb();
++	p.tri_after = readl(btif + T1100_TRI_LVL);
++	writel(p.tri_before, btif + T1100_TRI_LVL);
++
++	p.ifr0_set = readl(infra + 0x080);
++	p.ifr0_clr = readl(infra + 0x084);
++	p.ifr0_sta = readl(infra + 0x090);
++	p.prot_en = readl(infra + 0x2a0);
++	p.apc_con = readl(dapc + 0xf00);
++
++	pr_info("t1100-btif-early: stage=%s IER=%08x->%08x(%s) TRI=%08x->%08x(%s) IFR0 set=%08x clr=%08x sta=%08x PROT=%08x APC_CON=%08x\n",
++		stage, p.ier_before, p.ier_after,
++		p.ier_after == T1100_MARK_IER ? "write-accepted" : "write-dropped",
++		p.tri_before, p.tri_after,
++		p.tri_after == T1100_MARK_TRI ? "write-accepted" : "write-dropped",
++		p.ifr0_set, p.ifr0_clr, p.ifr0_sta, p.prot_en, p.apc_con);
++
++	iounmap(btif);
++	iounmap(infra);
++	iounmap(dapc);
++}
++
++static int __init t1100_btif_probe_early(void)
++{
++	t1100_btif_probe("early_initcall");
++	return 0;
++}
++early_initcall(t1100_btif_probe_early);
++
++static int __init t1100_btif_probe_device(void)
++{
++	t1100_btif_probe("device_initcall");
++	return 0;
++}
++device_initcall(t1100_btif_probe_device);
++
++static int __init t1100_btif_probe_late(void)
++{
++	t1100_btif_probe("late_initcall");
++	return 0;
++}
++late_initcall(t1100_btif_probe_late);
++
+--- a/drivers/soc/mediatek/Makefile
++++ b/drivers/soc/mediatek/Makefile
+@@ -3,6 +3,7 @@
+ obj-$(CONFIG_MTK_DEVAPC) += mtk-devapc.o
+ obj-$(CONFIG_MTK_INFRACFG) += mtk-infracfg.o
++obj-y += t1100_btif_early.o		# T1100_DIAG (M29), remove together with the file
+ obj-$(CONFIG_MTK_PMIC_WRAP) += mtk-pmic-wrap.o
+ obj-$(CONFIG_MTK_REGULATOR_COUPLER) += mtk-regulator-coupler.o
