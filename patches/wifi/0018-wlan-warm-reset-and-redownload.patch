@@ -1,6 +1,6 @@
 diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
---- a/common/wlan_lib.c	2026-11-13 14:08:41.462148615 +0000
-+++ b/common/wlan_lib.c	2026-11-13 14:08:41.463001173 +0000
+--- a/common/wlan_lib.c	2026-11-13 14:17:07.437840579 +0000
++++ b/common/wlan_lib.c	2026-11-13 14:17:07.438999114 +0000
 @@ -30,6 +30,8 @@
   ********************************************************************************
   */
@@ -330,7 +330,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  		if (!kalFirmwareImageMapping(prAdapter->prGlueInfo, &prFwBuffer, &u4FwSize)) {
  			DBGLOG(INIT, ERROR, "No valid RAM code found!\n");
  			u4Status = WLAN_STATUS_FAILURE;
-@@ -600,42 +901,119 @@
+@@ -600,42 +901,123 @@
  #endif
  		kalFirmwareImageUnmapping(prAdapter->prGlueInfo, NULL, prFwBuffer);
  		DBGLOG(INIT, INFO, "FW download end\n");
@@ -450,6 +450,10 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 +					int rc = mtk_wcn_wmt_redownload_patch_set();
 +
 +					pr_info("t1100: patch set redelivered, rc=%d\n", rc);
++					/* T1100 M62: give the freshly patched MCU time to
++					 * settle before the first section command */
++					mdelay(300);
++					t1100_hif_state(prAdapter, "after-patch-redelivery");
 +				}
 +				goto t1100_redownload;
 +			}
@@ -475,7 +479,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  		}
  
  		if (u4Status == WLAN_STATUS_SUCCESS) {
-@@ -689,7 +1067,7 @@
+@@ -689,7 +1071,7 @@
  
  		/* Power state initialization */
  		prAdapter->fgWiFiInSleepyState = FALSE;
@@ -484,7 +488,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  		/* Online scan option */
  		if (prRegInfo->fgDisOnlineScan == 0)
-@@ -958,6 +1336,42 @@
+@@ -958,6 +1340,42 @@
  	UINT_8 __iomem *prWifiEmiBaseAddr;
  #endif
  
@@ -527,7 +531,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	/* engage divided firmware downloading */
  	/* DLM + ILM */
  	for (i = 0; i < prFwHead->u4NumOfEntries && i < ENTRY_DIRECTLY_TO_CHIP; i++) {
-@@ -977,7 +1391,7 @@
+@@ -977,7 +1395,7 @@
  	}
  
  	kalSetEmiMpuProtection(gConEmiPhyBase, WIFI_EMI_MEM_SIZE, FALSE);
@@ -536,7 +540,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  	/* IEMI + DEMI */
  	for (i = ENTRY_DIRECTLY_TO_CHIP; i < prFwHead->u4NumOfEntries; i++) {
-@@ -1081,7 +1495,7 @@
+@@ -1081,7 +1499,7 @@
  
  #endif
  
@@ -545,7 +549,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	    !wlanIsChipNoAck(prAdapter) && !kalIsCardRemoved(prAdapter->prGlueInfo)) {
  		UINT_32 u4RegValue = 0;
  		UINT_32 u4RegValueNew = 0;
-@@ -2708,6 +3122,10 @@
+@@ -2708,6 +3126,10 @@
  		/* 7. Wait for INIT_EVENT_ID_CMD_RESULT */
  		u4Status = wlanImageSectionDownloadStatus(prAdapter, ucCmdSeqNum);
  #endif
@@ -556,7 +560,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  		break;
  	}
  
-@@ -2865,7 +3283,13 @@
+@@ -2865,7 +3287,13 @@
  	}
  }
  
@@ -571,7 +575,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm previously firmware download is done without error
-@@ -2985,7 +3409,8 @@
+@@ -2985,7 +3413,8 @@
  	return u4Status;
  }
  
@@ -581,7 +585,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm the status of
-@@ -3119,10 +3544,14 @@
+@@ -3119,10 +3548,14 @@
  			continue;
  		}
  		/* 5.2 Send CMD Info Packet */
@@ -596,7 +600,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  		break;
  	};
-@@ -4754,8 +5183,8 @@
+@@ -4754,8 +5187,8 @@
  *
  * @param prAdapter      Pointer of Adapter Data Structure
  *
@@ -607,7 +611,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  */
  /*----------------------------------------------------------------------------*/
  ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
-@@ -4770,8 +5199,8 @@
+@@ -4770,8 +5203,8 @@
  * @brief This function is to update current ACPI state only
  *
  * @param prAdapter      Pointer of Adapter Data Structure
@@ -618,7 +622,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  *
  * @return none
  */
-@@ -4779,7 +5208,7 @@
+@@ -4779,7 +5212,7 @@
  VOID wlanSetAcpiState(IN P_ADAPTER_T prAdapter, IN ENUM_ACPI_STATE_T ePowerState)
  {
  	ASSERT(prAdapter);
@@ -628,8 +632,8 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	prAdapter->rAcpiState = ePowerState;
  }
 diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
---- a/os/linux/gl_rst.c	2026-11-13 14:08:41.464527823 +0000
-+++ b/os/linux/gl_rst.c	2026-11-13 14:08:41.465532858 +0000
+--- a/os/linux/gl_rst.c	2026-11-13 14:17:07.440171106 +0000
++++ b/os/linux/gl_rst.c	2026-11-13 14:17:07.441205706 +0000
 @@ -221,10 +221,42 @@
  	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
  }
