@@ -1,6 +1,6 @@
 diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
---- a/common/wlan_lib.c	2026-11-13 18:47:06.351218918 +0000
-+++ b/common/wlan_lib.c	2026-11-13 18:47:06.352004588 +0000
+--- a/common/wlan_lib.c	2026-11-13 18:51:21.081907264 +0000
++++ b/common/wlan_lib.c	2026-11-13 18:51:21.082977311 +0000
 @@ -30,6 +30,8 @@
   ********************************************************************************
   */
@@ -632,8 +632,8 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	prAdapter->rAcpiState = ePowerState;
  }
 diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
---- a/os/linux/gl_rst.c	2026-11-13 18:47:06.360281921 +0000
-+++ b/os/linux/gl_rst.c	2026-11-13 18:47:06.361241580 +0000
+--- a/os/linux/gl_rst.c	2026-11-13 18:51:21.090588034 +0000
++++ b/os/linux/gl_rst.c	2026-11-13 18:51:21.091437705 +0000
 @@ -221,10 +221,42 @@
  	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
  }
@@ -678,8 +678,8 @@ diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
  		DBGLOG(INIT, ERROR,
  		       "Skip trigger whole-chip reset in %s line %u, during resetting! Chip[%04X E%u]\n",
 diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
---- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 18:47:06.368983920 +0000
-+++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 18:47:06.369914393 +0000
+--- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 18:51:21.099006127 +0000
++++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 18:51:21.099998177 +0000
 @@ -22,6 +22,7 @@
  ********************************************************************************
  */
@@ -697,7 +697,7 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
  
  #ifdef CONFIG_PM
  static int HifAhbPltmSuspend(IN struct platform_device *pDev, pm_message_t message);
-@@ -1141,6 +1142,186 @@
+@@ -1141,6 +1142,219 @@
  
  /*----------------------------------------------------------------------------*/
  /*!
@@ -737,6 +737,10 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 + * reset.  t1100_probe_retry repeats exactly that: wlanRemove + wlanProbe,
 + * without touching the module or the netdev name.
 + */
++static int t1100_patches_before_probe;
++module_param(t1100_patches_before_probe, int, 0444);
++MODULE_PARM_DESC(t1100_patches_before_probe,
++		 "T1100: deliver the ROMv4 patch set after power-on and before the first wlanProbe");
 +static int t1100_probe_retry;
 +module_param(t1100_probe_retry, int, 0444);
 +MODULE_PARM_DESC(t1100_probe_retry, "T1100: extra wlanProbe attempts after wlanRemove");
@@ -813,6 +817,25 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 +		t1100_cmd53_read(2, 0x00));
 +}
 +
++/*
++ * T1100 M65: AP-side HIF/WFDMA bring-up (the part of the platform probe that
++ * programs the DMA rings through which MCR/CMD53 is reached).  After the ROMv4
++ * patch set has been delivered this has to run again, otherwise MCR reads 0.
++ */
++void t1100_hif_dma_reinit(PVOID glue)
++{
++	GLUE_INFO_T *g = (GLUE_INFO_T *)glue;
++
++	if (!g) {
++		DBGLOG(INIT, ERROR, "t1100_hif_dma_reinit: no glue\n");
++		return;
++	}
++	sdio_open();
++	HifDmaInit(&g->rHifInfo);
++	DBGLOG(INIT, INFO, "t1100_hif_dma_reinit: dma_enable=%u\n",
++	       g->rHifInfo.fgDmaEnable);
++}
++
 +int t1100_wlan_probe(VOID)
 +{
 +	int ret;
@@ -838,6 +861,15 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 +
 +	if (t1100_stp_probe_en)
 +		t1100_stp_probe();
++
++	if (t1100_patches_before_probe) {
++		/* T1100 M65: boot order - power on, ROMv4 patch set, then the
++		 * WLAN probe (whose HAL init programs the AP-side HIF/WFDMA). */
++		extern int mtk_wcn_wmt_redownload_patch_set(void);
++		int pr = mtk_wcn_wmt_redownload_patch_set();
++
++		DBGLOG(INIT, INFO, "t1100_wlan_probe: patch set before probe = %d\n", pr);
++	}
 +
 +	DBGLOG(INIT, INFO, "t1100_wlan_probe: paldo on + wlanProbe\n");
 +	mtk_wcn_consys_hw_wifi_paldo_ctrl(1);	/* power on WiFi TX PA 3.3V */
@@ -871,6 +903,7 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 +			}
 +			t1100_pwr_on_done = 1;
 +			mtk_wcn_consys_hw_wifi_paldo_ctrl(1);
++			/* T1100 M65: AP-side HIF/DMA reinit only now, after the patches */
 +			ret = (int) pfWlanProbe((PVOID) &HifAhbPDev->dev);
 +			DBGLOG(INIT, INFO,
 +			       "t1100_wlan_probe: retry %d returned %d\n", i, ret);
@@ -884,7 +917,7 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
  * \brief This function will do module remove.
  *
  * \param[in] None
-@@ -1281,10 +1462,10 @@
+@@ -1281,10 +1495,10 @@
  * \return 0
  */
  /*----------------------------------------------------------------------------*/
