@@ -1,6 +1,6 @@
 diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
---- a/common/wlan_lib.c	2026-11-13 20:36:27.605258918 +0000
-+++ b/common/wlan_lib.c	2026-11-13 20:36:27.606318176 +0000
+--- a/common/wlan_lib.c	2026-11-13 20:42:37.690012665 +0000
++++ b/common/wlan_lib.c	2026-11-13 20:42:37.691697880 +0000
 @@ -30,6 +30,8 @@
   ********************************************************************************
   */
@@ -306,7 +306,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 +/* T1100 M71: MCR_WHLPCR was 0 at WIFI_START, i.e. the host never took
 + * driver ownership; the fw then keeps POR set (WCIR bit20) and never
 + * raises WLAN_READY (bit21). */
-+static int t1100_driver_own = 1;
++static int t1100_driver_own;	/* M72: off by default, it used to clear driver-own */
 +module_param(t1100_driver_own, int, 0444);
 +MODULE_PARM_DESC(t1100_driver_own, "T1100: set MCR_WHLPCR driver-own before the FW download");
 +/* T1100 M67: deliver one remaining ROMv4 patch here, while MCR is alive */
@@ -342,8 +342,8 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 +
 +			HAL_MCR_RD(prAdapter, MCR_WHLPCR, &w0);
 +			HAL_MCR_RD(prAdapter, MCR_WCIR, &c0);
++			/* M72: only clear FW_OWN_REQ, never touch WHLPCR_IS_DRIVER_OWN */
 +			HAL_MCR_WR(prAdapter, MCR_WHLPCR, WHLPCR_FW_OWN_REQ_CLR);
-+			HAL_MCR_WR(prAdapter, MCR_WHLPCR, WHLPCR_IS_DRIVER_OWN);
 +			kalMsleep(5);
 +			HAL_MCR_RD(prAdapter, MCR_WHLPCR, &w1);
 +			HAL_MCR_RD(prAdapter, MCR_WCIR, &c1);
@@ -664,8 +664,8 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  	prAdapter->rAcpiState = ePowerState;
  }
 diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
---- a/os/linux/gl_rst.c	2026-11-13 20:36:27.614012859 +0000
-+++ b/os/linux/gl_rst.c	2026-11-13 20:36:27.615008456 +0000
+--- a/os/linux/gl_rst.c	2026-11-13 20:42:37.699012844 +0000
++++ b/os/linux/gl_rst.c	2026-11-13 20:42:37.700327925 +0000
 @@ -221,10 +221,42 @@
  	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
  }
@@ -710,8 +710,8 @@ diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
  		DBGLOG(INIT, ERROR,
  		       "Skip trigger whole-chip reset in %s line %u, during resetting! Chip[%04X E%u]\n",
 diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
---- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 20:36:27.622185086 +0000
-+++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 20:36:27.623039486 +0000
+--- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 20:42:37.708099524 +0000
++++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 20:42:37.708982667 +0000
 @@ -22,6 +22,7 @@
  ********************************************************************************
  */
