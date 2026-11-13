@@ -3776,3 +3776,107 @@ e7a3c40ded9bfb1001eac85dcb0f5c4c987d81e49d2e1e439cfbbd2809461d40  common/wmt_drv
 
 Патчи — единый источник правды; всё остальное (`work/`) — производное.
 Следующий рубеж — по выводу `reverse-engineer`.
+## 56. M34: прошивки combo-чипа добыты из RPM Авроры; стек грузится, RX от чипа нет (13.11)
+
+Блокер «нет `WIFI_RAM_CODE_6759` и `soc3_0_ram_mcu_e1_hdr.bin`» снят: обе
+прошивки (и BT/FM в придачу) лежат внутри **vendor-раздела**, который Аврора
+ставит пакетом `droid-system-vendor-mashtab_t1` в офлайн-репозитории:
+
+```
+/home/leo/Aurora_All/offline-repos/5.2.1.200/adaptation/mashtab_t1/
+    droid-system-vendor-mashtab_t1-0.0.24-1.2.26.noarch.rpm   (147 МБ)
+      ./vendor/firmware/WIFI_RAM_CODE_6759            480704 B  md5 7296e8d85510cd28f9cbcad0cde08ea9
+      ./vendor/firmware/soc3_0_ram_mcu_e1_hdr.bin      165344 B  md5 009c135ece1838e1955435cb35d0d4a6
+      ./vendor/firmware/soc3_0_ram_bt_1_1_hdr.bin      671988 B  md5 2bbba3e6513ef73197e2da1a0525868f
+      ./vendor/firmware/WMT_SOC.cfg                       119 B  md5 4f53b6a63d3a15474e440aaf2a06d055
+      ./vendor/firmware/BT_FW.cfg                         410 B
+      ./vendor/firmware/ROMv4_be_patch_1_{0,1}_hdr.bin           (rom patch v4)
+```
+
+Прошивки в git не кладутся (проприетарные) — вместо этого добавлен
+`tools/host/extract-aurora-firmware.sh` (достаёт перечисленные файлы из RPM в
+`build/firmware-aurora`, по `--deploy HOST` сразу копирует в `/lib/firmware`
+планшета).
+
+### 56.1 Три `soc3_0_ram_mcu_*_hdr.bin` идентичны
+
+`_e1`, `_1_1` и `_1a_1` — один и тот же файл (md5 `009c135e…`), так что eco-суффикс
+в имени ничего не выбирает. Заголовок `soc3_0_ram_mcu_e1_hdr.bin` декодируется
+как `ucPLat="ALPS"`, `u2HwVer=u2SwVer=0x8a10`, `u4PatchAddr=0xf0000000`,
+`u4PatchType=0x04000000`, тело 165 296 Б — ровно то, что ожидает порт
+(`consys_dl_rom_patch()` пишет тело в `EMI + (u4PatchAddr & 0xfffff)` = EMI+0).
+
+Для сравнения, `ROMv4_be_patch_1_0_hdr.bin` имеет `u4PatchAddr=0x00098022`,
+`u4PatchType=0x0fe3ffff` — это **другая** ветка (ROM v4), и именно её метаданные
+попали в журнал §55.2 (`addr=0x00098022`). Т.е. в прогонах M33 под именем
+`soc3_0_ram_mcu_e1_hdr.bin` на плате лежал файл ROMv4 — вывод §55.2 про
+«ядру `u4PatchType` не нужен» остаётся верным, но адрес относится не к тому файлу.
+
+### 56.2 Вендорский `WMT_SOC.cfg` — 119 байт, без комментариев
+
+Стоковый конфиг (заменяет наш самодельный, в нём 75 строк с `#`, из-за которых
+dmesg ругался `mal-format cfg string` / `unknown field '#'`):
+
+```
+coex_wmt_ant_mode=1
+wmt_gps_lna_pin=0
+wmt_gps_lna_enable=0
+co_clock_flag=1
+bt_tssi_from_wifi=3
+bt_tssi_target=3815
+```
+
+`co_clock_flag=1` (у нас был 0) — co-clock режим AP/CONN, влияет на
+`consys_hw_vcn28_ctrl()`.
+
+### 56.3 Ловушка сборки: `-dirty` в vermagic
+
+Прошитое ядро — `6.12.114-g92c5e7cc89-dirty` (`CONFIG_LOCALVERSION_AUTO=y`,
+дерево на момент сборки было грязным), а модули собирались как
+`6.12.114-g92c5e7cc89` → `modprobe` давал `Exec format error`. Лечится
+`LOCALVERSION='-g92c5e7cc89-dirty'`.
+
+Дополнительно: в `work/{common,wlan}` остаются **чужие** артефакты
+(`.module-common.o`, `.*.o.d`) от предыдущих сборок против других деревьев — из-за
+них `.ko` сохранял старый vermagic (`g400cb6f-touch-rot`, `g675178729a-dirty`)
+даже после «успешной» сборки (`rc=0`), а `wlan` падал на
+`fixdep: error opening file: nic/.nic_tx.o.d`. Лечится `rm -rf work/{common,wlan}`
+перед сборкой; проверять результат обязательно через
+`modinfo -F vermagic`.
+
+### 56.4 Результат прогона с прошивками
+
+```
+modprobe mtk_btif_drv   -> BTIF_OK
+modprobe wmt_drv t1100_btif_stp=1 -> WMT_OK
+wmt-loader -> chip id 0x6771 set / DO_MODULE_INIT ok / /dev/stpwmt
+```
+
+dmesg: `CONSYS-HW-PWR-ON start` → `cpupcr right after reset/+50/+100ms` все
+`0x00000000` → `CONN SPM power on: 0x10d/0x408fff4e/0x18600098` →
+**`polling_consys_chipid: retry(9) consys chipId(0x00000788)`** →
+`PWR-ON finish(0)`; далее `stp_dbg_poll_cpupcr` показывает `CPUPCR 0x1170`
+(ROM крутится). Затем STP отправляет `Tx:pT<WMT> n(0..4)` (20/5/20/5/20 Б) и
+**ответа нет**: `wmt_dev_rx_timeout`, `wmt_core_reg_rw_raw: Rx REG_EVT fail`,
+`get hwcode (chip id) fail (-3)`, `wmt_core_stp_init fail`, `pwr_off`.
+
+Регистры BTIF после прогона (`/root/btif-probe.sh`): `IER(0x04)=0`,
+`IIR(0x08)=1`, `LSR(0x14)=0x60` (THR/TEMT пусты, **RX-данных нет**),
+`0x54=0x40`, `0x60=0x5a`, `0x64=1`, `0x68=0x12`, `0x6c=3`.
+В dmesg `hal_btif_hw_init: IER readback 0x00000000 (RX=0 TX=0)` — попытки
+включить прерывания RX/TX **не записываются**; `/proc/interrupts` не содержит
+ни virq 394 (BTIF), ни 395 (CONSYS).
+
+### 56.5 Что это значит
+
+До `consys_dl_rom_patch()` дело не доходит: он вызывается после
+`wmt_core_hw_check()`, а тот первым же REG_READ по STP получает таймаут.
+Т.е. прошивки теперь на месте, но **чип не отвечает на первое рукопожатие**;
+ROM при этом живой (chipId `0x788`, `cpupcr 0x1170`), TX-путь BTIF работает.
+
+Следующий шаг: разбираться с RX BTIF — почему `IER` не держит биты
+(`hal_btif_hw_init` пишет 0) и почему `LSR` не показывает принятых байт при
+живом ROM. Кандидаты: (а) IER-запись уходит в другой регистр/маску (гейт
+`infra_audio`-класса), (б) чип ждёт другого первого кадра (не REG_READ), тогда
+нужен порядок вендорского `wmt_loader` (PATCH → ASSERT → REG_READ),
+(в) скорость/формат BTIF UART (регистр `0x00` читается как 0).

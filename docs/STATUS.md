@@ -3766,3 +3766,39 @@ RNDIS-гаджету), делать при физическом доступе �
   `scripts/remote/m23-btif/worktree-edits/` (кандидаты в `0014-…`), чтобы не
   терялись снова. Деплой-сборка под `merge2-out` прервана из-за параллельного
   прогона, который пересоздаёт `work/`; устройство не трогали (модули M40).
+## 13.11 (21): M34 — прошивки combo-чипа добыты, стек грузится, RX от чипа нет
+
+Блокер «нет `WIFI_RAM_CODE_6759` / `soc3_0_ram_mcu_e1_hdr.bin`» снят: они
+лежат в vendor-разделе, который Аврора ставит пакетом
+`droid-system-vendor-mashtab_t1-*.noarch.rpm` (147 МБ) из офлайн-репозитория
+`offline-repos/5.2.1.200/adaptation/mashtab_t1/`, путь внутри пакета —
+`./vendor/firmware/`. Прошивки в git не кладутся, вместо них добавлен
+`tools/host/extract-aurora-firmware.sh` (достаёт из RPM в
+`build/firmware-aurora`, `--deploy HOST` копирует в `/lib/firmware` платы).
+
+Вендорский `WMT_SOC.cfg` — 119 байт без комментариев, важные отличия от нашего:
+`coex_wmt_ant_mode=1`, `co_clock_flag=1`, `bt_tssi_from_wifi=3`,
+`bt_tssi_target=3815`. Наш файл с `#`-комментариями вызывал в dmesg
+`mal-format cfg string` / `unknown field '#'`, поэтому заменён на стоковые
+значения без комментариев.
+
+Попутно две ловушки сборки: (1) прошитое ядро `6.12.114-g92c5e7cc89-dirty`,
+а модули собирались как `-g92c5e7cc89` → `Exec format error`, нужен
+`LOCALVERSION='-g92c5e7cc89-dirty'`; (2) в `work/{common,wlan}` остаются чужие
+артефакты (`.module-common.o`, `.*.o.d`) от сборок против других деревьев — из-за
+них `.ko` сохранял старый vermagic даже при `rc=0`, а `wlan` падал на
+`fixdep: … nic/.nic_tx.o.d`. Лечится `rm -rf work/{common,wlan}`; результат
+проверять `modinfo -F vermagic`.
+
+**Результат на железе:** BTIF и WMT грузятся, `wmt-loader` проходит
+(`chip id 0x6771`, `/dev/stpwmt`), `CONSYS-HW-PWR-ON finish(0)`,
+`polling_consys_chipid: chipId 0x00000788`, `CPUPCR 0x1170` (ROM живой).
+Но STP не получает ответа: `Tx:pT<WMT> n(0..4)` уходят, затем
+`wmt_dev_rx_timeout` → `Rx REG_EVT fail` → `get hwcode fail (-3)` →
+`wmt_core_stp_init fail` → `pwr_off`. Регистры BTIF: `IER=0`, `IIR=1`,
+`LSR=0x60` (RX-данных нет), `hal_btif_hw_init: IER readback 0x00000000`;
+в `/proc/interrupts` нет ни virq 394 (BTIF), ни 395 (CONSYS).
+До `consys_dl_rom_patch()` дело не доходит — он идёт после `wmt_core_hw_check`.
+
+Следующий шаг: RX BTIF — почему `IER` не держит биты и почему `LSR` пуст при
+живом ROM (гейт записи IER / другой первый кадр handshake / скорость UART).
