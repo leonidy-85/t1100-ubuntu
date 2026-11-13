@@ -4565,3 +4565,14 @@ shutdown не может добить процесс `rmmod wmt_drv/wlan_drv_gen
 - Вывод: к моменту вызова `send_patch_index` чип уже не обслуживает MCIF; логи `send_patch_index`
   в срез не попали (срез с метки пуст — `dmesg | tail -n +N` дал 0 строк, разбор по живому dmesg).
 - Модули: `wmt_drv` `15292417…`, `wlan_drv_gen3` `3af8c62a…`, `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (62): M68 — между патчами только `WMT_RESET` (код задеплоен, ждём power-cycle)
+
+- Добавлен `t1100_op_between_reset=1`: в `redownload_patch_set` между патчами выполняется
+  только `init_table_3` (WMT_RESET), домен не трогается; логируются `hwcode` до и после
+  (`hwcode 0x%08x/%d -> 0x%08x/%d`) и код самого reset.
+- Сборка: `wmt_drv` `4d874056…` (задеплоен и сверен), `wlan_drv_gen3` `3af8c62a…` (без изменений),
+  `mtk_btif_drv` `e29eaecb…`. Скрипт прогона `/root/m68run.sh` на плате (срез в
+  `/root/m68-full.txt`, без `dmesg -c`).
+- Прогон не запускался: модули прежней сборки загружены (`lsmod` 4 записи), `rmmod` запрещён →
+  нужен power-cycle владельцем, затем `sh /root/m68run.sh`.
