@@ -3535,3 +3535,17 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
 - Критерий «`TRI_LVL` стал 0x18» не достигнут ⇒ STP/ROMv4/`WLAN_READY`/`wlan0`
   не запускались. Остаток подозрений (CCF `hw=N`, третья частота из домена
   CONNSYS, APB write-protect без VIO) — `refs/m28-btif-ccf.md`, §50 журнала.
+
+## 13.11 (16): M29 — записи в BTIF пошли (гейт инвертирован), ROM ответил, ROMv4-патч доставлен
+
+- Проба на трёх initcall (патч 0065, ядро собрано/прошито с ramdisk): на
+  `late_initcall` `TRI_LVL 0x5a→0xda` **принято**, `IFR0=0x4800` (бит31 = 0).
+- Причина «write-dead» с M23: на MT6771 бит «CG» = 1 **закрывает** клок
+  (`IFR0[31]=1` → записи отброшены, `=0` → `TRI_LVL 0x5a→0x18`, `IER 0→1`);
+  наш `m23_clk_enable()` (SET) выключал BTIF. Glue переведён на **CLR**.
+- После фикса: `wmt_core_hw_check: get hwcode (chip id) (0x788)` — **ROM
+  ответил по STP**, ROMv4-патч **доставлен** (`patch dwn:0 frag(230,336) ok`,
+  `ROMv4 patch download -> 0`, 229 336 Б, addr `0x98022`).
+- Осталось: пост-патчевый «WMT reset» (`init_table_3`) падает
+  (`cmd len err(-2, 5)`), `cpupcr` в ROM (`0x14xxx` < `0xa5800`), `WLAN_READY=0`,
+  `wlan0` нет. Артефакты — `refs/m29-btif-early-probe.md`, §51 журнала.
