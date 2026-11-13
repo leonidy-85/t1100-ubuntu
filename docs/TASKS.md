@@ -56,9 +56,10 @@ amixer -c0 cset numid=78 12
 ```
 
 Обратно: `Speaker Switch on`, `HPL/HPR Mux` = 1 (LoudSPK Playback).
-Патч 0070 добавляет в machine driver DAPM `Headphone Jack`/`Speaker` и
-`Speaker Switch`; проверено на `boot_nonwifi_hp.img` (p29 `32b609a4…`),
-пользователь подтвердил звук в наушниках.
+Патчи 0070/0071 добавляют в machine driver DAPM `Headphone Jack`/`Speaker`,
+`Speaker Switch` и gating amp GPIO по DAPM-пути Speaker; проверено на
+`boot_nonwifi_amp.img` (p29 `61e08a8b…`), пользователь подтвердил: при
+`Speaker Switch=off` динамик молчит, звук идёт в наушники.
 
 Автоматический детект требует порта вендорского ACCDET MT6771; исходник
 найден, но драйвер не реализован.
