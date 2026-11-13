@@ -103,3 +103,21 @@ cpupcr = 0x00014eea  (ROM, < 0xa5800)
 | `wmt_drv.ko` (skip-RX + delay + retry) | `1933ab0238dcb38a3bb718ca4b5ae82ff37f729276bb54abde685e8a331022ad` |
 | `mtk_btif_drv.ko` (гейт CLR) | `e29eaecb70157b1c27ed190b7849c308cc5f6e5e8cae3341af6c2a896b40ef34` |
 | патч вендорского пути | `patches/wifi/0013-common-rom-patch-from-firmware.patch` |
+
+## 7. Прогон без reset (`t1100_skip_reset=1`) — патч сам не стартует
+
+Добавлен параметр `t1100_skip_reset` (пропуск `init_table_3`). Прогон:
+
+```
+t1100: ROMv4 patch download -> 0
+t1100: skip init_table_3 (reset) on request
+... 3 s позже:
+[wlan]t1100_wlan_probe: paldo on + wlanProbe
+[wlan]wlanPollingCpupcr: i:0,cpupcr:00014f08 ; i:1,cpupcr:00014f08 ; i:2,cpupcr:0000560e
+```
+
+`cpupcr` остаётся в ROM ⇒ **последний фрагмент патч не запускает**, «стартовая»
+команда нужна. Значит блокер именно в том, что ROM не отвечает (и, судя по
+поведению, не выполняет) `WMT_RESET_CMD {01 07 01 00 04}`.
+
+Заодно это снимает вопрос «а не стартует ли патч сам» — нет.
