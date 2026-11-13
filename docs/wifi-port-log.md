@@ -4440,3 +4440,41 @@ assert-обработчик в M50 — похоже, прошивка после
 
 Вывод: тёплый сброс обязан быть **операцией wmt_drv** (AP_RGU + STP reinit + сброс
 STP-состояния), а не сырым poke'ом из wlan-модуля.
+
+## 72. M56: тёплый сброс как операция `wmt_drv`; сброс отложен на время download (13.11)
+
+### 72.1 Что сделано
+
+- `mtk_wcn_consys_warm_reset()` в `wmt_drv` (EXPORT_SYMBOL): `consys_hw_warm_reset()`
+  (AP_RGU `0x10007018[12]` + key 0x88) → polling `hwcode` (`GEN_HCR 0x80000008`) →
+  `mtk_wcn_stp_reset_seq_state()` (экспорт над `stp_rest_ctx_state`) →
+  `close/open/MODE=MAND/EN` → `hwcode`.
+- `wlan_lib.c`/`gl_rst.c` вызывают только этот символ; в `glResetTrigger` добавлен
+  флаг «download in progress»: пока идёт загрузка образа, сброс **откладывается**
+  (`reset deferred`), выполняется один раз после попытки.
+- `mt6771.c`: `consys_hw_warm_reset()` (без SPM iso/power-gate) — как в M54.
+
+### 72.2 Прогон
+
+```
+52.563  after-download: WCIR=0x00100788 READY=0 WASR=0x00010200 mbox0=0x02000020 cpupcr=0x14f20
+53.565  glResetTrigger: reset deferred, download in progress (wlan_lib.c:3432)
+54.569  glResetTrigger: reset deferred, download in progress
+54.569  WIFI_START addr=0x000a5800 seq=6 -> status=0
+56.249  Waiting for Ready bit timeout, MailBox 0x20; WCIR=0x00100788 READY=0 cpupcr=0x19d8
+56.249  WIFI_START addr=0x020a1000 seq=7 -> status=0
+57.929  Ready timeout, MailBox 0x20; cpupcr=0x17686
+57.929  t1100: WIFI_START failed, warm reset + re-download
+58.465  warm reset: hwcode 0x00000000 after 40 polls (ret -2)
+60.517  warm reset from wmt_drv: stp 0/0/0/0 hwcode 0x00000000 (ret -3)
+61.525  Firmware download configuration failed! idx 0, dst 0x020a1000, len 28032
+```
+
+### 72.3 Наблюдение (важно для следующего шага)
+
+Отложенный сброс больше не рвёт download (это работает), но тёплый сброс, вызванный
+**из WLAN-пути**, оставляет чип без ответа: `hwcode` после сброса `ret -2` — а `-2` это
+«STP не включён», т.е. **polling `hwcode` идёт до STP-reinit** и всегда получает `-2`
+мгновенно (в M54, где сброс шёл из patch-пути и STP к тому моменту был жив/переинициализирован,
+`hwcode` вернулся `0x788`). Порядок в операции нужно поменять: сначала `stp_close/open +
+MODE=MAND + EN` (+ `reset_seq_state`), затем polling `hwcode` до 2 с.

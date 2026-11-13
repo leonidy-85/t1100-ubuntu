@@ -4111,3 +4111,17 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   (сброс делается из wlan-модуля). Плюс `glResetTrigger` сбрасывает чип **во время download**.
 - Модули: `wmt_drv` `47ad7db4…`, `wlan_drv_gen3` `6df08e83…`, `mtk_btif_drv` `e29eaecb…`.
   Новый `0018-wlan-warm-reset-and-redownload.patch`; `wlan0` нет.
+
+## 13.11 (47): M56 — warm reset из wmt_drv + отложенный сброс; polling идёт до STP-reinit
+
+- `mtk_wcn_consys_warm_reset()` (AP_RGU + `stp_rest_ctx_state` + close/open/MODE/EN) экспортирован,
+  wlan вызывает только его; в `glResetTrigger` флаг «download in progress» — сброс откладывается
+  (`reset deferred`, дважды за download) и выполняется один раз после попытки.
+- Download прошёл чисто (`after-download`, `after-rompatch`), `WIFI_START` на `0x000a5800`
+  (seq 6) и `0x020a1000` (seq 7), оба `status=0`; `WCIR=0x00100788` (READY=0),
+  `mbox0=0x02000020`, `WASR=0x00010200→0x00000300`, `cpupcr` 0x19d8 / 0x17686.
+- Тёплый сброс из WLAN-пути: `hwcode 0x0 after 40 polls (ret -2)` — polling стоит **до**
+  STP-reinit, поэтому получает «STP не включён»; перезакачка падает на `idx 0, dst 0x020a1000,
+  len 28032`. Порядок операции надо поменять (reinit → polling).
+- Модули: `wmt_drv` `220bc156…`, `wlan_drv_gen3` `bd59d1b2…`, `mtk_btif_drv` `e29eaecb…`.
+  Патчи `0014/0016/0017/0018` обновлены; `wlan0` нет.
