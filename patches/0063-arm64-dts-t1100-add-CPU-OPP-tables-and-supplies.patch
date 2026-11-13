@@ -1,0 +1,214 @@
+From 3f9c2fb4ca8cf96e86cbda120b17024624266cab Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=D0=90=D0=BD=D0=B4=D1=80=D0=B5=D0=B9=20=D0=9C=D0=B0=D1=80?=
+ =?UTF-8?q?=D0=BA=D0=B8=D0=BD?= <py6on@yandex.ru>
+Date: Fri, 13 Nov 2026 04:02:43 +0300
+Subject: [PATCH] arm64: dts: t1100: add CPU OPP tables and supplies
+
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 190 ++++++++++++++++++
+ 1 file changed, 190 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index cc51a58..ee18af4 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -796,6 +796,196 @@
+ };
+ 
+ 
++&{/} {
++	cluster0_opp_t1100: opp-table-cluster0_opp_t1100 {
++		compatible = "operating-points-v2";
++		opp-shared;
++		opp-793000000 {
++			opp-hz = /bits/ 64 <793000000>;
++			opp-microvolt = <650000>;
++		};
++		opp-910000000 {
++			opp-hz = /bits/ 64 <910000000>;
++			opp-microvolt = <687500>;
++		};
++		opp-1014000000 {
++			opp-hz = /bits/ 64 <1014000000>;
++			opp-microvolt = <718750>;
++		};
++		opp-1131000000 {
++			opp-hz = /bits/ 64 <1131000000>;
++			opp-microvolt = <756250>;
++		};
++		opp-1248000000 {
++			opp-hz = /bits/ 64 <1248000000>;
++			opp-microvolt = <800000>;
++		};
++		opp-1326000000 {
++			opp-hz = /bits/ 64 <1326000000>;
++			opp-microvolt = <818750>;
++		};
++		opp-1417000000 {
++			opp-hz = /bits/ 64 <1417000000>;
++			opp-microvolt = <850000>;
++		};
++		opp-1508000000 {
++			opp-hz = /bits/ 64 <1508000000>;
++			opp-microvolt = <868750>;
++		};
++		opp-1586000000 {
++			opp-hz = /bits/ 64 <1586000000>;
++			opp-microvolt = <893750>;
++		};
++		opp-1625000000 {
++			opp-hz = /bits/ 64 <1625000000>;
++			opp-microvolt = <906250>;
++		};
++		opp-1677000000 {
++			opp-hz = /bits/ 64 <1677000000>;
++			opp-microvolt = <931250>;
++		};
++		opp-1716000000 {
++			opp-hz = /bits/ 64 <1716000000>;
++			opp-microvolt = <943750>;
++		};
++		opp-1781000000 {
++			opp-hz = /bits/ 64 <1781000000>;
++			opp-microvolt = <975000>;
++		};
++		opp-1846000000 {
++			opp-hz = /bits/ 64 <1846000000>;
++			opp-microvolt = <1000000>;
++		};
++		opp-1924000000 {
++			opp-hz = /bits/ 64 <1924000000>;
++			opp-microvolt = <1025000>;
++		};
++		opp-1989000000 {
++			opp-hz = /bits/ 64 <1989000000>;
++			opp-microvolt = <1050000>;
++		};
++	};
++
++	cluster1_opp_t1100: opp-table-cluster1_opp_t1100 {
++		compatible = "operating-points-v2";
++		opp-shared;
++		opp-793000000 {
++			opp-hz = /bits/ 64 <793000000>;
++			opp-microvolt = <700000>;
++		};
++		opp-910000000 {
++			opp-hz = /bits/ 64 <910000000>;
++			opp-microvolt = <725000>;
++		};
++		opp-1014000000 {
++			opp-hz = /bits/ 64 <1014000000>;
++			opp-microvolt = <750000>;
++		};
++		opp-1131000000 {
++			opp-hz = /bits/ 64 <1131000000>;
++			opp-microvolt = <775000>;
++		};
++		opp-1248000000 {
++			opp-hz = /bits/ 64 <1248000000>;
++			opp-microvolt = <800000>;
++		};
++		opp-1326000000 {
++			opp-hz = /bits/ 64 <1326000000>;
++			opp-microvolt = <825000>;
++		};
++		opp-1417000000 {
++			opp-hz = /bits/ 64 <1417000000>;
++			opp-microvolt = <850000>;
++		};
++		opp-1508000000 {
++			opp-hz = /bits/ 64 <1508000000>;
++			opp-microvolt = <875000>;
++		};
++		opp-1586000000 {
++			opp-hz = /bits/ 64 <1586000000>;
++			opp-microvolt = <900000>;
++		};
++		opp-1625000000 {
++			opp-hz = /bits/ 64 <1625000000>;
++			opp-microvolt = <912500>;
++		};
++		opp-1677000000 {
++			opp-hz = /bits/ 64 <1677000000>;
++			opp-microvolt = <931250>;
++		};
++		opp-1716000000 {
++			opp-hz = /bits/ 64 <1716000000>;
++			opp-microvolt = <950000>;
++		};
++		opp-1781000000 {
++			opp-hz = /bits/ 64 <1781000000>;
++			opp-microvolt = <975000>;
++		};
++		opp-1846000000 {
++			opp-hz = /bits/ 64 <1846000000>;
++			opp-microvolt = <1000000>;
++		};
++		opp-1924000000 {
++			opp-hz = /bits/ 64 <1924000000>;
++			opp-microvolt = <1025000>;
++		};
++		opp-1989000000 {
++			opp-hz = /bits/ 64 <1989000000>;
++			opp-microvolt = <1050000>;
++		};
++	};
++};
++
++&cpu0 {
++	operating-points-v2 = <&cluster0_opp_t1100>;
++	proc-supply = <&mt6358_vproc12_reg>;
++	sram-supply = <&mt6358_vsram_proc12_reg>;
++};
++
++&cpu1 {
++	operating-points-v2 = <&cluster0_opp_t1100>;
++	proc-supply = <&mt6358_vproc12_reg>;
++	sram-supply = <&mt6358_vsram_proc12_reg>;
++};
++
++&cpu2 {
++	operating-points-v2 = <&cluster0_opp_t1100>;
++	proc-supply = <&mt6358_vproc12_reg>;
++	sram-supply = <&mt6358_vsram_proc12_reg>;
++};
++
++&cpu3 {
++	operating-points-v2 = <&cluster0_opp_t1100>;
++	proc-supply = <&mt6358_vproc12_reg>;
++	sram-supply = <&mt6358_vsram_proc12_reg>;
++};
++
++&cpu4 {
++	operating-points-v2 = <&cluster1_opp_t1100>;
++	proc-supply = <&mt6358_vproc11_reg>;
++	sram-supply = <&mt6358_vsram_proc11_reg>;
++};
++
++&cpu5 {
++	operating-points-v2 = <&cluster1_opp_t1100>;
++	proc-supply = <&mt6358_vproc11_reg>;
++	sram-supply = <&mt6358_vsram_proc11_reg>;
++};
++
++&cpu6 {
++	operating-points-v2 = <&cluster1_opp_t1100>;
++	proc-supply = <&mt6358_vproc11_reg>;
++	sram-supply = <&mt6358_vsram_proc11_reg>;
++};
++
++&cpu7 {
++	operating-points-v2 = <&cluster1_opp_t1100>;
++	proc-supply = <&mt6358_vproc11_reg>;
++	sram-supply = <&mt6358_vsram_proc11_reg>;
++};
++
++
++
+ /*
+  * The two MFG power domains carry MTK_SCPD_DOMAIN_SUPPLY, and since 6.12
+  * mtk-pm-domains looks the regulator up in the *domain* node itself
+-- 
+2.53.0
+

@@ -3303,3 +3303,32 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
 - Текущее: p29 = `boot_usb_host` (md5 `d0d9bca9…`), role `device`, SSH/RNDIS,
   rootfs Ubuntu 26.04 + KDE 6.6.4; микрофон и динамик работают.
 - Следующее: при необходимости — persistent PGA gain, затем отчёт/коммит.
+
+## 13.11 (9): CPU DVFS — mtk-cpufreq, полные OPP, schedutil
+
+- Первая попытка с полной OPP-таблицей зависла. Причина: на MT6771 первым
+  регистрировался `cpufreq-dt` (`mtk-cpufreq ... error -EEXIST`), а он не
+  управляет `proc`/`sram`-регуляторами: частота уходила на 1.989 ГГц при
+  800 мВ (undervolt). С безопасной таблицей 793/1100/1200 МГц при 800 мВ
+  `cpufreq-dt` работал, переходы частоты проходили.
+- `CONFIG_CPUFREQ_DT` выключен, включён `CONFIG_ARM_MEDIATEK_CPUFREQ`.
+  В `mediatek-cpufreq.c` добавлены `mediatek,mt6771`/`mediatek,mt8788`
+  с `ccifreq_supported = false` (CCI на порту отключён). Драйвер policy:
+  `mtk-cpufreq`, governor `schedutil`.
+- В board DTS добавлены две полные OPP-таблицы по 16 точек (793…1989 МГц)
+  с напряжениями MT8183: little 650…1050 мВ, big 700…1050 мВ; CPU0–3 питаются
+  от `vproc12`/`vsram_proc12`, CPU4–7 — от `vproc11`/`vsram_proc11`.
+- Проверено на железе: все 16 переходов обеих policy, максимум 1.989 ГГц при
+  1.05 В; `schedutil` под нагрузкой 8 ядер держит 1.989 ГГц, в простое уходит
+  на 793 МГц; система остаётся живой.
+- Финальный образ `build/boot_cpufreq_sched.img`, sha256 `0c368fc9…`,
+  md5 `4f2d9aa039a94defa7908cc651f090a9`, p29 md5 совпадает; kernel
+  `e0058abb…`, DTB `7c859bc2…`, initramfs `0cfa596d…`; cmdline
+  `cpufreq.default_governor=schedutil`. Откат — рабочий
+  `/tmp/opencode/boot_a_cpufreq_full_ok.img` (sha256 `f4d4890d…`).
+- Патчи `0062` (cpufreq MT6771/MT8788) и `0063` (CPU OPP в DTS) добавлены
+  в `patches/series`; в `configs/t1100.fragment` закреплены
+  `CONFIG_ARM_MEDIATEK_CPUFREQ=y` и `# CONFIG_CPUFREQ_DT is not set`.
+- **Thermal/SVS пока нет:** `CONFIG_MTK_THERMAL` выключен, thermal zones
+  пустые, `&svs` disabled. Длительный soak-тест на максимуме без thermal
+  protection не проводился — это следующий шаг.
