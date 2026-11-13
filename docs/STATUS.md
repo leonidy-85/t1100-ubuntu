@@ -4600,3 +4600,15 @@ shutdown не может добить процесс `rmmod wmt_drv/wlan_drv_gen
   растягивался на ~110 с).
 - Модули: `wmt_drv` `80ddf3221e6ed955295a79543cb2796e0455785c73bf5a4ef1269bf0721607a1`,
   `wlan_drv_gen3` `3af8c62a…`, `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (65): M70 — **секция WLAN скачалась** (`section-config idx0 = 0`), READY не встал
+
+- Poll `GEN_HCR` теперь 10 × 100 мс и нефатален (`hwcode poll timeout, continue`), лог потоковый
+  (`dmesg -w > /root/m70-full.txt`).
+- Прогон 1: `section-config dst=0x000a5800 len=33776 reset=0 -> status=0` — **первая секция
+  сконфигурирована успешно** (впервые), `WIFI_START 0x000a5800 seq=6 -> status=0`,
+  `WIFI_START 0x020a1000 seq=7 -> status=0`, но `READY=0` (бит21 `WCIR`=0);
+  `WASR=0x00010000`, `mbox0=0x02000020`, `cmd52=0x00000020` — MCR живой.
+- После неудачи наш reset-путь: `hwcode poll timeout, continue` → `patch 0/2 -> -1` → `rc=-1`,
+  повторный probe `-5`. Ребута не было, лог целый (6120 строк).
+- Модуль `wmt_drv` `d3b83212…`; `wlan_drv_gen3` `3af8c62a…`; `mtk_btif_drv` `e29eaecb…`.

@@ -1,6 +1,6 @@
 diff -u -r a/common_main/core/wmt_ctrl.c b/common_main/core/wmt_ctrl.c
---- a/common_main/core/wmt_ctrl.c	2026-11-13 20:22:45.602463063 +0000
-+++ b/common_main/core/wmt_ctrl.c	2026-11-13 20:22:45.604638726 +0000
+--- a/common_main/core/wmt_ctrl.c	2026-11-13 20:27:21.979061559 +0000
++++ b/common_main/core/wmt_ctrl.c	2026-11-13 20:27:21.981121603 +0000
 @@ -34,6 +34,11 @@
  #include "osal.h"
  
@@ -14,8 +14,8 @@ diff -u -r a/common_main/core/wmt_ctrl.c b/common_main/core/wmt_ctrl.c
  #include "wmt_lib.h"
  #include "wmt_dev.h"
 diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
---- a/common_main/core/wmt_ic_soc.c	2026-11-13 20:22:45.601408294 +0000
-+++ b/common_main/core/wmt_ic_soc.c	2026-11-13 20:22:45.603540274 +0000
+--- a/common_main/core/wmt_ic_soc.c	2026-11-13 20:27:21.977971092 +0000
++++ b/common_main/core/wmt_ic_soc.c	2026-11-13 20:27:21.980041295 +0000
 @@ -40,6 +40,49 @@
   */
  #include <linux/firmware.h>
@@ -75,7 +75,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  
  #define CFG_WMT_MULTI_PATCH (1)
  
-@@ -1154,6 +1197,152 @@
+@@ -1154,6 +1197,156 @@
  	return 0;
  }
  
@@ -201,7 +201,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
 +		      r1, r2, r3, r4);
 +	/* T1100 M69: after a fresh power-on the MCU needs a while before it
 +	 * serves GEN_HCR - poll 40 x 100 ms and fail only on timeout. */
-+	for (i = 0; i < 40; i++) {
++	for (i = 0; i < 10; i++) {
 +		hw = 0;
 +		r5 = wmt_core_reg_rw_raw(0, 0x80000008, &hw, 0xffffffff);
 +		if (!r5 && hw)
@@ -209,6 +209,10 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
 +		osal_sleep_ms(100);
 +	}
 +	WMT_INFO_FUNC("t1100: hwcode poll: 0x%08x after %d tries (ret %d)\n", hw, i + 1, r5);
++	if (r5 || !hw) {
++		WMT_INFO_FUNC("t1100: hwcode poll timeout, continue\n");
++		r5 = 0;
++	}
 +	WMT_INFO_FUNC("t1100: warm reset from wmt_drv: stp %d/%d/%d/%d hwcode 0x%08x (ret %d)\n",
 +		      r1, r2, r3, r4, hw, r5);
 +	if (!r5 && hw) {
@@ -228,7 +232,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  static INT32 mtk_wcn_soc_sw_init(P_WMT_HIF_CONF pWmtHifConf)
  {
  	INT32 iRet = -1;
-@@ -1225,6 +1414,8 @@
+@@ -1225,6 +1418,8 @@
  	/* 6.2 Read patch number */
  	/* If patch number is 0, it's first time connys power on */
  	patch_num = mtk_wcn_soc_get_patch_num();
@@ -237,7 +241,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	if (patch_num == 0) {
  		if (t1100_rom_patch[0]) {
  			/* T1100: the patch comes from /lib/firmware, not from
-@@ -1259,6 +1450,8 @@
+@@ -1259,6 +1454,8 @@
  	}
  #endif
  	/* 6.3 Multi-patch Patch download */
@@ -246,7 +250,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_BEFORE_SEND_DOWNLOAD_PATCH);
  	for (patch_index = 0; patch_index < patch_num; patch_index++) {
  		iRet = mtk_wcn_soc_patch_dwn(patch_index);
-@@ -1269,6 +1462,16 @@
+@@ -1269,6 +1466,16 @@
  		if (patch_index == (patch_num - 1))
  			WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_BEFORE_CONNSYS_RESET);
  
@@ -263,7 +267,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  		/* T1100: the first post-patch command is sometimes swallowed
  		 * while the ROM applies the patch; retry it a few times. */
  		{
-@@ -1281,9 +1484,46 @@
+@@ -1281,9 +1488,46 @@
  							    osal_array_size(init_table_3));
  			}
  		}
@@ -313,7 +317,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  		}
  	}
  
-@@ -1320,7 +1560,7 @@
+@@ -1320,7 +1564,7 @@
  	iRet = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
  	if (iRet) {
  		WMT_ERR_FUNC("init_table_3 fail(%d)\n", iRet);
@@ -322,7 +326,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	}
  #endif
  
-@@ -2934,6 +3174,7 @@
+@@ -2934,6 +3178,7 @@
  	/* send all fragments */
  	offset = sizeof(WMT_PATCH_CMD);
  	fragSeq = 0;
@@ -330,7 +334,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	while (fragSeq < fragNum) {
  		WMT_DBG_FUNC("patch size(%d) fragNum(%d)\n", patchSize, fragNum);
  		if (fragSeq == (fragNum - 1)) {
-@@ -2976,7 +3217,8 @@
+@@ -2976,7 +3221,8 @@
  		 * init_table_3) fails with -2 (wmt_ctrl_tx_ex: "STP is not
  		 * enabled yet").  So do not read an EVT for the last fragment.
  		 */
@@ -340,7 +344,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  			WMT_INFO_FUNC("t1100: last fragment sent, ROM jumps (no EVT expected)\n");
  			iRet = 0;
  			++fragSeq;
-@@ -2987,6 +3229,9 @@
+@@ -2987,6 +3233,9 @@
  		}
  
  		iRet = wmt_core_rx(evtBuf, sizeof(WMT_PATCH_EVT), &u4Res);
@@ -350,7 +354,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  		if (iRet || (u4Res != sizeof(WMT_PATCH_EVT))) {
  			WMT_ERR_FUNC("wmt_core: read WMT_PATCH_EVT length(%d, %d) fail(%d)\n", sizeof(WMT_PATCH_EVT),
  				     u4Res, iRet);
-@@ -3018,7 +3263,71 @@
+@@ -3018,7 +3267,71 @@
  		offset += patchSizePerFrag;
  		++fragSeq;
  	}
@@ -422,7 +426,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	WMT_WARN_FUNC("wmt_core: patch dwn:%d frag(%d, %d) %s\n",
  		      iRet, fragSeq, fragSize, (!iRet && (fragSeq == fragNum)) ? "ok" : "fail");
  
-@@ -3180,16 +3489,103 @@
+@@ -3180,16 +3493,103 @@
  	return iRet;
  }
  
