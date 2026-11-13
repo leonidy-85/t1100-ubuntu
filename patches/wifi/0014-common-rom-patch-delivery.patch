@@ -1,0 +1,117 @@
+--- a/common_main/core/wmt_ic_soc.c	2026-11-13 12:19:55.258002018 +0000
++++ b/common_main/core/wmt_ic_soc.c	2026-11-13 12:20:16.702187534 +0000
+@@ -1225,6 +1225,8 @@
+ 	/* 6.2 Read patch number */
+ 	/* If patch number is 0, it's first time connys power on */
+ 	patch_num = mtk_wcn_soc_get_patch_num();
++	if (t1100_rom_patch[0])
++		patch_num = (UINT32)t1100_patch_scan();
+ 	if (patch_num == 0) {
+ 		if (t1100_rom_patch[0]) {
+ 			/* T1100: the patch comes from /lib/firmware, not from
+@@ -3180,16 +3182,102 @@
+ 	return iRet;
+ }
+ 
++/* ---- T1100 M43: ROMv4 patch *set* (num/seq from the header field at 24) ---- */
++#define T1100_MAX_PATCHES 4
++struct t1100_patch {
++	UINT8 seq;
++	UINT8 num;
++	UINT8 addr[4];
++	char name[64];
++};
++static struct t1100_patch t1100_patches[T1100_MAX_PATCHES];
++static int t1100_patch_cnt = -1;
++
++static int t1100_patch_scan(void)
++{
++	char list[sizeof(t1100_rom_patch)];
++	char *tok, *save = NULL, *p = list;
++	int n = 0, i, j;
++	struct t1100_patch t;
++	const struct firmware *fw;
++	struct t1100_patch *e;
++	UINT8 b;
++
++	if (t1100_patch_cnt >= 0)
++		return t1100_patch_cnt;
++	t1100_patch_cnt = 0;
++	if (!t1100_rom_patch[0])
++		return 0;
++	osal_memcpy(list, t1100_rom_patch, sizeof(list));
++	while ((tok = strsep(&p, " ,")) != NULL && n < T1100_MAX_PATCHES) {
++		if (!tok[0])
++			continue;
++		if (request_firmware(&fw, tok, NULL) || fw->size <= 32) {
++			WMT_ERR_FUNC("t1100: cannot load %s\n", tok);
++			continue;
++		}
++		e = &t1100_patches[n];
++		osal_memset(e, 0, sizeof(*e));
++		osal_memcpy(e->addr, (u8 *)fw->data + 24, 4);
++		b = e->addr[0];
++		e->num = b >> 4;
++		e->seq = b & 0xf;
++		osal_strncpy(e->name, tok, sizeof(e->name) - 1);
++		WMT_INFO_FUNC("t1100: patch %s: num=%u seq=%u addr=%02x%02x%02x%02x size=%zu\n",
++			      e->name, e->num, e->seq, e->addr[0], e->addr[1],
++			      e->addr[2], e->addr[3], fw->size);
++		release_firmware(fw);
++		n++;
++	}
++	for (i = 1; i < n; i++) {
++		t = t1100_patches[i];
++		for (j = i - 1; j >= 0 && t1100_patches[j].seq > t.seq; j--)
++			t1100_patches[j + 1] = t1100_patches[j];
++		t1100_patches[j + 1] = t;
++	}
++	t1100_patch_cnt = n;
++	return n;
++}
+ static INT32 mtk_wcn_soc_patch_dwn(UINT32 index)
+ {
+ 	INT32 iRet = -1;
+ 	P_WMT_PATCH patchHdr = NULL;
+ 
+-	/* T1100: one ROMv4 patch from /lib/firmware, no userspace launcher */
++	/* T1100 (M43): serve the sorted patch set (num/seq from the header) */
+ 	if (t1100_rom_patch[0]) {
+-		if (index)
++		const struct firmware *fw = NULL;
++		PUINT8 pbuf, body;
++		UINT32 body_size;
++		UINT8 addressByte[4];
++		int rc;
++
++		if ((int)index >= t1100_patch_scan())
+ 			return 0;
+-		return t1100_rom_patch_dwn_file();
++		osal_memcpy(addressByte, t1100_patches[index].addr, 4);
++		rc = request_firmware(&fw, t1100_patches[index].name, NULL);
++		if (rc) {
++			WMT_ERR_FUNC("t1100: request_firmware(%s) = %d\n",
++				     t1100_patches[index].name, rc);
++			return rc;
++		}
++		body_size = fw->size - t1100_patch_hdr_len;
++		pbuf = osal_malloc(fw->size);
++		if (!pbuf) {
++			release_firmware(fw);
++			return -ENOMEM;
++		}
++		osal_memcpy(pbuf, fw->data, fw->size);
++		release_firmware(fw);
++		body = pbuf + t1100_patch_hdr_len;
++		WMT_INFO_FUNC("t1100: downloading %s (seq %u) %u bytes, addr %02x%02x%02x%02x\n",
++			      t1100_patches[index].name, t1100_patches[index].seq,
++			      body_size, addressByte[0], addressByte[1],
++			      addressByte[2], addressByte[3]);
++		rc = mtk_wcn_soc_normal_patch_dwn(body, body_size, addressByte);
++		WMT_INFO_FUNC("t1100: %s download -> %d\n",
++			      t1100_patches[index].name, rc);
++		osal_free(pbuf);
++		return rc;
+ 	}
+ 	PUINT8 pBuf = NULL;
+ 	PUINT8 pPatchBuf = NULL;
