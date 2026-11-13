@@ -4,8 +4,8 @@
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
 **Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
 
-> **Статус (13.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
-> mainline 6.12.114 + патчи 0001–0064 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
+> **Статус (14.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
+> mainline 6.12.114 + патчи 0001–0067 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
 > заряжается** (`mt6370-charger`; драйвера счётчика заряда — battery gauge —
@@ -22,9 +22,10 @@
 > применяет `t1100-audio-mixer.service`, PipeWire source `alsa_mic` — по
 > умолчанию; `arecord`/`parecord` дают ненулевой сигнал. Wi-Fi/BT в mainline
 > не поддержаны, сеть — только RNDIS.
-> **USB host/OTG (0060/0061):** host-режим работает — флешка определяется
-> (`sda`, 62.9 GB), MT6370 выдаёт VBUS 5 В; динамический возврат host→device
-> нестабилен (xHCI), поэтому возврат — только перезагрузкой.
+> **USB host/OTG (0060/0061/0067):** Type-C переведён в dual-role, host-режим
+> работает — флешка `Phison 13fe:5500` определяется как `sda` (7.4 GB), MT6370
+> выдаёт VBUS 5.05 В / 2.4 А. Возврат host→device — helper `t1100-usb-role`:
+> он останавливает xHCI, меняет роль и снова поднимает xHCI, без перезагрузки.
 > **CPU DVFS (0062/0063):** `mtk-cpufreq`, 16 OPP 793…1989 МГц с voltage
 > tracking, `schedutil`; максимум 1.989 ГГц при 1.05 В проверен на железе.
 > **Thermal (0064):** CPU-зона 80/90/115 °C, throttling проверен; efuse-
@@ -161,12 +162,12 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | Блок | Состояние |
 |---|---|
 | LK / образ boot.img | ✅ LK принимает наш DTB (4 правила, `docs/lk-dtb-rules.md`), перепаковка `scripts/repack_boot.py` |
-| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0064` (0035 отключён, 0020 заменён на 0060) |
+| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0067` (0035 отключён, 0020 заменён на 0060) |
 | Память/PSCI/GIC | ✅ |
-| PMIC MT6358 / питание | ✅ регуляторы (rails) MT6358 и power-домены SCPSYS регистрируются (0012); зарядка MT6370 `online=1/Charging`, но без счётчика заряда (battery gauge) — процентов в `/sys/class/power_supply` нет (0031; `tcpc` в DTS выключен); `poweroff` снимает питание через RTC MT6358 (0034; при подключённом кабеле плата стартует снова — «boot on charger») |
+| PMIC MT6358 / питание | ✅ регуляторы (rails) MT6358 и power-домены SCPSYS регистрируются (0012); зарядка MT6370 `online=1/Charging`, но без счётчика заряда (battery gauge) — процентов в `/sys/class/power_supply` нет (0031; TCPC dual-role, 0066/0067); `poweroff` снимает питание через RTC MT6358 (0034; при подключённом кабеле плата стартует снова — «boot on charger») |
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
 | Логи без UART/экрана | ✅ своя зона `ramoops@70000000` + чтение из рекавери (`/proc/last_kmsg`) |
-| USB (mtu3/UDC + host) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH; host — флешка `sda` 62.9 GB, VBUS 5 В (0060/0061); возврат host→device — только reboot |
+| USB (mtu3/UDC + host) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH; host — флешка `sda` 7.4 GB, VBUS 5.05 В (0060/0061/0067), helper `t1100-usb-role`; возврат host→device без reboot |
 | Ubuntu rootfs | ✅ Ubuntu 26.04 LTS arm64 + KDE Plasma 6.6.4 на `p54` (ext4, метка `ubuntu`), 8 ядер |
 | DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ панель 1600×2176@58.93 (0038/0046/0052), сдвиг кадра убран |
 | GPU panfrost (Mali-G72) | ✅ Mesa 26.0.3, GLES 3.1; DVFS 698/743/800 МГц (0058/0059), `glmark2` Score 1409/1583 |

@@ -59,17 +59,18 @@
 - **Нельзя одновременно** прошивать образ тача и Wi-Fi: по одному шагу за раз,
   после каждого проверять дисплей/GPU и оставлять точку отката.
 
-## Текущее состояние платы (13.11)
+## Текущее состояние платы (14.11)
 
-- `boot_a` = `build/boot_thermal_final.img` (md5 p29
-  `e96c91f6e67921e82dfa874b4bfa3a87`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+- `boot_a` = `build/boot_nonwifi_dual.img` (md5 p29
+  `f70560f124a0c7d68acf6a668baab48b`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
   (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
   `schedutil`) и CPU thermal zone (0064: 80/90/115 °C, throttling
-  проверен). USB role switch (0060/0061) в режиме `device`, RNDIS/SSH
-  работают; host-режим с флешкой проверен, возврат host→device — только
-  перезагрузкой. SVS пока выключен; efuse-калибровка MT6771 не декодируется,
-  thermal использует дефолтные коэффициенты (см. STATUS 13.11 (10)).
+  проверен). Wi-Fi в этот образ не включён. Type-C dual-role (0066/0067):
+  host с флешкой работает, VBUS 5.05 В / 2.4 А, возврат host→device через
+  helper `t1100-usb-role` без перезагрузки. SVS пока выключен;
+  efuse-калибровка MT6771 не декодируется, thermal использует дефолтные
+  коэффициенты (см. STATUS 13.11 (10), 14.11 (1)).
 - **Suspend:** `systemctl suspend` работает через s2idle (`SuspendState=freeze`).
   Перед сном systemd-хук отцепляет UDC, после пробуждения возвращает его;
   `t1100-suspend-default.service` держит `mem_sleep` в `s2idle`.

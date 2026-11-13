@@ -4718,3 +4718,23 @@ BTIF/STP-транспорт (включая исправленную поляр�
 **Решение о дальнейшем — за владельцем:** (1) идти в первопричину с **рабочим стоковым логом**
 (нужна загрузка стока и снятие dmesg на этапе поднятия Wi-Fi: сравнивать можно только с
 работающим прогоном), либо (2) зафиксировать Wi-Fi как незакрытый пункт и переключиться на остальное.
+## 14.11 (1): USB host с флешкой — dual TCPC + helper
+
+- Type-C TCPC переведён в dual-role: `power-role="dual"`, `data-role="dual"`,
+  `try-power-role="sink"`, `vbus-supply` на TCPC и source-PDO 5 В/3 А
+  (патч 0067). Без партнёра порт остаётся `device/sink`, с флешкой —
+  `host/source`.
+- Флешка `Phison 13fe:5500` определяется в host: `usb-storage`, `sda`
+  7.4 GB, `sda1`, автоматически монтируется. VBUS `mt6370-usb-otg-vbus`
+  5050 мВ / 2400 мА.
+- Возврат host→device без перезагрузки: helper `t1100-usb-role` размонтирует
+  `/dev/sd*`, делает `sync`, отвязывает xHCI `11200000.usb`, меняет роль на
+  device и снова привязывает xHCI. Проверено: `xhci-mtk remove, state 4` →
+  `USB bus 1 deregistered` → `gadget pullup D+` → xHCI снова bus 1;
+  SSH/RNDIS возвращаются.
+- Старый kernel-фикс с `ssusb_host_exit/host_init` не используется; helper
+  работает через sysfs и не требует перепрошивки.
+- Образ p29: `boot_nonwifi_dual.img`, md5 `f70560f1…`; helper —
+  `rootfs-overlay/usr/local/sbin/t1100-usb-role`. Если флешку вынуть
+  смонтированной, FAT получает I/O errors; helper теперь сам размонтирует
+  `/dev/sd*` перед сменой роли.

@@ -1,0 +1,56 @@
+#!/bin/sh
+# Switch the T1100 Type-C port between peripheral (RNDIS) and host mode
+# without rebooting.  The xHCI controller must be stopped before the role is
+# switched back to device, otherwise an active USB device makes xHCI time out
+# and the controller is left dead.
+set -eu
+
+ROLE=/sys/class/usb_role/11201000.usb-role-switch/role
+XHCI=11200000.usb
+DRV=/sys/bus/platform/drivers/xhci-mtk
+
+usage() {
+	echo "usage: $0 host|device|status" >&2
+	exit 2
+}
+
+case "${1:-}" in
+host)
+	if [ ! -e "$DRV/$XHCI" ]; then
+		echo "$XHCI" > "$DRV/bind"
+	fi
+	echo host > "$ROLE"
+	sleep 1
+	;;
+device)
+	# Unmount any USB storage first, then stop the controller cleanly.
+	for mnt in $(awk '$1 ~ /^\/dev\/sd/ { print $2 }' /proc/mounts); do
+		echo "unmounting $mnt"
+		umount "$mnt" || {
+			echo "cannot unmount $mnt; unmount it before switching" >&2
+			exit 1
+		}
+	done
+	sync
+	if [ -e "$DRV/$XHCI" ]; then
+		echo "$XHCI" > "$DRV/unbind"
+	fi
+	echo device > "$ROLE"
+	sleep 1
+	if [ ! -e "$DRV/$XHCI" ]; then
+		echo "$XHCI" > "$DRV/bind"
+	fi
+	;;
+status)
+	echo "role: $(cat "$ROLE")"
+	if [ -e "$DRV/$XHCI" ]; then
+		echo "xhci: bound"
+	else
+		echo "xhci: unbound"
+	fi
+	lsblk -o NAME,SIZE,MOUNTPOINT 2>/dev/null | sed -n '1,12p'
+	;;
+*)
+	usage
+	;;
+esac
