@@ -1,0 +1,29 @@
+#!/bin/sh
+# T1100 audio output selector: one window, two buttons.
+# Yes = headphones (MT6358 HP path, speaker amp off)
+# No  = speaker   (speaker amp on, HPL/HPR mux back to LoudSPK)
+set -u
+
+kdialog --title "Аудиовыход" \
+	--yes-label "Наушники" \
+	--no-label "Динамик" \
+	--yesno "Куда выводить звук?"
+rc=$?
+
+case "$rc" in
+0)
+	amixer -c0 cset name="HPL Mux" 2 >/dev/null
+	amixer -c0 cset name="HPR Mux" 2 >/dev/null
+	amixer -c0 cset name="Speaker Switch" off >/dev/null
+	# Headphone volume: 12 = +2 dB on the codec dB scale.
+	amixer -c0 cset numid=78 12 >/dev/null 2>&1 || true
+	;;
+1)
+	amixer -c0 cset name="Speaker Switch" on >/dev/null
+	amixer -c0 cset name="HPL Mux" 1 >/dev/null
+	amixer -c0 cset name="HPR Mux" 1 >/dev/null
+	;;
+*)
+	exit 0
+	;;
+esac

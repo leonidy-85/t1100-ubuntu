@@ -4826,3 +4826,15 @@ BTIF/STP-транспорт (включая исправленную поляр�
   молчит, звук в наушниках; пользователь подтвердил.
 - Откат: `/tmp/opencode/boot_a_before_amp.img` (md5 `32b609a4…`).
   Автоматический ACCDET по-прежнему не реализован (manual-only).
+
+## 14.11 (6): UI переключения «Динамик/Наушники»
+
+- Добавлено отдельное приложение `/usr/local/bin/t1100-audio-ui` с
+  KDialog-окном и двумя кнопками: «Наушники» и «Динамик».
+- Наушники: `HPL/HPR Mux=2`, `Speaker Switch=off`, `Headphone Volume=12`.
+  Динамик: `Speaker Switch=on`, `HPL/HPR Mux=1`.
+- `.desktop` — `rootfs-overlay/usr/share/applications/t1100-audio-ui.desktop`
+  (Name «Аудиовыход», Icon `audio-card`, Categories AudioVideo).
+- Зависимость `kdialog` установлена на планшет (apt). Пользователь проверил
+  кнопку «Динамик»: `HPL/HPR Mux=1`, `Speaker Switch=on`; окно работает.
+- p29 `build/boot_nonwifi_amp.img` md5 `61e08a8b…`; HEAD до коммита `2dd6a37`.
