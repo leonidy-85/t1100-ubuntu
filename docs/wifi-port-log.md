@@ -4478,3 +4478,36 @@ STP-состояния), а не сырым poke'ом из wlan-модуля.
 мгновенно (в M54, где сброс шёл из patch-пути и STP к тому моменту был жив/переинициализирован,
 `hwcode` вернулся `0x788`). Порядок в операции нужно поменять: сначала `stp_close/open +
 MODE=MAND + EN` (+ `reset_seq_state`), затем polling `hwcode` до 2 с.
+
+## 73. M57: порядок в warm-reset исправлен; из wlan-пути чип после AP_RGU не оживает ≥80 с (13.11)
+
+### 73.1 Правка
+
+`mtk_wcn_consys_warm_reset()`: `consys_hw_warm_reset()` →
+`mtk_wcn_stp_reset_seq_state()` → `stp_close/open` → `MODE=MAND` → `EN` → лог кодов →
+**только затем** polling `GEN_HCR` (40×50 мс). Раньше polling стоял до STP-reinit и
+гарантированно получал `-2` («STP не включён»).
+
+### 73.2 Прогон
+
+```
+warm reset: stp close/open/mode/en = 0/0/0/0        (вне среза: строка ушла из dmesg)
+142.045  warm reset from wmt_drv: stp 0/0/0/0 hwcode 0x00000000 (ret -3)
+143.053  Firmware download configuration failed! idx 0, dst 0x020a1000, len 28032
+143.101  wlanProbe failed (-5)
+```
+
+Важно: каждый `wmt_core_reg_rw_raw` при молчащем чипе ждёт 2 с, поэтому 40 замеров —
+это ≈**80 с** без единого ответа (`ret -3`, не `-2`): STP включён и работает, чип не отвечает.
+
+### 73.3 Отличие двух путей (ответ на п.5)
+
+| | M54 (ожило) | M57 (не ожило) |
+|---|---|---|
+| контекст вызова | `wmt_lib_btm_cb(BTM_RST_OP)` — колбэк STP | `glResetTrigger` из `wlanProbe` |
+| состояние чипа до сброса | в обработчике assert/core dump, STP-обмен только что завершён (хвост ACK'нут) | исполняет WLAN-образ, `WIFI_START` отправлен, `mbox0=0x02000020` |
+| после сброса | STP reinit в quiet-пути, `GEN_HCR` → `0x788` (ret 0) | STP reinit кодами 0/0/0/0, `GEN_HCR` → молчание ≥80 с (`-3`) |
+
+Вывод: AP_RGU-импульс возвращает чип только из состояния assert/dump; из состояния
+«WLAN-образ работает» его недостаточно — нужен SPM-путь (iso/power), который мы пока
+применяли лишь как полный цикл питания.

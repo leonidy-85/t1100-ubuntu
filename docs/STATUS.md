@@ -4125,3 +4125,15 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   len 28032`. Порядок операции надо поменять (reinit → polling).
 - Модули: `wmt_drv` `220bc156…`, `wlan_drv_gen3` `bd59d1b2…`, `mtk_btif_drv` `e29eaecb…`.
   Патчи `0014/0016/0017/0018` обновлены; `wlan0` нет.
+
+## 13.11 (48): M57 — порядок warm-reset исправлен; из wlan-пути AP_RGU не оживляет чип
+
+- `mtk_wcn_consys_warm_reset()`: reset → `stp_reset_seq_state` → close/open/MODE/EN → **потом**
+  polling `GEN_HCR` (раньше polling стоял до reinit и всегда давал `-2`).
+- Прогон: `stp 0/0/0/0`, затем `hwcode 0x00000000 (ret -3)` после 40 замеров (≈80 с, потому что
+  молчащий чип даёт 2-секундный таймаут на каждый) → перезакачка падает на `idx 0, dst 0x020a1000,
+  len 28032` → `wlanProbe -5`.
+- Отличие от M54: там сброс шёл из `wmt_lib_btm_cb` по чипу в assert/dump, и `GEN_HCR` отвечал
+  `0x788`; здесь чип исполняет WLAN-образ после `WIFI_START` и на AP_RGU не реагирует.
+- Модуль `wmt_drv` `69f3c56f…`; `wlan_drv_gen3` `bd59d1b2…`; `mtk_btif_drv` `e29eaecb…`.
+  `0014` обновлён; `wlan0` нет.
