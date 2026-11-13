@@ -3197,3 +3197,48 @@ SET-регистр, минуя CCF, — родительские клоки (`ax
 `clocks = <&infracfg CLK_INFRA_BTIF>` в DT (правка DTS + перепаковка boot, только
 с согласованием), либо проверить/включить цепочку `axi_sel` вручную с контролем
 по `clk_summary`.
+
+## 50. M28: BTIF через CCF, XO_WCN и домен CONNSYS — записи всё равно теряются (13.11)
+
+### 50.1 CCF вместо сырого бита
+
+В glue добавлен `m23_ccf`: `of_clk_get_from_provider()` от узла
+`mediatek,mt8183-infracfg` по ID mt8183-нумерации (`CLK_INFRA_BTIF = 26`,
+`CLK_INFRA_DEVICE_APC = 44`) + `clk_prepare_enable()`. DT не правился.
+
+```
+ДО:   axi_sel 4/6 156000000 Y | infra_device_apc 0/0 hw=Y | infra_btif 0/0 hw=N
+ПОСЛЕ: axi_sel 6/8 156000000 Y | infra_device_apc 1/1 hw=Y | infra_btif 1/1 hw=N
+dmesg: m23-ccf: infra_btif clk_prepare_enable -> 0, rate=156000000 (parent axi_sel)
+```
+
+CCF-цепочка включилась (enable_cnt=1, родитель 156 МГц), но `infra_btif` в
+`clk_summary` остаётся `hw=N`, хотя сырое чтение `0x10001090` даёт бит31=1
+(`0x9befff5d`).
+
+### 50.2 XO_WCN и домен
+
+`pwrap+0x184 = 0x3` (бит1 `DCXO_CONN_ENABLE` уже стоит); с
+`t1100_probe_stage=1` CONSYS поднят: `cpupcr=0x1170`, `chipid=0x788`
+(`0x1000d44e` читать нельзя — SIGBUS, это pwrap-командное окно).
+
+### 50.3 BTIF: before -> after `hw_init` (CCF вкл. + CONSYS вкл.)
+
+```
+IER      0x00000000 -> 0x00000000     (hw_init пишет RX-IER; не легло)
+DMA_EN   0x00000000 -> 0x00000000     (AUTORST; не легло)
+TRI_LVL  0x0000005a -> 0x0000005a     (критерий: должно стать 0x18)
+RTOCNT 0x40 -> 0x40, WAT_TIME 0x12 -> 0x12, LSR 0x60 -> 0x60
+прямые: IER <- 0xa5a5a5a5 → 0x0; TRI_LVL <- 0xda → 0x5a
+```
+
+### 50.4 Вывод и остаток подозрений
+
+CCF, XO_WCN и живой домен CONNSYS **не делают регистры BTIF записываемыми**;
+STP-цепочку запускать нельзя (байты не покидают SoC). Подозрения по коду:
+(1) расхождение «CCF `hw=N` при бите31=1» — либо `is_enabled` гейта считает
+иначе, либо статус-регистр MT6771 другой; (2) третья частота BTIF из домена
+CONNSYS (MCU ещё не разрешил интерфейс); (3) write-protect APB-слейва
+(DMPU/ATF) без VIO; (4) `IER/DMA_EN/TRI_LVL` могут быть RO — но 40 записей в
+`THR` не заполняют FIFO (`LSR=0x60`), т.е. записи действительно не доходят.
+Подробности: `refs/m28-btif-ccf.md`.
