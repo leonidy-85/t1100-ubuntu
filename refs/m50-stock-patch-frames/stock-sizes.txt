@@ -1,0 +1,64 @@
+; stock — patchSize -= , fragNum, хвост
+; ---- проверка размера и вычитание заголовка (28 / 30 по options bit1) ----
+02e8fc: 00000094   bl       #0x2e8fc   ; RELOC .text+0x4f940
+02e900: e8cb40b9   ldr      w8, [sp, #0xc8]
+02e904: f73700f9   str      x23, [sp, #0x68]
+02e908: 1f6d0071   cmp      w8, #0x1b
+02e90c: c8010054   b.hi     #0x2e944
+02e910: 680340b9   ldr      w8, [x27]
+02e914: c813f837   tbnz     w8, #0x1f, #0x2eb8c
+02e918: e02f40f9   ldr      x0, [sp, #0x58]
+02e91c: a2988152   mov      w2, #0xcc5
+02e920: 97000014   b        #0x2eb7c
+02e924: 680340b9   ldr      w8, [x27]
+02e928: 8811f837   tbnz     w8, #0x1f, #0x2eb58
+02e92c: e03340f9   ldr      x0, [sp, #0x60]
+02e930: 42958152   mov      w2, #0xcaa
+02e934: e10314aa   mov      x1, x20
+02e938: 00000094   bl       #0x2e938   ; RELOC .text+0x4f320
+02e93c: 37008012   mov      w23, #-2
+02e940: 7b020014   b        #0x2f32c
+02e944: e94740f9   ldr      x9, [sp, #0x88]
+02e948: 0a710051   sub      w10, w8, #0x1c
+02e94c: eacb00b9   str      w10, [sp, #0xc8]
+02e950: 29014039   ldrb     w9, [x9]
+02e954: 89000837   tbnz     w9, #1, #0x2e964
+02e958: e8720091   add      x8, x23, #0x1c
+02e95c: e82700f9   str      x8, [sp, #0x48]
+02e960: 05000014   b        #0x2e974
+02e964: e97a0091   add      x9, x23, #0x1e
+02e968: 08790051   sub      w8, w8, #0x1e
+02e96c: e92700f9   str      x9, [sp, #0x48]
+02e970: e8cb00b9   str      w8, [sp, #0xc8]
+; ---- fragNum = patchSize/1000 (+1), без udiv/msub ----
+02eb94: 68ba8952   mov      w8, #0x4dd3
+02eb98: 480ca272   movk     w8, #0x1062, lsl #16
+02eb9c: 487ca89b   umull    x8, w2, w8
+02eba0: 690340b9   ldr      w9, [x27]
+02eba4: 17fd66d3   lsr      x23, x8, #0x26
+02eba8: 087d8052   mov      w8, #0x3e8
+02ebac: e87e081b   mul      w8, w23, w8
+02ebb0: 1f01026b   cmp      w8, w2
+02ebb4: e8079f1a   cset     w8, ne
+02ebb8: e83f00b9   str      w8, [sp, #0x3c]
+02ebbc: e806971a   cinc     w8, w23, ne
+02ebc0: 3f090071   cmp      w9, #2
+; ---- fragSize: остаток для последнего (csel), остаток ведётся вычитанием 1000 ----
+02eefc: eb03172a   mov      w11, w23
+02ef00: ea03142a   mov      w10, w20
+02ef04: e92740b9   ldr      w9, [sp, #0x24]
+02ef08: 5f010071   cmp      w10, #0
+02ef0c: 170080d2   mov      x23, #0   ; RELOC .data+0x1292
+02ef10: 28008052   mov      w8, #1
+02ef14: 0805881a   cinc     w8, w8, ne
+02ef18: 3f010a6b   cmp      w9, w10
+02ef20: 69008052   mov      w9, #3
+02ef24: 2801881a   csel     w8, w9, w8, eq
+02ef28: 097d8052   mov      w9, #0x3e8
+02ef30: 7501891a   csel     w21, w11, w9, eq
+02ef38: a9060011   add      w9, w21, #1
+02ef3c: e00a0091   add      x0, x23, #2
+02ef40: e1030391   add      x1, sp, #0xc0
+02ef44: 42008052   mov      w2, #2
+02ef48: ea3f00b9   str      w10, [sp, #0x3c]
+02ef4c: eb2b00b9   str      w11, [sp, #0x28]

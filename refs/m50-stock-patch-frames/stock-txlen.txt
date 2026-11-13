@@ -1,0 +1,25 @@
+; stock — длина TX фрагмента: cmdLen=fragSize+1 (u16), txLen=fragSize+5, без выравнивания
+02ef38: a9060011   add      w9, w21, #1
+02ef3c: e00a0091   add      x0, x23, #2
+02ef40: e1030391   add      x1, sp, #0xc0
+02ef44: 42008052   mov      w2, #2
+02ef48: ea3f00b9   str      w10, [sp, #0x3c]
+02ef4c: eb2b00b9   str      w11, [sp, #0x28]
+02ef50: e8120039   strb     w8, [x23, #4]
+02ef54: e9830179   strh     w9, [sp, #0xc0]
+02ef58: 00000094   bl       #0x2ef58   ; RELOC .text+0x4f940
+02ef5c: f42740f9   ldr      x20, [sp, #0x48]
+02ef60: a2008052   mov      w2, #5
+02ef64: e10317aa   mov      x1, x23
+02ef68: e00314aa   mov      x0, x20
+02ef6c: 00000094   bl       #0x2ef6c   ; RELOC .text+0x4f940
+02ef70: a83e4092   and      x8, x21, #0xffff
+02ef74: 17150091   add      x23, x8, #5
+02ef78: e2430391   add      x2, sp, #0xd0
+02ef7c: e00314aa   mov      x0, x20
+02ef80: e103172a   mov      w1, w23
+02ef84: e3031f2a   mov      w3, wzr
+02ef88: 00000094   bl       #0x2ef88   ; RELOC .text+0x1d270
+02ef8c: e603002a   mov      w6, w0
+02ef90: 602f0035   cbnz     w0, #0x2f57c
+02ef94: e4d340b9   ldr      w4, [sp, #0xd0]

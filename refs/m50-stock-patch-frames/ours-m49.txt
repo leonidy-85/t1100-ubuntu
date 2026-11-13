@@ -1,0 +1,61 @@
+; ours m49-wmt.ko (589fbf55...) — те же три места
+; static bytes SOC-копии (x22 = .data+0x8e8 = wmt_ic_ops_soc):
+;   ADDRESS   .data+0x0a58: 01 08 10 00 01 01 00 01 3c 02 09 02 00 00 00 00 ff ff ff ff
+;   P_ADDRESS .data+0x0a70: 01 08 10 00 01 01 00 01 c4 04 09 02 00 3f 00 01 ff ff ff ff
+022e90: 41c9ff54   b.ne     #0x227b8
+022e94: 00a38052   mov      w0, #0x518
+022e98: c0f20279   strh     w0, [x22, #0x178]
+022e9c: 806f8152   mov      w0, #0xb7c
+022ea0: c0220379   strh     w0, [x22, #0x190]
+022ea4: 45feff17   b        #0x227b8
+; ---- tx ADDRESS: add x0,x22,#0x170; w1=0x14 ----
+0227b8: f9830191   add      x25, sp, #0x60
+0227bc: c0c20591   add      x0, x22, #0x170
+0227c0: e20319aa   mov      x2, x25
+0227c4: 03008052   mov      w3, #0
+0227c8: 81028052   mov      w1, #0x14
+0227cc: 00000094   bl       #0x227cc   ; RELOC .text+0x15a60
+0227d0: e46340b9   ldr      w4, [sp, #0x60]
+0227d4: e03e0035   cbnz     w0, #0x22fb0
+0227d8: 9f500071   cmp      w4, #0x14
+; ---- P_ADDRESS[12..15] и tx ----
+022824: 62024039   ldrb     w2, [x19]
+022828: c2520639   strb     w2, [x22, #0x194]
+02282c: e00240b9   ldr      w0, [x23]   ; RELOC .data+0x1b70
+022830: 63064039   ldrb     w3, [x19, #1]
+022834: c3560639   strb     w3, [x22, #0x195]
+022838: 640a4039   ldrb     w4, [x19, #2]
+02283c: c45a0639   strb     w4, [x22, #0x196]
+022840: 650e4039   ldrb     w5, [x19, #3]
+022844: c55e0639   strb     w5, [x22, #0x197]
+022848: 1f080071   cmp      w0, #2
+02284c: c8330054   b.hi     #0x22ec4
+022850: e20319aa   mov      x2, x25
+022854: c0220691   add      x0, x22, #0x188
+022858: 03008052   mov      w3, #0
+02285c: 81028052   mov      w1, #0x14
+022860: 00000094   bl       #0x22860   ; RELOC .text+0x15a60
+022864: e46340b9   ldr      w4, [sp, #0x60]
+022868: 203f0035   cbnz     w0, #0x2304c
+02286c: 9f500071   cmp      w4, #0x14
+022870: e13e0054   b.ne     #0x2304c
+022874: 82018052   mov      w2, #0xc
+022878: 01008052   mov      w1, #0
+02287c: e0b30191   add      x0, sp, #0x6c
+022880: 00000094   bl       #0x22880   ; RELOC .text+0x35e88
+022884: e20319aa   mov      x2, x25
+022888: e0b30191   add      x0, sp, #0x6c
+02288c: 01018052   mov      w1, #8
+022890: 00000094   bl       #0x22890   ; RELOC .text+0x15cc0
+022894: e26340b9   ldr      w2, [sp, #0x60]
+022898: 803f0035   cbnz     w0, #0x23088
+02289c: 5f200071   cmp      w2, #8
+; ---- длины в цикле фрагментов: txLen=fragSize+5, cmdLen=fragSize+1, &0xffff ----
+022bb8: a1160011   add      w1, w21, #5
+022bbc: e703152a   mov      w7, w21
+022bc0: a0060011   add      w0, w21, #1
+022bc4: fc140091   add      x28, x7, #5
+022bc8: e13700b9   str      w1, [sp, #0x34]
+022a3c: b53e0012   and      w21, w21, #0xffff
+022a40: 937e131b   mul      w19, w20, w19
+022a44: 73160011   add      w19, w19, #5

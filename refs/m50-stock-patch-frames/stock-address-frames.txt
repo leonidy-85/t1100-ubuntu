@@ -1,0 +1,98 @@
+; stock wmt_drv.ko c2c70b9b... — WMT_PATCH_ADDRESS_CMD / WMT_PATCH_P_ADDRESS_CMD: 20 байт в TX
+; static bytes (file image):
+;   ADDRESS   .data+0x1251: 01 08 10 00 01 01 00 01 3c 02 09 02 00 00 00 00 ff ff ff ff
+;   P_ADDRESS .data+0x1265: 01 08 10 00 01 01 00 01 c4 04 09 02 00 3f 00 01 ff ff ff ff
+;   EVT       .data+0x1282: 02 08 04 00 00 00 00 01   (ADDRESS, 8 Б)
+;   EVT       .data+0x128a: 02 08 04 00 00 00 00 01   (P_ADDRESS, 8 Б)
+; ---- ROMv4 base: strh 0x0518 в ADDRESS[8..9], strh 0x0b7c в P_ADDRESS[8..9] ----
+02ec6c: 090080d2   mov      x9, #0   ; RELOC .data+0x1259
+02ec70: 0a0080d2   mov      x10, #0   ; RELOC .data+0x126d
+02ec88: 0ba38052   mov      w11, #0x518
+02ec90: 2b010079   strh     w11, [x9]
+02ec94: 896f8152   mov      w9, #0xb7c
+02ec98: 49010079   strh     w9, [x10]
+02ec9c: a808c036   tbz      w8, #0x18, #0x2edb0
+02eca0: 690340b9   ldr      w9, [x27]
+02eca4: a2835338   ldurb    w2, [x29, #-0xc8]
+02eca8: 080080d2   mov      x8, #0   ; RELOC .data+0x127e
+02ecac: a3935338   ldurb    w3, [x29, #-0xc7]
+02ecb0: a4a35338   ldurb    w4, [x29, #-0xc6]
+02ecb4: a5b35338   ldurb    w5, [x29, #-0xc5]
+02ecc4: 3f0d0071   cmp      w9, #3
+02ecc8: 02010039   strb     w2, [x8]
+02eccc: 03050039   strb     w3, [x8, #1]
+; ---- tx ADDRESS (20 Б) + rx 8 + memcmp с ADDRESS_EVT ----
+02edb0: 000080d2   mov      x0, #0   ; RELOC .data+0x1251
+02edbc: e2430391   add      x2, sp, #0xd0
+02edc4: 81028052   mov      w1, #0x14
+02edc8: e3031f2a   mov      w3, wzr
+02edcc: 00000094   bl       #0x2edcc   ; RELOC .text+0x1d270
+02edd0: e4d340b9   ldr      w4, [sp, #0xd0]
+02edd4: e303002a   mov      w3, w0
+02edd8: 601a0035   cbnz     w0, #0x2f124
+02eddc: 9f500071   cmp      w4, #0x14
+02ede0: 211a0054   b.ne     #0x2f124
+02ede4: a0e300d1   sub      x0, x29, #0x38
+02ede8: 82018052   mov      w2, #0xc
+02edec: e1031f2a   mov      w1, wzr
+02edf0: 00000094   bl       #0x2edf0   ; RELOC .text+0x4f918
+02edf4: a0e300d1   sub      x0, x29, #0x38
+02edf8: e2430391   add      x2, sp, #0xd0
+02edfc: 01018052   mov      w1, #8
+02ee00: 00000094   bl       #0x2ee00   ; RELOC .text+0x1d3ac
+02ee04: e4d340b9   ldr      w4, [sp, #0xd0]
+02ee08: e303002a   mov      w3, w0
+02ee0c: e0200035   cbnz     w0, #0x2f228
+02ee10: 9f200071   cmp      w4, #8
+02ee14: a1200054   b.ne     #0x2f228
+02ee18: 010080d2   mov      x1, #0   ; RELOC .data+0x1282
+02ee24: a0e300d1   sub      x0, x29, #0x38
+02ee2c: 02018052   mov      w2, #8
+02ee30: 00000094   bl       #0x2ee30   ; RELOC .text+0x4f998
+02ee34: 20310034   cbz      w0, #0x2f458
+; ---- P_ADDRESS[12..15] = 4 байта адреса, tx 20 Б + rx 8 + memcmp ----
+02f458: 690340b9   ldr      w9, [x27]
+02f45c: a2835338   ldurb    w2, [x29, #-0xc8]
+02f460: 080080d2   mov      x8, #0   ; RELOC .data+0x1271
+02f464: a3935338   ldurb    w3, [x29, #-0xc7]
+02f468: a4a35338   ldurb    w4, [x29, #-0xc6]
+02f46c: a5b35338   ldurb    w5, [x29, #-0xc5]
+02f47c: 3f0d0071   cmp      w9, #3
+02f480: f3d302a9   stp      x19, x20, [sp, #0x28]
+02f484: 02010039   strb     w2, [x8]
+02f488: 03050039   strb     w3, [x8, #1]
+02f48c: 04090039   strb     w4, [x8, #2]
+02f490: 050d0039   strb     w5, [x8, #3]
+02f494: 4b010054   b.lt     #0x2f4bc
+02f498: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x3d1 "[WMT-IC][D]%s:4 bytes address command:0x%02x,0x%02x,0x%02x,0x%02x"
+02f49c: 010080d2   mov      x1, #0   ; RELOC .rodata.str1.1+0x2af3 "mtk_wcn_soc_normal_patch_dwn"
+02f4b8: 00000094   bl       #0x2f4b8   ; RELOC .text+0x4f51c
+02f4bc: 000080d2   mov      x0, #0   ; RELOC .data+0x1265
+02f4c8: e2430391   add      x2, sp, #0xd0
+02f4d0: 81028052   mov      w1, #0x14
+02f4d4: e3031f2a   mov      w3, wzr
+02f4d8: 00000094   bl       #0x2f4d8   ; RELOC .text+0x1d270
+02f4dc: e4d340b9   ldr      w4, [sp, #0xd0]
+02f4e0: e303002a   mov      w3, w0
+02f4e4: e0070035   cbnz     w0, #0x2f5e0
+02f4e8: 9f500071   cmp      w4, #0x14
+02f4ec: a1070054   b.ne     #0x2f5e0
+02f4f0: a0e300d1   sub      x0, x29, #0x38
+02f4f4: 82018052   mov      w2, #0xc
+02f4f8: e1031f2a   mov      w1, wzr
+02f4fc: 00000094   bl       #0x2f4fc   ; RELOC .text+0x4f918
+02f500: a0e300d1   sub      x0, x29, #0x38
+02f504: e2430391   add      x2, sp, #0xd0
+02f508: 01018052   mov      w1, #8
+02f50c: 00000094   bl       #0x2f50c   ; RELOC .text+0x1d3ac
+02f510: e4d340b9   ldr      w4, [sp, #0xd0]
+02f514: e303002a   mov      w3, w0
+02f518: 80130035   cbnz     w0, #0x2f788
+02f51c: 9f200071   cmp      w4, #8
+02f520: 41130054   b.ne     #0x2f788
+02f524: 010080d2   mov      x1, #0   ; RELOC .data+0x128a
+02f530: a0e300d1   sub      x0, x29, #0x38
+02f538: 02018052   mov      w2, #8
+02f53c: 00000094   bl       #0x2f53c   ; RELOC .text+0x4f998
+02f540: f31740f9   ldr      x19, [sp, #0x28]
+02f544: 40c1ff34   cbz      w0, #0x2ed6c
