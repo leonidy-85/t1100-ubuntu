@@ -64,3 +64,4 @@
 0067-arm64-dts-t1100-make-the-Type-C-port-dual-role-for-USB-host.patch
 0068-ASoC-mt6358-keep-the-microphone-PGA-gain-on-capture-stop.patch
 0069-power-mt6370-use-the-MT6358-vendor-OCV-table-for-capacity.patch
+0070-ASoC-mt6771-mt6358-add-headphone-jack-and-speaker-DAPM-routes.patch
