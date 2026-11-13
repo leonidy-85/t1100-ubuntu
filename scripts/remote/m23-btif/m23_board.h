@@ -18,6 +18,7 @@ extern int m23_no_handshake;
 int m23_board_register(void);
 void m23_board_unregister(void);
 int m23_irq_map(int spi);
+void m23_ccf_enable(void);
 int m23_clk_enable(void);
 int m23_clk_disable(void);
 void m23_btif_dump(const char *tag);

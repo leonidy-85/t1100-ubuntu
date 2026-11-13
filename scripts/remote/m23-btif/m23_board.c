@@ -22,7 +22,10 @@
 #include <linux/irqdomain.h>
 #include <linux/of.h>
 #include <linux/of_irq.h>
+#include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 
 #include "m23_board.h"
@@ -72,6 +75,18 @@ MODULE_PARM_DESC(m23_no_handshake, "T1100: clear BTIF_HANDSHAKE (disable flow co
  * (see refs/m26-lk-devapc.md); the attempt is kept here so it is reproduced
  * and logged on every load, and can be flipped once stock is measured.
  */
+/*
+ * M28: raw gate writes do not bring up the parents.  CCF does: it walks
+ * parent -> mux -> PLL and enables the whole chain, which is what the vendor
+ * kernel gets from devm_clk_get("btifc")/("apdmac") and the devapc driver.
+ * The clocks are taken from the infracfg provider by ID (mt8183 numbering,
+ * include/dt-bindings/clock/mt8183-clk.h: CLK_INFRA_BTIF = 26,
+ * CLK_INFRA_DEVICE_APC = 44), so no DT change is needed.
+ */
+int m23_ccf;
+module_param(m23_ccf, int, 0444);
+MODULE_PARM_DESC(m23_ccf, "T1100: enable infra_btif/infra_device_apc through CCF (parents included)");
+
 int m23_devapc_open;
 module_param(m23_devapc_open, int, 0444);
 MODULE_PARM_DESC(m23_devapc_open, "T1100: try the vendor start_devapc() sequence (clock + APC_CON)");
@@ -305,8 +320,62 @@ void m23_devapc_try(const char *tag)
 	iounmap(dapc);
 }
 
+static struct clk *m23_clk_by_id(struct device_node *np, unsigned int id)
+{
+	struct of_phandle_args spec;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.np = np;
+	spec.args_count = 1;
+	spec.args[0] = id;
+	return of_clk_get_from_provider(&spec);
+}
+
+static void m23_ccf_one(struct device_node *np, const char *what, unsigned int id)
+{
+	struct clk *clk, *parent;
+	int ret;
+
+	clk = m23_clk_by_id(np, id);
+	if (IS_ERR_OR_NULL(clk)) {
+		pr_err("m23-ccf: %s (id %u): no clock (%ld)\n", what, id,
+		       PTR_ERR(clk));
+		return;
+	}
+	parent = clk_get_parent(clk);
+	pr_info("m23-ccf: %s (id %u) before: rate=%lu parent=%s rate=%lu\n",
+		what, id, clk_get_rate(clk),
+		parent ? __clk_get_name(parent) : "none",
+		parent ? clk_get_rate(parent) : 0UL);
+
+	ret = clk_prepare_enable(clk);
+	pr_info("m23-ccf: %s clk_prepare_enable -> %d, rate=%lu\n",
+		what, ret, clk_get_rate(clk));
+	parent = clk_get_parent(clk);
+	if (parent)
+		pr_info("m23-ccf: %s parent %s rate=%lu\n", what,
+			__clk_get_name(parent), clk_get_rate(parent));
+}
+
+void m23_ccf_enable(void)
+{
+	struct device_node *np;
+
+	np = of_find_compatible_node(NULL, NULL, "mediatek,mt8183-infracfg");
+	if (!np) {
+		pr_err("m23-ccf: no mediatek,mt8183-infracfg node\n");
+		return;
+	}
+	m23_ccf_one(np, "infra_btif", 26);
+	m23_ccf_one(np, "infra_device_apc", 44);
+	of_node_put(np);
+}
+
 void m23_selftest_run(void)
 {
+	if (m23_ccf)
+		m23_ccf_enable();
+
 	if (m23_devapc_open)
 		m23_devapc_try("probe");
 
