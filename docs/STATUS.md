@@ -4531,3 +4531,15 @@ shutdown не может добить процесс `rmmod wmt_drv/wlan_drv_gen
 вручную**, `rmmod` вендорских модулей не делать вообще, `reboot` из скриптов
 прогонов не вызывать (нужен чистый старт — просить у lead power-cycle).
 Подробности — `docs/wifi-port-log.md` §73.
+
+## 13.11 (59): M66 — MCR ЖИВОЙ после набора (`WASR=0x00010000`, `mbox0=0x02000020`), но секция не подтверждается
+
+- Чистая конфигурация (без SPM-partial): `t1100_op_no_first_reset=1 t1100_patches_before_probe=1`,
+  между патчами `init_table_3`. Прогон прошёл без зависаний, `wlan rc=0`, лог 2355 строк.
+- **MCR жив:** `after-patch-redelivery WCIR=0x00100788 WASR=0x00010000 mbox0=0x02000020
+  cpupcr=0x14eea`; дамп после первой секции: `00: 00100788 00000100 0000000d …
+  41 ffffff47`, `20: 00010000 …`, `60: … 02000020 00000004`, `e0: 00020100 … 20130512`.
+  (В M63/M65 при SPM-partial здесь были нули — подтверждено: MCR убивает именно SPM-partial.)
+- Тем не менее `section-config dst=0x020a1000 len=28032 reset=1 -> status=0xC0000001`
+  (нет ответа на INIT_CMD), `WIFI_START` не дошёл, `wlan0` нет; `cpupcr` снова в assert-адресах.
+- Модули: `wmt_drv` `9d0b8613…`, `wlan_drv_gen3` `597c4e85…`, `mtk_btif_drv` `e29eaecb…`.
