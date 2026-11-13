@@ -1,0 +1,84 @@
+; stock — WMT_RESET_CMD path: init_table_3 -> wmt_core_init_script -> init_script_retry(script,1,retry=0,dump=1)
+01e5f4: fd7bbfa9   stp      x29, x30, [sp, #-0x10]!
+01e5f8: fd030091   mov      x29, sp
+01e5fc: 23008052   mov      w3, #1
+01e600: e2031f2a   mov      w2, wzr
+01e604: 00000094   bl       #0x1e604   ; RELOC .text+0x1e24c
+01e608: fd7bc1a8   ldp      x29, x30, [sp], #0x10
+01e60c: c0035fd6   ret      
+; ---- per-entry tx/rx(evt)/memcmp ----
+01e37c: 60035ef8   ldur     x0, [x27, #-0x20]
+01e380: 61835eb8   ldur     w1, [x27, #-0x18]
+01e384: e2130191   add      x2, sp, #0x44
+01e388: e3031f2a   mov      w3, wzr
+01e38c: 00000094   bl       #0x1e38c   ; RELOC .text+0x1d270
+01e390: e403002a   mov      w4, w0
+01e394: e0040035   cbnz     w0, #0x1e430
+01e398: e84740b9   ldr      w8, [sp, #0x44]
+01e39c: 69835eb8   ldur     w9, [x27, #-0x18]
+01e3a0: 1f01096b   cmp      w8, w9
+01e3a4: 61040054   b.ne     #0x1e430
+01e3a8: e0230191   add      x0, sp, #0x48
+01e3ac: 02208052   mov      w2, #0x100
+01e3b0: e1031f2a   mov      w1, wzr
+01e3b4: 00000094   bl       #0x1e3b4   ; RELOC .text+0x4f918
+01e3b8: 68835fb8   ldur     w8, [x27, #-8]
+01e3bc: 29028052   mov      w9, #0x11
+01e3c0: a98316b8   stur     w9, [x29, #-0x98]
+01e3c4: e9230191   add      x9, sp, #0x48
+01e3c8: 69a200a9   stp      x9, x8, [x19, #8]
+01e3cc: e8130191   add      x8, sp, #0x44
+01e3d0: a06302d1   sub      x0, x29, #0x98
+01e3d4: 680e00f9   str      x8, [x19, #0x18]
+01e3d8: 00000094   bl       #0x1e3d8   ; RELOC .text+0x18810
+01e3dc: f403002a   mov      w20, w0
+01e3e0: 20040035   cbnz     w0, #0x1e464
+01e3e4: e24740b9   ldr      w2, [sp, #0x44]
+01e3e8: 68835fb8   ldur     w8, [x27, #-8]
+01e3ec: 5f00086b   cmp      w2, w8
+01e3f0: 01070054   b.ne     #0x1e4d0
+01e3f4: e8274139   ldrb     w8, [sp, #0x49]
+01e3f8: 1f510071   cmp      w8, #0x14
+01e3fc: a0000054   b.eq     #0x1e410
+01e400: 61035ff8   ldur     x1, [x27, #-0x10]
+01e404: e0230191   add      x0, sp, #0x48
+01e408: 00000094   bl       #0x1e408   ; RELOC .text+0x4f998
+01e40c: 00080035   cbnz     w0, #0x1e50c
+01e410: 480340b9   ldr      w8, [x26]
+; ---- rx length error path (0 bytes -> u4Res != evtSz) and retry counter ----
+01e4d0: 480340b9   ldr      w8, [x26]
+01e4d4: 2801f837   tbnz     w8, #0x1f, #0x1e4f8
+01e4d8: 630340f9   ldr      x3, [x27]
+01e4dc: e54740b9   ldr      w5, [sp, #0x44]
+01e4e0: 66835fb8   ldur     w6, [x27, #-8]
+01e4e4: e01740f9   ldr      x0, [sp, #0x28]
+01e4e8: 42598052   mov      w2, #0x2ca
+01e4ec: e10317aa   mov      x1, x23
+01e4f0: e403142a   mov      w4, w20
+01e4f4: 00000094   bl       #0x1e4f4   ; RELOC .text+0x4f320
+01e4f8: e83740b9   ldr      w8, [sp, #0x34]
+01e4fc: 1f050071   cmp      w8, #1
+01e500: 81f1ff54   b.ne     #0x1e330
+01e504: 00000094   bl       #0x1e504   ; RELOC .text+0x16180
+01e508: 8affff17   b        #0x1e330
+01e50c: 480340b9   ldr      w8, [x26]
+; ---- return: w0 = (processed != count) ? -1 : 0 ----
+01e598: f9031c2a   mov      w25, w28
+01e59c: 090080d2   mov      x9, #0   ; RELOC +0x0
+01e5a8: a8035ff8   ldur     x8, [x29, #-0x10]
+01e5b0: ea4340b9   ldr      w10, [sp, #0x40]
+01e5b4: 290140f9   ldr      x9, [x9]
+01e5b8: 3f030a6b   cmp      w25, w10
+01e5bc: e0039f5a   csetm    w0, ne
+01e5c0: 3f0108eb   cmp      x9, x8
+; ---- sw_init: reset failure -> 'init_table_3 fail(%d)' -> return -19 (0x2f814..0x2f840) ----
+02f810: 70030014   b        #0x305d0
+02f814: 680340b9   ldr      w8, [x27]
+02f818: 0804f837   tbnz     w8, #0x1f, #0x2f898
+02f81c: e303002a   mov      w3, w0
+02f820: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x20d6b "[WMT-IC][E]%s(%d):init_table_3 fail(%d)\n"
+02f824: e15b40f9   ldr      x1, [sp, #0xb0]
+02f834: c2a38052   mov      w2, #0x51e
+02f838: 00000094   bl       #0x2f838   ; RELOC .text+0x4f320
+02f83c: 40028012   mov      w0, #-0x13
+02f840: 64030014   b        #0x305d0

@@ -1,0 +1,39 @@
+; stock — reset after each patch, then loop advance (NOTHING in between)
+02f32c: b7250035   cbnz     w23, #0x2f7e0
+02f330: e05740f9   ldr      x0, [sp, #0xa8]
+02f334: 21008052   mov      w1, #1
+02f338: 00000094   bl       #0x2f338   ; RELOC .text+0x1e5f4
+02f33c: c0260035   cbnz     w0, #0x2f814
+02f340: e85340f9   ldr      x8, [sp, #0xa0]
+02f344: d6060091   add      x22, x22, #1
+02f348: df0208eb   cmp      x22, x8
+02f34c: e1a0ff54   b.ne     #0x2e768
+02f350: 3d010014   b        #0x2f844
+; ---- top of the inlined mtk_wcn_soc_patch_dwn(index) = loop body start ----
+02e760: eba307a9   stp      x11, x8, [sp, #0x78]
+02e764: eca705a9   stp      x12, x9, [sp, #0x58]
+02e768: 880340f9   ldr      x8, [x28]
+02e76c: ff6f00f9   str      xzr, [sp, #0xd8]
+02e770: 480400b4   cbz      x8, #0x2e7f8
+02e774: 02208052   mov      w2, #0x100
+02e778: e00318aa   mov      x0, x24
+02e77c: e1031f2a   mov      w1, wzr
+02e780: 00000094   bl       #0x2e780   ; RELOC .text+0x4f918
+02e784: 48038052   mov      w8, #0x1a
+02e788: a80314b8   stur     w8, [x29, #-0xc0]
+02e78c: d9060091   add      x25, x22, #1
+02e790: a82303d1   sub      x8, x29, #0xc8
+02e794: a00303d1   sub      x0, x29, #0xc0
+02e798: b9e334a9   stp      x25, x24, [x29, #-0xb8]
+02e79c: a88315f8   stur     x8, [x29, #-0xa8]
+02e7a0: 00000094   bl       #0x2e7a0   ; RELOC .text+0x18810
+02e7a4: 680340b9   ldr      w8, [x27]
+; ---- after the loop: mcuclk_table_4 (count 3) ----
+02f844: 480340f9   ldr      x8, [x26]
+02f848: c8020837   tbnz     w8, #1, #0x2f8a0
+02f84c: f35f49a9   ldp      x19, x23, [sp, #0x90]
+02f850: b8e300d1   sub      x24, x29, #0x38
+02f854: a8041036   tbz      w8, #2, #0x2f8e8
+02f858: 000080d2   mov      x0, #0   ; RELOC .data+0xe58
+02f868: 61008052   mov      w1, #3
+02f86c: 00000094   bl       #0x2f86c   ; RELOC .text+0x1e5f4
