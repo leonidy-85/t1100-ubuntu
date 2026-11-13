@@ -67,8 +67,12 @@ WALL_ICHG_UA=2000000
 PD_IAICR_CAP_UA=2000000
 PD_ICHG_CAP_UA=2000000
 
-# Порог «вход просел»: MIVR в стоке 4.4 В, ниже 4.6 В уже подозрительно.
-VBUS_MIN_MV=4600
+# Порог «вход просел». Замеры на powered hub 13.11: в норме VBUS 4.42–4.55 В
+# при IAICR 2.5 А, при 3.25 А падает до 4.42 В и ток входа срывается в 1.5 А.
+# 4.6 В на этом хабе недостижимы (профиль отвергался бы всегда), поэтому порог
+# 4.30 В = «ниже измеренного минимума на рабочей ступени». Переопределяется
+# VBUS_MIN_MV в /etc/default/t1100-charge.
+VBUS_MIN_MV=4300
 
 if [ -r "$DEF" ]; then
 	# shellcheck disable=SC1090
@@ -363,7 +367,9 @@ do_wall() {
 do_keepalive() {
 	log "== USB autosuspend off (RNDIS должен жить при простое хоста)"
 	n=0
-	for c in /sys/bus/usb/devices/*/power/control; do
+	# На планшете мы gadget: /sys/bus/usb/devices пуст, а runtime PM висит на
+	# UDC (11201000.usb). На хосте, наоборот, пригодятся оба списка.
+	for c in /sys/class/udc/*/device/power/control /sys/bus/usb/devices/*/power/control; do
 		[ -w "$c" ] || continue
 		echo on >"$c" 2>/dev/null && n=$((n + 1))
 	done
@@ -400,10 +406,25 @@ do_pd() {
 
 do_redetect() {
 	wait_ps
-	log "== BC1.2 re-detect: online <- 1"
+	# online=1 при уже подключённом кабеле драйвер игнорирует
+	# ("pwr_rdy is same", mt6370_chg_set_online), поэтому нужен 0 -> 1:
+	# это и есть программный аналог передёргивания кабеля (заряд на секунду
+	# не прерывается, меняется только состояние драйвера).
+	log "== BC1.2 re-detect: online 1 -> 0 -> 1"
+	echo 0 >"$PS/online" 2>/dev/null || die "запись online=0 не удалась"
+	sleep 1
 	echo 1 >"$PS/online" 2>/dev/null || die "запись online=1 не удалась"
-	sleep 3
+	sleep 4
 	log "  online=$(ps_read online) status=$(ps_read status) usb_type=$(ps_read usb_type)"
+	# Программный 0->1 не всегда даёт udev-событие ONLINE=1 (железо уже
+	# определило BC1.2, повторного attach_i может не быть), поэтому профиль
+	# применяем сами; физическое передёргивание кабеля идёт через
+	# 90-t1100-charge.rules.
+	if [ "$(ps_num input_current_limit)" -lt "$HUB_IAICR_UA" ] ||
+		[ "$(ps_num constant_charge_current)" -lt "$HUB_ICHG_UA" ]; then
+		log "  лимиты ниже профиля после re-detect — применяю hub"
+		do_hub
+	fi
 }
 
 do_sample() {

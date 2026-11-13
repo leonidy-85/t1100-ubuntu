@@ -6,7 +6,7 @@ After=systemd-udevd.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/t1100-charge.sh auto
+ExecStart=/usr/local/bin/t1100-charge.sh hub
 SuccessExitStatus=0 2
 TimeoutStartSec=90
 SyslogIdentifier=t1100-charge

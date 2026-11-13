@@ -1,5 +1,5 @@
 [Unit]
-Description=T1100 charge limits (MT6370): safe auto profile
+Description=T1100 charge limits (MT6370): hub profile
 Documentation=https://gitflic.ru/project/py6on/t1100-ubuntu
 # mt6370-charger появляется при probe i2c5; ждём, пока udev закончит, и всё
 # равно перепроверяем наличие sysfs в самом скрипте (до 20 с).
@@ -12,7 +12,7 @@ Before=t1100-power-guard.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/bin/t1100-charge.sh auto
+ExecStart=/usr/local/bin/t1100-charge.sh hub
 # do_set завершается кодом 2, если сработала защита (VBUS просел, IAICR
 # откатили) — это не сбой юнита, а корректная работа.
 SuccessExitStatus=0 2

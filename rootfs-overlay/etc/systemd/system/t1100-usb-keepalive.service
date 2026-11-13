@@ -1,15 +1,16 @@
 [Unit]
 Description=T1100: keep USB (RNDIS/SSH) alive, no runtime autosuspend
 Documentation=https://gitflic.ru/project/py6on/t1100-ubuntu
-After=systemd-udev-settle.service sys-subsystem-usb.device
-Wants=sys-subsystem-usb.device
+# Раньше здесь были Wants/After=sys-subsystem-usb.device: на этой плате такого
+# device-юнита нет (мы gadget, а не хост), job висел вечно и юнит оставался
+# inactive с "Job: N". Держим только udev-settle и небольшую паузу.
+After=systemd-udev-settle.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecStartPre=/bin/sleep 2
 ExecStart=/usr/local/bin/t1100-charge.sh keepalive
-# Устройства появляются позже; повторяем один раз, чтобы не гонять юнит в цикле.
-ExecStartPost=-/bin/sh -c 'sleep 5; /usr/local/bin/t1100-charge.sh keepalive'
 SyslogIdentifier=t1100-usb-keepalive
 
 [Install]
