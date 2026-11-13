@@ -4042,3 +4042,66 @@ WMT-заголовки: первый фрагмент — `01 01 e9 03 01` (flag
 `1_1` (315 фрагментов) → **`download -> -1`**, EVT не приходит (0 байт, таймаут).
 Значит обход M29 (не читать RX на последнем фрагменте) верен, правка откачена,
 на плате модуль M46 (`a723a4d9…`).
+## 66. M48: ROMv4-патч применяется — младший байт адреса упаковывает num/seq (13.11, 15:35-16:00)
+
+Итог: **патч доезжает и исполняется**, затык был не в STP и не в протоколе
+загрузки, а в одном байте адреса.
+
+### 66.1 Симптом
+
+Прогон с `t1100_rom_patch="ROMv4_be_patch_1_1_hdr.bin ROMv4_be_patch_1_0_hdr.bin"`
+и `t1100_patch_hdr_len=48`:
+
+```
+t1100_patch_scan: patch ROMv4_be_patch_1_1_hdr.bin: num=2 seq=1 addr=218007f0 size=314120
+t1100_patch_scan: patch ROMv4_be_patch_1_0_hdr.bin: num=2 seq=2 addr=22800900 size=229396
+mtk_wcn_soc_normal_patch_dwn: normal patch download patch size(314092) fragNum(315)
+[STP-BTM] _stp_btm_handler: whole chip reset start!      <- через ~470 мс
+```
+
+Чип подтверждал **все 315 фрагментов**, но в EMI (`0xbfc78000`) оставались
+нули, `cpupcr` не рос (`0x1170`), а вместо `WMT_PATCH_EVT` приходил
+STP-reset handshake — то есть чип прыгал по мусорному адресу и ассертил.
+
+Причина видна в дампе ассерта: `EVA=0xF0078029`, `asser_type=4`, `PC=0x8`.
+`0xf0078029` = адрес из заголовка (`0xf0078021`) **+8**, а младший байт
+`0x21` — это не часть адреса, это упакованные `patch_num`/`patch_seq`
+(`num = b >> 4`, `seq = b & 0xf`), которые `wmt_launcher` отдаёт ядру в том же
+32-битном слове.
+
+### 66.2 Проверка
+
+Ручная подмена: файл-копия с обнулённым байтом 24 (`0xf0078000`,
+`0x00098000` для `1_0`) — тело ложится в EMI **байт в байт**:
+
+```
+mempeek 0xbfc78000 -> 0x60500096 0xf05c0880     (= тело файла с offset 48:
+                                                 96 00 50 60 80 08 5c f0)
+mempeek 0xbfc98000 -> 0x0f000054 0x00929edd     (= тело ROMv4_be_patch_1_0)
+mempeek 0x18070160 -> 0x644dfe48                <- cpupcr растёт, MCU исполняет
+```
+
+Карта EMI: чип `0xf0000000` ↔ AP `0xbfc00000` (coredump: `0xf0080000` ↔
+`0xbfc80000`), т.е. офсеты `0x78000` и `0x98000` — те же окна, что у стока.
+EMI переживает power-cycle CONSYS.
+
+### 66.3 Фикс в коде
+
+`patches/wifi/0016-common-patch-addr-align.patch` — в `mtk_wcn_soc_patch_dwn()`
+(t1100-ветка) после `osal_memcpy(addressByte, t1100_patches[index].addr, 4);`
+добавлено `addressByte[0] = 0;` с комментарием-обоснованием. num/seq при этом
+уже посчитаны при сканировании (`t1100_patch_scan`), дублировать их в адресе
+не нужно.
+
+С оригинальными (не подменёнными) файлами: `1_1 download -> 0`, EMI+0x78000
+и EMI+0x98000 содержат оба тела, `cpupcr = 0x644dfe48`.
+
+### 66.4 Что осталось
+
+`WMT_RESET_CMD` после патча по-прежнему без ACK: в `stp_do_tx_timeout`
+`rxack/txack/txseq=4/4/6 (Resend from5->5)`, в очереди `ac 40 05 f1 01 07 01 00`,
+11 повторов → `STP retry times(11) have reached retry limit`,
+`reset ack after patch 0: no`. С `t1100_patch_reset_each=0` (один reset на
+набор) второй патч грузится сразу, его тело тоже оказывается в EMI, но
+`1_0 download -> -1`. Дальше — либо STP-reinit вместо ожидания ACK, либо
+reset без ожидания EVT, либо `-hdr_len 28` (сейчас подтверждён 48).
