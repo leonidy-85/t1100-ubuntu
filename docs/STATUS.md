@@ -4810,3 +4810,19 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Вывод для userspace: многоточечные жесты — на стороне приложений (Firefox,
   просмотрщики, карты); системные жесты/тачпад — отдельная тема (тачскрин
   тачпад не эмулирует).
+
+## 14.11 (5): усилитель динамика выключается вместе с Speaker Switch (0071)
+
+- В `mt6771-mt6358.c` amp GPIO был включён безусловно в `startup` на любой
+  playback. Поэтому после 0070 `Speaker Switch=off` отключал DAPM-маршрут,
+  но внешний усилитель оставался включён и динамик играл одновременно с
+  наушниками.
+- Патч `0071` убирает GPIO из startup/shutdown и привязывает его к DAPM-пути
+  `Speaker Amp` (`SND_SOC_DAPM_PGA_E`): `PRE_PMU` → amp GPIO 1,
+  `POST_PMD` → 0. Маршруты: `Speaker <- Speaker Amp <- Headphone Ext Spk Amp`.
+- Проверено на `build/boot_nonwifi_amp.img` (p29 md5
+  `61e08a8b698a0bb8e2a4601f6303808e`, sha256 `2be56f51…`):
+  `Speaker Switch=off`, `HPL/HPR Mux=2`, `Headphone Volume=12` — динамик
+  молчит, звук в наушниках; пользователь подтвердил.
+- Откат: `/tmp/opencode/boot_a_before_amp.img` (md5 `32b609a4…`).
+  Автоматический ACCDET по-прежнему не реализован (manual-only).

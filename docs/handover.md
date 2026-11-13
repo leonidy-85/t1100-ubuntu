@@ -61,8 +61,8 @@
 
 ## Текущее состояние платы (14.11)
 
-- `boot_a` = `build/boot_nonwifi_hp.img` (md5 p29
-  `32b609a40de0afb6c7ff656d45e4de79`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+- `boot_a` = `build/boot_nonwifi_amp.img` (md5 p29
+  `61e08a8b698a0bb8e2a4601f6303808e`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
   (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
   `schedutil`) и CPU thermal zone (0064: 80/90/115 °C, throttling
@@ -70,7 +70,7 @@
   host с флешкой работает, VBUS 5.05 В / 2.4 А, возврат host→device через
   helper `t1100-usb-role` без перезагрузки. Батарея: ёмкость по OCV
   (0069). Гарнитура: jack работает вручную (`HPL/HPR Mux=2`,
-  `Speaker Switch=off`, патч 0070); авто-ACCDET не сделан. SVS пока выключен;
+  `Speaker Switch=off`, патчи 0070/0071); авто-ACCDET не сделан. SVS пока выключен;
   efuse-калибровка MT6771 не декодируется, thermal использует дефолтные
   коэффициенты (см. STATUS 13.11 (10), 14.11 (1)).
 - **Suspend:** `systemctl suspend` работает через s2idle (`SuspendState=freeze`).
