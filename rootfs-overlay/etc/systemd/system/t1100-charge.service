@@ -1,0 +1,23 @@
+[Unit]
+Description=T1100 charge limits (MT6370): safe auto profile
+Documentation=https://gitflic.ru/project/py6on/t1100-ubuntu
+# mt6370-charger появляется при probe i2c5; ждём, пока udev закончит, и всё
+# равно перепроверяем наличие sysfs в самом скрипте (до 20 с).
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+# Страховка от разряда пишет те же 2 А в батарею, но пусть сначала встанут
+# лимиты, а потом она уже следит за vbat.
+Before=t1100-power-guard.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/t1100-charge.sh auto
+# do_set завершается кодом 2, если сработала защита (VBUS просел, IAICR
+# откатили) — это не сбой юнита, а корректная работа.
+SuccessExitStatus=0 2
+TimeoutStartSec=90
+SyslogIdentifier=t1100-charge
+
+[Install]
+WantedBy=multi-user.target

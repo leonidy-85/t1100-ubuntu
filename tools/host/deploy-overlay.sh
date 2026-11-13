@@ -25,9 +25,12 @@ echo "== выставляю права и чиню владельцев"
 $SSH 'set -e
 	chown -R root:root /root /etc/pam.d /etc/pipewire /etc/wireplumber /etc/systemd/user \
 		/usr/share/alsa/ucm2 /usr/local/bin 2>/dev/null || true
-	chmod 755 /usr/local/bin/t1100-audio-mixer.sh 2>/dev/null || true
+	chmod 755 /usr/local/bin/t1100-audio-mixer.sh /usr/local/bin/t1100-charge.sh 2>/dev/null || true
 	systemctl daemon-reload
+	udevadm control --reload-rules 2>/dev/null || true
 	systemctl enable --now t1100-audio-mixer.service 2>/dev/null || true
+	systemctl enable --now t1100-charge.service 2>/dev/null || true
+	systemctl enable --now t1100-usb-keepalive.service 2>/dev/null || true
 	echo "== проверка доступа:"
 	ls -ld /root /root/.ssh; ls -l /root/.ssh/authorized_keys'
 
