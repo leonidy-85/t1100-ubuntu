@@ -1,0 +1,87 @@
+02ee9c: ea8f4729   ldp      w10, w3, [sp, #0x3c]
+02eea0: e82740f9   ldr      x8, [sp, #0x48]
+02eea4: eb2b40b9   ldr      w11, [sp, #0x28]
+02eea8: 4a050011   add      w10, w10, #1
+02eeac: 08a10f91   add      x8, x8, #0x3e8
+02eeb0: 5f01036b   cmp      w10, w3
+02eeb4: 6ba10f51   sub      w11, w11, #0x3e8
+02eeb8: e82700f9   str      x8, [sp, #0x48]
+02eebc: 02420054   b.hs     #0x2f6fc
+02eec0: 680340b9   ldr      w8, [x27]
+02eec4: 1f0d0071   cmp      w8, #3
+02eec8: eb010054   b.lt     #0x2ef04
+02eecc: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x1fd35 "[WMT-IC][D]%s:patch size(%d) fragNum(%d)\n"
+02eed0: 010080d2   mov      x1, #0   ; RELOC .rodata.str1.1+0x2af3 "mtk_wcn_soc_normal_patch_dwn"
+02eed4: e24740b9   ldr      w2, [sp, #0x44]
+02eef0: f4030a2a   mov      w20, w10
+02eef4: f7030b2a   mov      w23, w11
+02eef8: 00000094   bl       #0x2eef8   ; RELOC .text+0x4f51c
+02eefc: eb03172a   mov      w11, w23
+02ef00: ea03142a   mov      w10, w20
+02ef04: e92740b9   ldr      w9, [sp, #0x24]
+02ef08: 5f010071   cmp      w10, #0
+02ef0c: 170080d2   mov      x23, #0   ; RELOC .data+0x1292
+02ef10: 28008052   mov      w8, #1
+02ef14: 0805881a   cinc     w8, w8, ne
+02ef18: 3f010a6b   cmp      w9, w10
+02ef20: 69008052   mov      w9, #3
+02ef24: 2801881a   csel     w8, w9, w8, eq
+02ef28: 097d8052   mov      w9, #0x3e8
+02ef30: 7501891a   csel     w21, w11, w9, eq
+02ef38: a9060011   add      w9, w21, #1
+02ef3c: e00a0091   add      x0, x23, #2
+02ef88: 00000094   bl       #0x2ef88   ; RELOC .text+0x1d270
+02ef8c: e603002a   mov      w6, w0
+02ef90: 602f0035   cbnz     w0, #0x2f57c
+02ef94: e4d340b9   ldr      w4, [sp, #0xd0]
+02ef98: ff0204eb   cmp      x23, x4
+02ef9c: 012f0054   b.ne     #0x2f57c
+02efa0: 680340b9   ldr      w8, [x27]
+02efa4: 1f0d0071   cmp      w8, #3
+02efa8: 8b010054   b.lt     #0x2efd8
+02efac: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x10d37 "[WMT-IC][D]%s:wmt_core: write fragSeq(%d) size(%lu, %d) ok\n"
+02efb0: 010080d2   mov      x1, #0   ; RELOC .rodata.str1.1+0x2af3 "mtk_wcn_soc_normal_patch_dwn"
+02efb4: e23f40b9   ldr      w2, [sp, #0x3c]
+02efd0: e30317aa   mov      x3, x23
+02efd4: 00000094   bl       #0x2efd4   ; RELOC .text+0x4f51c
+02efd8: a06300d1   sub      x0, x29, #0x18
+02efdc: 02018052   mov      w2, #8
+02efe0: e1031f2a   mov      w1, wzr
+02efe4: 00000094   bl       #0x2efe4   ; RELOC .text+0x4f918
+02efe8: a06300d1   sub      x0, x29, #0x18
+02efec: e2430391   add      x2, sp, #0xd0
+02eff0: a1008052   mov      w1, #5
+02eff4: 00000094   bl       #0x2eff4   ; RELOC .text+0x1d3ac
+02eff8: e4d340b9   ldr      w4, [sp, #0xd0]
+02effc: e503002a   mov      w5, w0
+02f000: a0300035   cbnz     w0, #0x2f614
+02f004: 9f140071   cmp      w4, #5
+02f008: 61300054   b.ne     #0x2f614
+02f00c: 170080d2   mov      x23, #0   ; RELOC .data+0x1298
+02f01c: a06300d1   sub      x0, x29, #0x18
+02f020: a2008052   mov      w2, #5
+02f024: e10317aa   mov      x1, x23
+02f028: 00000094   bl       #0x2f028   ; RELOC .text+0x4f998
+02f02c: 680340b9   ldr      w8, [x27]
+02f030: 20310035   cbnz     w0, #0x2f654
+02f034: 1f0d0071   cmp      w8, #3
+02f038: 2bf3ff54   b.lt     #0x2ee9c
+02f03c: e3d340b9   ldr      w3, [sp, #0xd0]
+
+; ---- tail: FREE_PATCH + reset ----
+02f310: e03740f9   ldr      x0, [sp, #0x68]
+02f314: 00000094   bl       #0x2f314   ; RELOC .text+0x4f904
+02f318: c8008052   mov      w8, #6
+02f31c: a00303d1   sub      x0, x29, #0xc0
+02f320: a80314b8   stur     w8, [x29, #-0xc0]
+02f324: b98314f8   stur     x25, [x29, #-0xb8]
+02f328: 00000094   bl       #0x2f328   ; RELOC .text+0x18810
+02f32c: b7250035   cbnz     w23, #0x2f7e0
+02f330: e05740f9   ldr      x0, [sp, #0xa8]
+02f334: 21008052   mov      w1, #1
+02f338: 00000094   bl       #0x2f338   ; RELOC .text+0x1e5f4
+02f33c: c0260035   cbnz     w0, #0x2f814
+02f340: e85340f9   ldr      x8, [sp, #0xa0]
+02f344: d6060091   add      x22, x22, #1
+02f348: df0208eb   cmp      x22, x8
+02f34c: e1a0ff54   b.ne     #0x2e768

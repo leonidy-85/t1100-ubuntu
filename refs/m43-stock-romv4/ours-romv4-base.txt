@@ -1,0 +1,24 @@
+021d40: 612c9052   mov      w1, #0x8163
+021d44: 1f00016b   cmp      w0, w1
+021d48: c0d1ff54   b.eq     #0x21780
+021d4c: 02781912   and      w2, w0, #0xffffffbf
+021d50: e1249052   mov      w1, #0x8127
+021d54: 5f00016b   cmp      w2, w1
+021d58: 40d1ff54   b.eq     #0x21780
+021d5c: 01781712   and      w1, w0, #0xfffffeff
+021d60: 3f201a71   cmp      w1, #0x688
+021d64: 61e28052   mov      w1, #0x713
+021d68: 0410417a   ccmp     w0, w1, #4, ne
+021d6c: e1e4ff54   b.ne     #0x21a08
+021d70: 00a38052   mov      w0, #0x518
+021d74: a0b20079   strh     w0, [x21, #0x58]
+021d78: 806f8152   mov      w0, #0xb7c
+021d7c: a0e20079   strh     w0, [x21, #0x70]
+023e10: 0410427a   ccmp     w0, w2, #4, ne
+023e14: e0179f1a   cset     w0, eq
+023e18: 2000002a   orr      w0, w1, w0
+023e1c: e05d0034   cbz      w0, #0x249d8
+023e20: 00830991   add      x0, x24, #0x260
+023e24: 81008052   mov      w1, #4
+023e28: 00000094   bl       #0x23e28   ; RELOC .text+0x1b9a0
+023e2c: 00190035   cbnz     w0, #0x2414c

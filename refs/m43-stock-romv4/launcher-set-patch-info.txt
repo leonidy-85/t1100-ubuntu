@@ -1,0 +1,102 @@
+
+wmt_launcher:     формат файла elf64-littleaarch64
+
+
+Дизассемблирование раздела .text:
+
+0000000000005c90 <.text+0x2c90>:
+    5c90:	d10543ff 	sub	sp, sp, #0x150
+    5c94:	a9117bfd 	stp	x29, x30, [sp, #272]
+    5c98:	910443fd 	add	x29, sp, #0x110
+    5c9c:	a9125ffc 	stp	x28, x23, [sp, #288]
+    5ca0:	a91357f6 	stp	x22, x21, [sp, #304]
+    5ca4:	a9144ff4 	stp	x20, x19, [sp, #320]
+    5ca8:	6f00e400 	movi	v0.2d, #0x0
+    5cac:	d53bd057 	mrs	x23, tpidr_el0
+    5cb0:	f94016e8 	ldr	x8, [x23, #40]
+    5cb4:	f81f83a8 	stur	x8, [x29, #-8]
+    5cb8:	f90083ff 	str	xzr, [sp, #256]
+    5cbc:	ad0703e0 	stp	q0, q0, [sp, #224]
+    5cc0:	ad0603e0 	stp	q0, q0, [sp, #192]
+    5cc4:	ad0503e0 	stp	q0, q0, [sp, #160]
+    5cc8:	ad0403e0 	stp	q0, q0, [sp, #128]
+    5ccc:	ad0303e0 	stp	q0, q0, [sp, #96]
+    5cd0:	ad0203e0 	stp	q0, q0, [sp, #64]
+    5cd4:	ad0103e0 	stp	q0, q0, [sp, #32]
+    5cd8:	ad0003e0 	stp	q0, q0, [sp]
+    5cdc:	b40005a1 	cbz	x1, 5d90 <__libc_init@plt-0x6f0>
+    5ce0:	aa0203f4 	mov	x20, x2
+    5ce4:	b4000662 	cbz	x2, 5db0 <__libc_init@plt-0x6d0>
+    5ce8:	aa0103f5 	mov	x21, x1
+    5cec:	2a0003f3 	mov	w19, w0
+    5cf0:	340001e3 	cbz	w3, 5d2c <__libc_init@plt-0x754>
+    5cf4:	394002a8 	ldrb	w8, [x21]
+    5cf8:	90ffffe1 	adrp	x1, 1000 <__libc_init@plt-0x5480>
+    5cfc:	90ffffe2 	adrp	x2, 1000 <__libc_init@plt-0x5480>
+    5d00:	9125d821 	add	x1, x1, #0x976
+    5d04:	9120a442 	add	x2, x2, #0x829
+    5d08:	52800080 	mov	w0, #0x4                   	// #4
+    5d0c:	53047d16 	lsr	w22, w8, #4
+    5d10:	2a1603e3 	mov	w3, w22
+    5d14:	940001e3 	bl	64a0 <__android_log_print@plt>
+    5d18:	529401c1 	mov	w1, #0xa00e                	// #40974
+    5d1c:	2a1303e0 	mov	w0, w19
+    5d20:	72a80081 	movk	w1, #0x4004, lsl #16
+    5d24:	2a1603e2 	mov	w2, w22
+    5d28:	940001da 	bl	6490 <ioctl@plt>
+    5d2c:	394002a8 	ldrb	w8, [x21]
+    5d30:	90ffffe1 	adrp	x1, 1000 <__libc_init@plt-0x5480>
+    5d34:	90ffffe2 	adrp	x2, 1000 <__libc_init@plt-0x5480>
+    5d38:	9125d821 	add	x1, x1, #0x976
+    5d3c:	91216042 	add	x2, x2, #0x858
+    5d40:	52800080 	mov	w0, #0x4                   	// #4
+    5d44:	12000d16 	and	w22, w8, #0xf
+    5d48:	2a1603e3 	mov	w3, w22
+    5d4c:	940001d5 	bl	64a0 <__android_log_print@plt>
+    5d50:	b94002a8 	ldr	w8, [x21]
+    5d54:	910003e9 	mov	x9, sp
+    5d58:	b27d0120 	orr	x0, x9, #0x8
+    5d5c:	aa1403e1 	mov	x1, x20
+    5d60:	52801fe2 	mov	w2, #0xff                  	// #255
+    5d64:	290023f6 	stp	w22, w8, [sp]
+    5d68:	390013ff 	strb	wzr, [sp, #4]
+    5d6c:	94000255 	bl	66c0 <strncpy@plt>
+    5d70:	529401e1 	mov	w1, #0xa00f                	// #40975
+    5d74:	910003e2 	mov	x2, sp
+    5d78:	72a80101 	movk	w1, #0x4008, lsl #16
+    5d7c:	2a1303e0 	mov	w0, w19
+    5d80:	39041fff 	strb	wzr, [sp, #263]
+    5d84:	940001c3 	bl	6490 <ioctl@plt>
+    5d88:	2a1f03e0 	mov	w0, wzr
+    5d8c:	14000010 	b	5dcc <__libc_init@plt-0x6b4>
+
+wmt_launcher:     формат файла elf64-littleaarch64
+
+
+Дизассемблирование раздела .text:
+
+0000000000003560 <.text+0x560>:
+    3560:	35fff268 	cbnz	w8, 33ac <__libc_init@plt-0x30d4>
+    3564:	910063e1 	add	x1, sp, #0x18
+    3568:	2a1a03e0 	mov	w0, w26
+    356c:	52800082 	mov	w2, #0x4                   	// #4
+    3570:	f9000fff 	str	xzr, [sp, #24]
+    3574:	94000bfb 	bl	6560 <read@plt>
+    3578:	3100041f 	cmn	w0, #0x1
+    357c:	54000300 	b.eq	35dc <__libc_init@plt-0x2ea4>  // b.none
+    3580:	394063e3 	ldrb	w3, [sp, #24]
+    3584:	f0ffffe2 	adrp	x2, 2000 <__libc_init@plt-0x4480>
+    3588:	394067e4 	ldrb	w4, [sp, #25]
+    358c:	52800080 	mov	w0, #0x4                   	// #4
+    3590:	39406be5 	ldrb	w5, [sp, #26]
+    3594:	aa1803e1 	mov	x1, x24
+    3598:	39406fe6 	ldrb	w6, [sp, #27]
+    359c:	910f6442 	add	x2, x2, #0x3d9
+    35a0:	390073ff 	strb	wzr, [sp, #28]
+    35a4:	94000bbf 	bl	64a0 <__android_log_print@plt>
+    35a8:	b9470b80 	ldr	w0, [x28, #1800]
+    35ac:	910063e1 	add	x1, sp, #0x18
+    35b0:	9100c3e2 	add	x2, sp, #0x30
+    35b4:	f94007e3 	ldr	x3, [sp, #8]
+    35b8:	940009b6 	bl	5c90 <__libc_init@plt-0x7f0>
+    35bc:	340001e0 	cbz	w0, 35f8 <__libc_init@plt-0x2e88>
