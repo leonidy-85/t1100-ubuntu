@@ -4137,3 +4137,13 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   `0x788`; здесь чип исполняет WLAN-образ после `WIFI_START` и на AP_RGU не реагирует.
 - Модуль `wmt_drv` `69f3c56f…`; `wlan_drv_gen3` `bd59d1b2…`; `mtk_btif_drv` `e29eaecb…`.
   `0014` обновлён; `wlan0` нет.
+
+## 13.11 (49): M58 — AP_RGU не оживляет чип и до WIFI_START (`hwcode -3`)
+
+- `t1100_reset_before_start=1`: warm reset после download, до первого `WIFI_START` →
+  `stp 0/0/0/0`, `hwcode 0x00000000 (ret -3)` (дважды, ~80 с опроса каждый), `wlanProbe -5`;
+  `WIFI_START` даже не отправлялся.
+- Значит AP_RGU работает только из assert/dump-состояния (M54); из «образ загружен, старт не
+  подан» — нет. Гипотеза «дело в WIFI_START» снята.
+- Модули: `wmt_drv` `69f3c56f…`, `wlan_drv_gen3` `a2185d67…`, `mtk_btif_drv` `e29eaecb…`.
+  `0018` обновлён (`t1100_reset_before_start`). `wlan0` нет.
