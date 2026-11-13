@@ -3506,3 +3506,20 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
 
 Заодно закоммичен `vcn33` (`c6f3a4e1c`): рейка CONN теперь always-on 3.3 В,
 `regulator_summary: vcn33 use_count=1 3300mV` (было 0 / 3500 mV).
+
+## 13.11 (14): M27 — recovery не даёт дискриминатора; на стоке тоже нет CONFIG_DEVMEM
+
+- `reboot recovery` не работает (в GPT нет `misc`); вошли кнопками. Recovery —
+  вендорское ядро `4.14.186`, но **`/dev/mem` нет** (`CONFIG_DEVMEM=n`), debugfs
+  не монтируется ⇒ MMIO из userspace недоступен, `btif-probe.sh` там неприменим.
+- Драйверы в recovery привязаны (`1100c000.btif → mtk_btif`, `10207000.devapc →
+  devapc`, оба ioremap'ят окна), но логи BTIF выключены, self-test'ы не
+  скомпилированы, WMT не запущен ⇒ записей в BTIF в recovery не происходит.
+- Стоковый конфиг: `CONFIG_MTK_BTIF=y`, `CONFIG_MTK_DEVAPC=y`, **`# CONFIG_DEVMEM
+  is not set`** ⇒ запланированное чтение регистров на стоке через mempeek
+  невыполнимо.
+- Подтверждены ID/биты гейтов (`BTIF_CG=27` → IFR0[31], `AP_DMA=43` → IFR1[18],
+  `DEVICE_APC=45` → IFR1[20]); в mainline `infra_btif`/`infra_device_apc` никем не
+  запрошены (enable_cnt=0), гейт BTIF включается сырой записью мимо CCF ⇒
+  родители (`axi_sel`/PLL) не включаются. Запись в BTIF по-прежнему
+  отбрасывается, `wlan0` нет. Факты — `refs/m27-recovery-discriminator.md`.

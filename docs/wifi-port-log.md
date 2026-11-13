@@ -3136,3 +3136,64 @@ pwrap-устройства через `of_find_compatible_node("mediatek,mt8183-
 Модуль собран (`build/wifi/common/wmt_drv.ko`, 1 136 328 Б), на железе ещё не
 проверен — плата после `reboot -f` не вернула USB-гаджет (нет `enx*`,
 `ping 10.42.66.66` — 100% потерь).
+
+## 49. M27: recovery не даёт дискриминатора — и на стоке нет `/dev/mem` (13.11)
+
+### 48.1 Вход в recovery
+
+`reboot recovery` из mainline не работает: **в GPT платы нет раздела `misc`**
+(полный список — `refs/m27-recovery-discriminator.md`), systemd аргумент
+игнорирует. Вошли кнопками (владелец): меню «Jolla Recovery v2.0», USB
+`2931:0a06`, telnet `3` → `y` (без Enter) → код.
+
+### 48.2 В recovery нет инструментов для теста
+
+```
+uname -a: Linux (none) 4.14.186 #1 SMP PREEMPT Mon Jan 20 14:34:05 UTC 2025 aarch64
+```
+
+* `/dev/mem` отсутствует; `mknod /dev/mem c 1 1` → `dd`: `No such device or
+  address` ⇒ `CONFIG_DEVMEM=n`; debugfs не монтируется (`No such device`),
+  `/sys` read-only ⇒ **MMIO из userspace недоступен**, `mempeek`/`btif-probe.sh`
+  неприменимы.
+* Драйверы привязаны: `1100c000.btif → mtk_btif`, `10207000.devapc → devapc`
+  (`/proc/vmallocinfo`: `phys=0x1100c000`, `phys=0x10207000`).
+* Но логи BTIF выключены (`dmesg | grep -i btif` пусто и после `unbind`/`bind`),
+  `flag`-атрибут уровень не меняет, self-test (`echo 1`) ничего не пишет; WMT в
+  recovery не запущен ⇒ **записей в BTIF там не происходит** — мерить нечего.
+
+### 48.3 План «прочитать на стоке» отменяется
+
+`refs/device/config-stock.gz`: `CONFIG_MTK_BTIF=y`, `CONFIG_MTK_DEVAPC=y`,
+**`# CONFIG_DEVMEM is not set`** ⇒ на стоковой Aurora `/dev/mem` тоже нет;
+запланированное в §46/§47 чтение регистров на стоке через mempeek невыполнимо.
+
+### 48.4 Что подтверждено: ID и биты гейтов
+
+`include/dt-bindings/clock/mt6771-clk.h:199/215/217`: `INFRACFG_AO_BTIF_CG = 27`,
+`AP_DMA_CG = 43`, `DEVICE_APC_CG = 45`; `clk-mt6771.c:1173/1206/1210`: биты
+IFR0[31], IFR1[18], IFR1[20] — совпадает со стоковым DT (`0x1b/0x2b/0x2d`) и с
+нашей раскладкой.
+
+### 48.5 mainline: клоки BTIF никто не держит
+
+```
+infra_uart0        enable_cnt=0  rate=26000000   dev=11002000.serial
+infra_device_apc   enable_cnt=0  rate=156000000  deviceless
+infra_btif         enable_cnt=0  rate=156000000  deviceless
+```
+
+`infra_btif`/`infra_device_apc` не запрошены ни одним драйвером (в вендорском
+ядре их держат `mtk_btif` и `devapc`). Наш glue включает гейт **сырой записью** в
+SET-регистр, минуя CCF, — родительские клоки (`axi_sel`/PLL) при этом никто не
+включает. Запись в BTIF в mainline по-прежнему отбрасывается
+(`IER 0xa5a5a5a5 → 0`), `APC_CON=0`, `VIO_MASK0=0xffffffff`, нарушений нет.
+
+### 48.6 Вывод и следующий шаг
+
+Дискриминатор «recovery vs mainline» на этой прошивке не выполним (нет MMIO, нет
+пользователя BTIF), а на стоке нет `CONFIG_DEVMEM`. Идти по нашей стороне:
+включать BTIF **через CCF** (с родителями), а не сырым гейтом; корректный путь —
+`clocks = <&infracfg CLK_INFRA_BTIF>` в DT (правка DTS + перепаковка boot, только
+с согласованием), либо проверить/включить цепочку `axi_sel` вручную с контролем
+по `clk_summary`.
