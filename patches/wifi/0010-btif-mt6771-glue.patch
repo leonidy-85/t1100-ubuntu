@@ -1,5 +1,5 @@
 --- a/mtk_btif.c	2026-11-11 14:00:44.844151028 +0000
-+++ b/mtk_btif.c	2026-11-12 23:02:54.737201726 +0000
++++ b/mtk_btif.c	2026-11-13 08:04:47.026100058 +0000
 @@ -212,6 +212,8 @@
  /*-----------Platform bus related structures----------------*/
  #define DRV_NAME "mtk_btif"
@@ -69,7 +69,7 @@
  }
  
 --- a/btif_plat.c	2026-11-11 14:00:44.843844888 +0000
-+++ b/btif_plat.c	2026-11-12 23:16:23.916015884 +0000
++++ b/btif_plat.c	2026-11-13 08:04:47.026434582 +0000
 @@ -13,6 +13,7 @@
  #include "btif_pub.h"
  #include "btif_priv.h"
@@ -202,7 +202,7 @@
  	i_ret = 0;
  	return i_ret;
 --- a/btif_dma_plat.c	2026-11-11 14:00:44.843844888 +0000
-+++ b/btif_dma_plat.c	2026-11-12 22:45:34.632812806 +0000
++++ b/btif_dma_plat.c	2026-11-13 08:04:47.026648166 +0000
 @@ -12,6 +12,7 @@
  
  #include "btif_dma_priv.h"
@@ -244,7 +244,7 @@
  		/* get the interrupt line behaviour */
  		if (of_property_read_u32_array(node, "interrupts", irq_info,
 --- a/inc/mtk_btif.h	2026-11-11 14:00:44.843844888 +0000
-+++ b/inc/mtk_btif.h	2026-11-12 22:58:48.853924329 +0000
++++ b/inc/mtk_btif.h	2026-11-13 08:04:47.026826103 +0000
 @@ -73,8 +73,12 @@
  };
  #endif
