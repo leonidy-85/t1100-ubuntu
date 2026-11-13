@@ -4543,3 +4543,14 @@ shutdown не может добить процесс `rmmod wmt_drv/wlan_drv_gen
 - Тем не менее `section-config dst=0x020a1000 len=28032 reset=1 -> status=0xC0000001`
   (нет ответа на INIT_CMD), `WIFI_START` не дошёл, `wlan0` нет; `cpupcr` снова в assert-адресах.
 - Модули: `wmt_drv` `9d0b8613…`, `wlan_drv_gen3` `597c4e85…`, `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (60): M67 — код и модули готовы, нужен power-cycle перед прогоном
+
+- Добавлен `mtk_wcn_wmt_send_patch_index(i)` (экспорт `wmt_drv`): доставка одного патча без
+  сброса + логи `hwcode` до/после; в `wlan_lib.c` — параметр `t1100_patch_index` (вызов перед
+  загрузкой FW, один раз, `t1100_hif_state("after-patch-index")`).
+- Сборка: `wmt_drv` `15292417…`, `wlan_drv_gen3` `3af8c62a…`; задеплоено в
+  `/lib/modules/6.12.114-g400cb6f-touch-rot/updates/wifi/`, sha сверены.
+- Прогон сделать нельзя: модули прежней сборки уже загружены (`lsmod` 4 записи), а `rmmod`
+  запрещён (вешает shutdown). Нужен **power-cycle владельцем**, затем `/root/m67run.sh`
+  (без `dmesg -c`: срез по метке `dmesg-mark`, маркер `/root/m67.log`).
