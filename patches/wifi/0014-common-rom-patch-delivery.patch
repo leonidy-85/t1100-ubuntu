@@ -1,6 +1,6 @@
 diff -u -r a/common_main/core/wmt_ctrl.c b/common_main/core/wmt_ctrl.c
---- a/common_main/core/wmt_ctrl.c	2026-11-13 13:18:35.486855191 +0000
-+++ b/common_main/core/wmt_ctrl.c	2026-11-13 13:18:35.489034932 +0000
+--- a/common_main/core/wmt_ctrl.c	2026-11-13 13:32:24.934237934 +0000
++++ b/common_main/core/wmt_ctrl.c	2026-11-13 13:32:24.936218297 +0000
 @@ -34,6 +34,11 @@
  #include "osal.h"
  
@@ -14,9 +14,9 @@ diff -u -r a/common_main/core/wmt_ctrl.c b/common_main/core/wmt_ctrl.c
  #include "wmt_lib.h"
  #include "wmt_dev.h"
 diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
---- a/common_main/core/wmt_ic_soc.c	2026-11-13 13:18:35.485924768 +0000
-+++ b/common_main/core/wmt_ic_soc.c	2026-11-13 13:18:35.487969353 +0000
-@@ -40,6 +40,27 @@
+--- a/common_main/core/wmt_ic_soc.c	2026-11-13 13:32:24.933322549 +0000
++++ b/common_main/core/wmt_ic_soc.c	2026-11-13 13:32:24.935156755 +0000
+@@ -40,6 +40,34 @@
   */
  #include <linux/firmware.h>
  
@@ -27,6 +27,13 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
 +extern int t1100_rx_bytes;
 +/* T1100 M51: after the last fragment the chip asserts and starts a core dump;
 + * stay quiet for this long so the dump can finish before any command. */
++/* T1100 M53: the vendor sets the coredump flag only at the end of sw_init,
++ * which the failing patch download never reaches, so wmt_lib_cmb_rst keeps
++ * "coredump mode == 0" and its whole-chip reset is sent over WMT (the chip is
++ * busy dumping and never answers).  Set the flag from the start. */
++static int t1100_coredump;
++module_param(t1100_coredump, int, 0444);
++MODULE_PARM_DESC(t1100_coredump, "T1100: enable the f/w coredump path before the patch download");
 +static int t1100_quiet_ms;
 +module_param(t1100_quiet_ms, int, 0444);
 +MODULE_PARM_DESC(t1100_quiet_ms, "T1100: quiet window after the last fragment (ms)");
@@ -44,7 +51,16 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  static char t1100_rom_patch[128];
  module_param_string(t1100_rom_patch, t1100_rom_patch,
  		    sizeof(t1100_rom_patch), 0444);
-@@ -1225,6 +1246,8 @@
+@@ -83,7 +111,7 @@
+ 
+ #define CFG_SUBSYS_COEX_NEED 0
+ 
+-#define CFG_WMT_COREDUMP_ENABLE 0
++#define CFG_WMT_COREDUMP_ENABLE 1	/* T1100 M53: read the paged dump after the fw assert */
+ 
+ #define CFG_WMT_MULTI_PATCH (1)
+ 
+@@ -1225,6 +1253,8 @@
  	/* 6.2 Read patch number */
  	/* If patch number is 0, it's first time connys power on */
  	patch_num = mtk_wcn_soc_get_patch_num();
@@ -53,7 +69,16 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	if (patch_num == 0) {
  		if (t1100_rom_patch[0]) {
  			/* T1100: the patch comes from /lib/firmware, not from
-@@ -1281,9 +1304,46 @@
+@@ -1259,6 +1289,8 @@
+ 	}
+ #endif
+ 	/* 6.3 Multi-patch Patch download */
++	if (t1100_coredump)
++		mtk_wcn_stp_coredump_flag_ctrl(1);
+ 	WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_BEFORE_SEND_DOWNLOAD_PATCH);
+ 	for (patch_index = 0; patch_index < patch_num; patch_index++) {
+ 		iRet = mtk_wcn_soc_patch_dwn(patch_index);
+@@ -1281,9 +1313,46 @@
  							    osal_array_size(init_table_3));
  			}
  		}
@@ -103,7 +128,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  		}
  	}
  
-@@ -1320,7 +1380,7 @@
+@@ -1320,7 +1389,7 @@
  	iRet = wmt_core_init_script(init_table_3, osal_array_size(init_table_3));
  	if (iRet) {
  		WMT_ERR_FUNC("init_table_3 fail(%d)\n", iRet);
@@ -112,7 +137,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	}
  #endif
  
-@@ -2934,6 +2994,7 @@
+@@ -2934,6 +3003,7 @@
  	/* send all fragments */
  	offset = sizeof(WMT_PATCH_CMD);
  	fragSeq = 0;
@@ -120,7 +145,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	while (fragSeq < fragNum) {
  		WMT_DBG_FUNC("patch size(%d) fragNum(%d)\n", patchSize, fragNum);
  		if (fragSeq == (fragNum - 1)) {
-@@ -2976,7 +3037,8 @@
+@@ -2976,7 +3046,8 @@
  		 * init_table_3) fails with -2 (wmt_ctrl_tx_ex: "STP is not
  		 * enabled yet").  So do not read an EVT for the last fragment.
  		 */
@@ -130,7 +155,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  			WMT_INFO_FUNC("t1100: last fragment sent, ROM jumps (no EVT expected)\n");
  			iRet = 0;
  			++fragSeq;
-@@ -2987,6 +3049,9 @@
+@@ -2987,6 +3058,9 @@
  		}
  
  		iRet = wmt_core_rx(evtBuf, sizeof(WMT_PATCH_EVT), &u4Res);
@@ -140,7 +165,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  		if (iRet || (u4Res != sizeof(WMT_PATCH_EVT))) {
  			WMT_ERR_FUNC("wmt_core: read WMT_PATCH_EVT length(%d, %d) fail(%d)\n", sizeof(WMT_PATCH_EVT),
  				     u4Res, iRet);
-@@ -3018,7 +3083,53 @@
+@@ -3018,7 +3092,53 @@
  		offset += patchSizePerFrag;
  		++fragSeq;
  	}
@@ -194,7 +219,7 @@ diff -u -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
  	WMT_WARN_FUNC("wmt_core: patch dwn:%d frag(%d, %d) %s\n",
  		      iRet, fragSeq, fragSize, (!iRet && (fragSeq == fragNum)) ? "ok" : "fail");
  
-@@ -3180,16 +3291,103 @@
+@@ -3180,16 +3300,103 @@
  	return iRet;
  }
  

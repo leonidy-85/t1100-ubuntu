@@ -4292,3 +4292,53 @@ hdr a3 40 61 44: txseq 4 / txack 3, type 4, len 0x061 = 97 = 5 (WMT cmd 01 01 5d
 `wmt_lib_cmb_rst: coredump mode == 0. Connsys coredump is disabled.` и
 `++ start to read paged dump and paged trace ++/--` без единого чтения (флаг
 `CFG_WMT_COREDUMP_ENABLE` = 0, `init_table_6` не отправляется).
+
+## 69. M53: хост-путь coredump включён — `[core dump end]` нет; STP сам просит whole-chip reset, но шлёт его по WMT (13.11)
+
+### 69.1 Что сделано
+
+`CFG_WMT_COREDUMP_ENABLE = 1`; в no-assert-mode assert-детектор теперь one-shot
+(`t1100_dump_started`) и всё равно запускает чтение страниц (`stp_btm_notify_wmt_dmp_wq`),
+иначе ветка чтения недостижима. Плюс `t1100_coredump=1` — флаг coredump выставляется
+**перед** загрузкой патча (`mtk_wcn_stp_coredump_flag_ctrl(1)`), потому что штатное место в
+конце `sw_init` до патча не доходит.
+
+### 69.2 Прогон без явного флага (важное наблюдение)
+
+```
+52.361 would set f/w assert (no_assert_mode), type=5 len=25
+52.361 ++ start to read paged dump and paged trace ++ / --      ← страниц не прочитано
+52.361 wmt_lib_btm_cb: Invoke whole chip reset from stp_btm!!!
+52.361 wmt_lib_cmb_rst: coredump mode == 0. Connsys coredump is disabled.
+52.361 wmt_lib_cmb_rst: reset source = WMTRSTSRC_RESET_STP
+--  мосте: --  wmt_lib_put_act_op: opId(1) result:-1
+56.381 wmt_lib_hw_rst: WMT_OPID_HW_RST failed (opId 11 completion timeout, 2 c)
+56.381 wmt_lib_cmb_rst: [whole chip reset] fail at wmt_lib_hw_rst!
+57.669 after quiet hwcode 0x00000000 (ret -2); wmt reset: -1
+58.078 1_0 download -> -1 → 58.202 hwcode 0x788 (power-cycle)
+```
+
+То есть STP, увидев дамп, **сам** требует полный сброс чипа, но сброс уходит как WMT-операция
+(`WMT_OPID_HW_RST`) к чипу, который в этот момент занят дампом, — и падает по таймауту 2 с.
+
+### 69.3 Прогон с `t1100_coredump=1`
+
+```
+55.326 enable coredump function.
+55.792 would set f/w assert (no_assert_mode), type=5 len=25
+55.792 ++ start to read paged dump ++ / --        ← страниц нет
+55.793 ;;CONNSYS core dump start ..               ← и всё, больше ни одного type=5
+55.893 quiet window 5000 ms → 61.093 quiet end, rx_bytes=0
+63.146 after quiet hwcode (ret -3); 65.198 wmt reset: -1
+65.198 1_1 download -> 0 | 71.814 reset ack: no | 73.862 1_0 -> -1
+73.865 consys_reset_emi_coredump … 73.990 hwcode 0x788 (power-cycle)
+```
+
+При включённом флаге исчезает даже `Invoke whole chip reset from stp_btm` (ветка coredump
+перехватывает), а дамп присылает **один** пакет вместо 34. `[core dump end]` не появился
+ни в одном прогоне.
+
+**Итог M53:** хост-путь coredump включается и работает (флаг, `init_table_6`, one-shot
+чтение), но `[core dump end]` не приходит, страниц никто не отдаёт, чип молчит до
+power-cycle. Виновник найден точнее: единственный «сброс», который пробует стек, — WMT-операция
+к занятому чипу; аппаратный путь (`consys_hw_pwr_ctrl`) в этот момент не используется.

@@ -1,7 +1,7 @@
 diff -u -r a/common_main/core/stp_core.c b/common_main/core/stp_core.c
---- a/common_main/core/stp_core.c	2026-11-13 13:23:04.452347566 +0000
-+++ b/common_main/core/stp_core.c	2026-11-13 13:23:04.453292516 +0000
-@@ -44,6 +44,17 @@
+--- a/common_main/core/stp_core.c	2026-11-13 13:32:24.941039904 +0000
++++ b/common_main/core/stp_core.c	2026-11-13 13:32:24.942131082 +0000
+@@ -44,6 +44,18 @@
  
  static INT32 fgEnableNak;	/* 0=enable NAK; 1=disable NAK */
  static INT32 fgEnableDelimiter;	/* 0=disable Delimiter; 1=enable Delimiter */
@@ -14,29 +14,38 @@ diff -u -r a/common_main/core/stp_core.c b/common_main/core/stp_core.c
 + * only logs and STP keeps serving WMT.
 + */
 +static int t1100_no_assert_mode;
++static int t1100_dump_started;	/* T1100 M53: one-shot paged-dump trigger */
 +module_param(t1100_no_assert_mode, int, 0444);
 +MODULE_PARM_DESC(t1100_no_assert_mode, "T1100: do not switch STP into f/w assert (coredump) mode");
  /* common interface */
  static IF_TX sys_if_tx;
  static RX_HAS_PENDING_DATA sys_rx_has_pending_data;
-@@ -2252,8 +2263,15 @@
+@@ -2252,9 +2264,21 @@
  				osal_assert(0);
  			}
  
 -			if (mtk_wcn_stp_coredump_start_get() == 0 && stp_core_ctx.rx_counter == 0 &&
-+			if (t1100_no_assert_mode &&
-+			    mtk_wcn_stp_coredump_start_get() == 0 && stp_core_ctx.rx_counter == 0 &&
- 			    STP_IS_ENABLE_DBG(stp_core_ctx) && (stp_core_ctx.parser.type == STP_TASK_INDX)) {
-+				STP_INFO_FUNC("t1100: would set f/w assert (no_assert_mode), type=%d len=%d\n",
-+					      stp_core_ctx.parser.type, stp_core_ctx.parser.length);
-+			} else if (mtk_wcn_stp_coredump_start_get() == 0 &&
-+				   stp_core_ctx.rx_counter == 0 &&
-+				   STP_IS_ENABLE_DBG(stp_core_ctx) &&
-+				   (stp_core_ctx.parser.type == STP_TASK_INDX)) {
- 				mtk_wcn_stp_coredump_start_ctrl(1);
+-			    STP_IS_ENABLE_DBG(stp_core_ctx) && (stp_core_ctx.parser.type == STP_TASK_INDX)) {
+-				mtk_wcn_stp_coredump_start_ctrl(1);
++			if (stp_core_ctx.rx_counter == 0 && STP_IS_ENABLE_DBG(stp_core_ctx) &&
++			    (stp_core_ctx.parser.type == STP_TASK_INDX) &&
++			    (t1100_no_assert_mode ? (t1100_dump_started == 0)
++						  : (mtk_wcn_stp_coredump_start_get() == 0))) {
++				/* T1100 M53: in no_assert_mode we do not switch STP
++				 * into the blocking assert mode, but the paged dump
++				 * must still be read - once. */
++				if (t1100_no_assert_mode) {
++					t1100_dump_started = 1;
++					STP_INFO_FUNC("t1100: would set f/w assert (no_assert_mode), type=%d len=%d\n",
++						      stp_core_ctx.parser.type,
++						      stp_core_ctx.parser.length);
++				} else {
++					mtk_wcn_stp_coredump_start_ctrl(1);
++				}
  				mtk_wcn_stp_ctx_save();
  				STP_INFO_FUNC("++ start to read paged dump and paged trace ++\n");
-@@ -2331,6 +2349,9 @@
+ 				stp_btm_notify_wmt_dmp_wq(stp_core_ctx.btm);
+@@ -2331,6 +2355,9 @@
  INT32 mtk_wcn_stp_parser_data(PUINT8 buffer, UINT32 length)
  #endif
  {
@@ -46,7 +55,7 @@ diff -u -r a/common_main/core/stp_core.c b/common_main/core/stp_core.c
      /*----------------------------------------------------------------*/
  	/* Local Variables                                                */
      /*----------------------------------------------------------------*/
-@@ -2343,6 +2364,18 @@
+@@ -2343,6 +2370,18 @@
  	STP_TRACE_FUNC("++, rx (cnt=%d,len=%d)\n", ++counter, length);
  #endif
  

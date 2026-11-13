@@ -4074,3 +4074,14 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   дампа молчит. `[core dump end]` (строка есть в `1_1`) не приходит — код патча стоит внутри
   дампа; наша обвязка при этом пишет `coredump mode == 0. Connsys coredump is disabled`.
 - `0016` обновлён (RX-трасса + no-assert-mode). Модуль `wmt_drv` `665140d5…`; `wlan0` нет.
+
+## 13.11 (44): M53 — coredump-путь включён; `core dump end` нет, сброс идёт по WMT и падает
+
+- `CFG_WMT_COREDUMP_ENABLE=1`, assert-детектор в no-assert-mode стал one-shot и всё равно
+  запускает чтение страниц, плюс `t1100_coredump=1` (флаг ставится до загрузки патча).
+- Без флага видно главное: `wmt_lib_btm_cb: Invoke whole chip reset from stp_btm!!!` →
+  `reset source = WMTRSTSRC_RESET_STP`, но сброс уходит как WMT-операция `WMT_OPID_HW_RST`
+  к чипу, занятому дампом: `completion timeout` (2 с) → `[whole chip reset] fail`.
+- С флагом дамп присылает 1 пакет вместо 34, `[core dump end]` не появляется, страниц нет,
+  `hwcode -3`, `wmt reset -1`, `1_0 → -1`; `hwcode 0x788` — только после power-cycle.
+- `0014`/`0016` обновлены. Модуль `wmt_drv` `f26f6158…`; `wlan0` нет.
