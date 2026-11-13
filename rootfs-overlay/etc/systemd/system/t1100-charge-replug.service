@@ -1,0 +1,14 @@
+[Unit]
+Description=T1100 charge limits: re-apply after cable attach
+Documentation=https://gitflic.ru/project/py6on/t1100-ubuntu
+ConditionPathExists=/sys/class/power_supply/mt6370-charger
+After=systemd-udevd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/t1100-charge.sh auto
+SuccessExitStatus=0 2
+TimeoutStartSec=90
+SyslogIdentifier=t1100-charge
+
+# Запускается только udev-правилом 90-t1100-charge.rules, отдельно не включать.
