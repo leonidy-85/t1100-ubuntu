@@ -16,7 +16,10 @@
 > `glmark2` Score 1409/1583, но в отдельных shader-сценах есть таймауты
 > panfrost — отдельный баг, не DVFS. KDE Plasma 6.6.4 + SDDM (autologin root).
 > Тач HX83102E работает (`boot_touch8`, native portrait; KWin сам поворачивает —
-> 0051). Wi-Fi/BT в mainline не поддержаны, сеть — только RNDIS.
+> 0051). **Микрофон работает:** маршрут `UL1_CH1/CH2 ADDA_UL` и `PGA L/R = AIN0`
+> применяет `t1100-audio-mixer.service`, PipeWire source `alsa_mic` — по
+> умолчанию; `arecord`/`parecord` дают ненулевой сигнал. Wi-Fi/BT в mainline
+> не поддержаны, сеть — только RNDIS.
 > **USB host/OTG (0060/0061):** host-режим работает — флешка определяется
 > (`sda`, 62.9 GB), MT6370 выдаёт VBUS 5 В; динамический возврат host→device
 > нестабилен (xHCI), поэтому возврат — только перезагрузкой.
@@ -142,23 +145,23 @@ cd ../t1100-ubuntu && scripts/build-kernel-remote.sh
 sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 ```
 
-## Где проект сейчас (10.11.2026)
+## Где проект сейчас (13.11.2026)
 
 | Блок | Состояние |
 |---|---|
 | LK / образ boot.img | ✅ LK принимает наш DTB (4 правила, `docs/lk-dtb-rules.md`), перепаковка `scripts/repack_boot.py` |
-| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0039` (0035 отключён) |
+| Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0061` (0035 отключён, 0020 заменён на 0060) |
 | Память/PSCI/GIC | ✅ |
 | PMIC MT6358 / power domains | ✅ рельсы и домены поднимаются; зарядка и `poweroff` работают (0031–0034) |
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
 | Логи без UART/экрана | ✅ своя зона `ramoops@70000000` + чтение из рекавери (`/proc/last_kmsg`) |
 | USB (mtu3/UDC + host) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH; host — флешка `sda` 62.9 GB, VBUS 5 В (0060/0061); возврат host→device — только reboot |
-| Ubuntu rootfs | ✅ Ubuntu 24.04.3 arm64 + systemd на `p54` (ext4, метка `ubuntu`), грузится |
-| DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ панель работает (0038), `modetest` выставляет режим; фаза 2 закрыта |
-| GPU panfrost (Mali-G72) | ✅ 0039 прошит: Mesa 25.0.7, GLES 3.1, `kmscube` 56.4 fps, `glmark2` Score 452 |
-| Wayland (Weston 13) | ✅ DRM/atomic на панели, EGL-клиенты 56.4 fps; фаза 4 — ввод и десктоп |
+| Ubuntu rootfs | ✅ Ubuntu 26.04 LTS arm64 + KDE Plasma 6.6.4 на `p54` (ext4, метка `ubuntu`), 8 ядер |
+| DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ панель 1600×2176@58.93 (0038/0046/0052), сдвиг кадра убран |
+| GPU panfrost (Mali-G72) | ✅ Mesa 26.0.3, GLES 3.1; DVFS 698/743/800 МГц (0058/0059), `glmark2` Score 1409/1583 |
+| Wayland / KDE | ✅ KDE Plasma 6.6.4 + SDDM autologin root; тач (0051) и клавиатура работают |
+| Звук | ✅ динамик и микрофон; маршрут `UL1_CH1/CH2 ADDA_UL`, PipeWire source `alsa_mic` |
 | Wi-Fi / BT | ❌ в mainline не поддержаны (CONNSYS_6771/MT6631); сеть только RNDIS |
-| KDE Plasma / GNOME | ✅ KDE Plasma 5.27 + SDDM; GNOME не ставили |
 
 ## С чего начать
 

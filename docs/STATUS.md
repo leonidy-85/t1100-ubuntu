@@ -2494,6 +2494,10 @@ context.objects = [
 
 ### 12.11 (15): микрофон — путь найден (AIN1), сигнал пока нулевой
 
+> **Уточнено 13.11:** сигнал был нулевым не из-за AIN1/кодека, а потому что
+> DAPM-маршрут `UL1 -> ADDA` был выключен. Рабочая конфигурация — `PGA L/R
+> Mux = AIN0`; см. `13.11 (6)` ниже.
+
 Захват заводится как отдельный узел PipeWire (`api.alsa.pcm.source` на `hw:0,1`,
 `/etc/pipewire/pipewire.conf.d/52-alsa-mic.conf`), Source виден в `wpctl`.
 Маршрут для аналогового микрофона: `Mic Type Mux=ACC`, `PGA L/R Mux=AIN1`,
@@ -3271,3 +3275,31 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
 - Запись в BTIF по-прежнему отбрасывается (`IER` 0xa5a5a5a5 → 0), ROM молчит,
   ROMv4-патч не доставлен, `wlan0` нет. Массовое включение всех гейтов INFRACFG_AO
   вешает плату (ребут) — метод запрещён. Факты — `refs/m26-lk-devapc.md`.
+
+## 13.11 (8): микрофон — capture работает (маршрут UL1→ADDA)
+
+- `arecord` падал с `set_params:1462: Невозможно установить параметры hw:`.
+  `strace` показал, что `HW_PARAMS` и `SW_PARAMS` проходят, а `PREPARE`
+  возвращает `EINVAL`; `journalctl -k` дал точную причину:
+  `Capture_1: ASoC: no backend DAIs enabled for Capture_1`.
+- Виноват выключенный DAPM-маршрут FE(UL1) → BE(ADDA): контролы
+  `UL1_CH1 ADDA_UL_CH1` и `UL1_CH2 ADDA_UL_CH2` были `off`. После
+  `amixer -c0 cset name='UL1_CH1 ADDA_UL_CH1' on` и то же для CH2 capture
+  заработал; `dpcm_fe_dai_prepare()` больше не возвращает `-EINVAL`.
+- Проверка: `arecord -D hw:0,1 -f S16_LE -r 48000 -c 2
+  --period-size=1024 --buffer-size=4096 -d 2 /tmp/t.wav` → RC=0, 384044 B,
+  `sox stat`: peak 0.176, RMS 0.015. PipeWire source `alsa_mic` (node 33,
+  `api.alsa.path=hw:0,1`) даёт ненулевой WAV; `wpctl set-default 33` сделан.
+- В `rootfs-overlay/usr/local/bin/t1100-audio-mixer.sh` добавлен маршрут
+  `UL1_CH1/CH2 ADDA_UL` и аналоговые муксы `Mic Type Mux=ACC`, `ADC L/R
+  Mux=Left/Right Preamplifier`, `PGA L/R Mux=AIN0`; сервис
+  `t1100-audio-mixer.service` теперь `After=alsa-restore.service
+  sound.target` и `Wants=alsa-restore.service`. После перезагрузки capture
+  работает, маршрут применяется сервисом.
+- `PGA Volume` (numid 81) после закрытия потока читается как 0,0:
+  `mt6358_amic_disable()` явно пишет «L/R PGA 0 dB gain». Это не мешает
+  захвату; для громкости можно выставить `amixer -c0 cset numid=81 4,4`
+  перед записью. Устойчивый gain — отдельный возможный kernel-патч.
+- Текущее: p29 = `boot_usb_host` (md5 `d0d9bca9…`), role `device`, SSH/RNDIS,
+  rootfs Ubuntu 26.04 + KDE 6.6.4; микрофон и динамик работают.
+- Следующее: при необходимости — persistent PGA gain, затем отчёт/коммит.
