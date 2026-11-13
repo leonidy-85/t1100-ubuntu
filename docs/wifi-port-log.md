@@ -3587,3 +3587,41 @@ after-patch ctrl GEN_HCR         = 0 (ret -3)
 `cpupcr` в ROM, READY=0, `wlan0` нет. Следующий шаг — переинициализация STP
 после power-cycle и повторный `hw_check`
 (`refs/m36-power-cycle-after-patch.md`).
+
+## 59. M37: STP-реинициализация оживляет чип; power-cycle стирает патч (13.11)
+
+### 59.1 Что сделано
+
+После `t1100_pwr_cycle_after_patch` (PWR-OFF/ON) снимается заморозка
+`t1100_patch_active` и STP проходится заново как в `wmt_core_stp_init()`:
+`STP_CLOSE` → `STP_OPEN` → `WMT_STP_CONF_MODE = MTKSTP_BTIF_MAND_MODE` →
+`WMT_STP_CONF_EN = 1`, затем `hw_check`.
+
+```
+t1100: stp reinit close=0 open=0 mode=0 en=0
+t1100: hwcode after stp reinit = 0x00000788 (ret 0)     <- чип снова отвечает
+```
+
+### 59.2 Судьба патча
+
+```
+after-reinit patchmem[0x80098020] = 0x00000000 (ret 0)
+after-reinit patchmem[0x80098024] = 0x00000000 (ret 0)
+after-reinit patchmem[0x80098028] = 0x00000000 (ret 0)
+after-reinit ctrl GEN_HCR         = 0x00000788 (ret 0)
+```
+
+`ret 0` = чтение обслуживается (не `-3`), но данные — **нули**: power-cycle
+стирает MCU-память вместе с патчем.
+
+⇒ «Молчание» после загрузки патча — это **рассинхронизация STP**, а не гибель
+чипа: после `close/open/mode/en` он снова отвечает (`hwcode 0x788`).
+
+### 59.3 Состояние
+
+`cpupcr = 0x1170` (ROM), READY = 0, `wlan0` нет; в `wlan`-логе
+`mtk_wcn_stp_psm_enable: STP Not Ready` — до `wlanAdapterStart` не дошли.
+
+Следующий шаг: STP-reinit **сразу после** доставки патча, без power-cycle
+(он стирает патч), затем `hw_check` + readback `0x80098020`; если патч на месте —
+слать «старт». `refs/m37-stp-reinit.md`.
