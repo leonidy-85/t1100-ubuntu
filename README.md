@@ -8,8 +8,8 @@
 > mainline 6.12.114 + патчи 0001–0064 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
-> заряжается** (`mt6370-charger`; топливомера в mainline нет, процентов заряда
-> не будет), **`poweroff` снимает питание** через RTC MT6358 (0034; при
+> заряжается** (`mt6370-charger`; драйвера счётчика заряда — battery gauge —
+> в mainline нет, процентов заряда не будет), **`poweroff` снимает питание** через RTC MT6358 (0034; при
 > подключённом кабеле плата стартует снова — штатный «boot on charger»).
 > Дисплей: `card0-DSI-1` `connected/enabled`, режим `1600x2176@58.93`; сдвиг
 > кадра убран окончательно (0046 + 0052: `vbp 284`, `vfp 8`).
@@ -163,7 +163,7 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | LK / образ boot.img | ✅ LK принимает наш DTB (4 правила, `docs/lk-dtb-rules.md`), перепаковка `scripts/repack_boot.py` |
 | Ядро | ✅ mainline **6.12.114** грузится до userspace; патчи `patches/0001…0064` (0035 отключён, 0020 заменён на 0060) |
 | Память/PSCI/GIC | ✅ |
-| PMIC MT6358 / питание | ✅ регуляторы (rails) MT6358 и power-домены SCPSYS регистрируются (0012); зарядка MT6370 `online=1/Charging`, топливомера нет (0031; `tcpc` в DTS выключен); `poweroff` снимает питание через RTC MT6358 (0034; при подключённом кабеле плата стартует снова — «boot on charger») |
+| PMIC MT6358 / питание | ✅ регуляторы (rails) MT6358 и power-домены SCPSYS регистрируются (0012); зарядка MT6370 `online=1/Charging`, но без счётчика заряда (battery gauge) — процентов в `/sys/class/power_supply` нет (0031; `tcpc` в DTS выключен); `poweroff` снимает питание через RTC MT6358 (0034; при подключённом кабеле плата стартует снова — «boot on charger») |
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
 | Логи без UART/экрана | ✅ своя зона `ramoops@70000000` + чтение из рекавери (`/proc/last_kmsg`) |
 | USB (mtu3/UDC + host) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH; host — флешка `sda` 62.9 GB, VBUS 5 В (0060/0061); возврат host→device — только reboot |
