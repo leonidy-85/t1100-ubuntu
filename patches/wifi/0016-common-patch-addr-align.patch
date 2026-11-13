@@ -1,0 +1,17 @@
+--- a/common_main/core/wmt_ic_soc.c	2026-11-13 12:50:13.456725200 +0000
++++ b/common_main/core/wmt_ic_soc.c	2026-11-13 12:50:13.466263566 +0000
+@@ -3314,6 +3314,14 @@
+ 		if ((int)index >= t1100_patch_scan())
+ 			return 0;
+ 		osal_memcpy(addressByte, t1100_patches[index].addr, 4);
++		/* T1100 (M48): the low byte of the ROMv4 load address also carries
++		 * patch_num/patch_seq (launcher: num = b >> 4, seq = b & 0xf), so it
++		 * must never reach the chip. With 0xf0078021 the ROM acknowledged all
++		 * 315 fragments but stored nothing (EMI stayed zero) and then jumped
++		 * to addr + 8 and asserted (EVA = 0xf0078029). Sent as 0xf0078000 the
++		 * very same body lands in EMI byte for byte and the MCU runs.
++		 */
++		addressByte[0] = 0;
+ 		rc = request_firmware(&fw, t1100_patches[index].name, NULL);
+ 		if (rc) {
+ 			WMT_ERR_FUNC("t1100: request_firmware(%s) = %d\n",
