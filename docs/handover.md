@@ -61,8 +61,8 @@
 
 ## Текущее состояние платы (14.11)
 
-- `boot_a` = `build/boot_nonwifi_dual.img` (md5 p29
-  `f70560f124a0c7d68acf6a668baab48b`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+- `boot_a` = `build/boot_nonwifi_pga.img` (md5 p29
+  `ab00fd42c039c23a06f36b584775fcfe`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
   (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
   `schedutil`) и CPU thermal zone (0064: 80/90/115 °C, throttling

@@ -4734,7 +4734,23 @@ BTIF/STP-транспорт (включая исправленную поляр�
   SSH/RNDIS возвращаются.
 - Старый kernel-фикс с `ssusb_host_exit/host_init` не используется; helper
   работает через sysfs и не требует перепрошивки.
-- Образ p29: `boot_nonwifi_dual.img`, md5 `f70560f1…`; helper —
+- Текущий образ p29: `boot_nonwifi_pga.img`, md5 `ab00fd42…`; helper —
   `rootfs-overlay/usr/local/sbin/t1100-usb-role`. Если флешку вынуть
   смонтированной, FAT получает I/O errors; helper теперь сам размонтирует
   `/dev/sd*` перед сменой роли.
+
+## 14.11 (2): PGA микрофона сохраняется после закрытия capture
+
+- Причина сброса громкости: `mt6358_amic_disable()` в
+  `sound/soc/codecs/mt6358.c` записывал 0 dB в оба PGA-канала при закрытии
+  capture; выставленные 4,4 (24 dB) жили только до конца записи.
+- Патч **0068** исключает биты `RG_AUDPREAMPLGAIN` из маски disable, сохраняя
+  пользовательский гейн. Маска enable (`0xf8ff`) гейн не трогает.
+- Образ `build/boot_nonwifi_pga.img`: Image `0f7ba7…`, dual DTB `24bc37fd…`,
+  p29 md5 `ab00fd42c039c23a06f36b584775fcfe`; kernel `6.12.114`, 8 ядер.
+- Проверка: `amixer -c0 cset numid=81 4,4`; `arecord -D hw:0,1 -f S16_LE
+  -r 48000 -c 2 -d 1 /tmp/pga2.wav` -> RC=0, `sox stat`: Maximum 0.024841,
+  RMS 0.006284; повторный `amixer cget numid=81` после закрытия потока —
+  `values=4,4`. Сброс устранён.
+- Откат: `/tmp/opencode/boot_a_before_pga.img` (md5 `f70560f1…`,
+  boot_nonwifi_dual).
