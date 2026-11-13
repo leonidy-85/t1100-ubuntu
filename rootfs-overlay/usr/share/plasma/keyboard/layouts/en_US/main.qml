@@ -307,13 +307,10 @@ KeyboardLayout {
             weight: normalKeyWidth
             Layout.fillWidth: false
         }
-        Key {
+        ChangeLanguageKey {
             Layout.minimumHeight: 0
             weight: normalKeyWidth
             Layout.fillWidth: false
-            keyType: QtVirtualKeyboard.KeyType.ChangeLanguageKey
-            displayText: keyboard.locale.split("_")[0]
-            onClicked: keyboard.showLanguagePopup(this, false)
         }
         SpaceKey {
             Layout.minimumHeight: 0
