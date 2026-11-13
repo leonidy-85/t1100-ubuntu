@@ -3704,3 +3704,14 @@ RNDIS-гаджету), делать при физическом доступе �
 - `cpupcr=0x1170` (ROM), READY=0, `wlan0` нет. Следующий шаг — STP-reinit сразу
   после доставки патча (без power-cycle), затем `hw_check`+readback и «старт»
   (`refs/m37-stp-reinit.md`).
+
+## 13.11 (27): M38 — STP-reinit без power-cycle не оживляет чип; сброс стирает патч
+
+- По плану: `patch_dwn` → STP `close/open/mode/en` (все rc=0) без power-cycle →
+  `hwcode = ret -3` (чип молчит), затем таймаут снимает STP (`-2`).
+- С power-cycle (M37): `hwcode 0x788`, но `patchmem = 0` — патч стёрт ⇒
+  доставка патча сама приводит MCU в нерабочее состояние, а сброс её уничтожает.
+- Заголовки: `1_0` addr `0x98022` type `0x0fe3ffff` (наш выбор верен), `1_1` —
+  addr `0xf0078021` type 0 (другой механизм). `cpupcr` ROM, READY=0, `wlan0` нет.
+  Следующий шаг — проверка хвоста тела (срез CRC для ROMv4, как
+  `BCNT_PATCH_BUF_CHECKSUM` у mt6765/6761) — `refs/m38-stp-reinit-no-cycle.md`.

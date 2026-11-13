@@ -3625,3 +3625,32 @@ after-reinit ctrl GEN_HCR         = 0x00000788 (ret 0)
 Следующий шаг: STP-reinit **сразу после** доставки патча, без power-cycle
 (он стирает патч), затем `hw_check` + readback `0x80098020`; если патч на месте —
 слать «старт». `refs/m37-stp-reinit.md`.
+
+## 60. M38: STP-reinit без power-cycle не оживляет; сброс стирает патч (13.11)
+
+```
+t1100: reset ack: no
+t1100: stp reinit (no cycle) close=0 open=0 mode=0 en=0
+t1100: hwcode after reinit = 0x00000000 (ret -3)
+t1100: after-reinit patchmem[0x80098020] = 0x00000000 (ret -3)
+t1100: after-reinit ctrl GEN_HCR         = 0x00000000 (ret -2)
+```
+
+| | без power-cycle | после power-cycle (M37) |
+|---|---|---|
+| stp close/open/mode/en | 0/0/0/0 | 0/0/0/0 |
+| `hwcode` | `ret -3` (молчит) | **`0x788` (ret 0)** |
+| `patchmem[0x80098020]` | `ret -3` | `0` (ret 0) — патч стёрт |
+
+⇒ после доставки патча MCU не обслуживает STP **в пределах питания**; лечится
+только сбросом домена, который стирает патч. Значит **сама доставка** приводит
+MCU в нерабочее состояние (похоже, ROM начинает исполнять принятое и виснет).
+
+Заголовки файлов: `1_0` — addr `0x00098022`, type `0x0fe3ffff`; `1_1` — addr
+`0xf0078021`, type `0` (другой механизм, EMI/PDA). Выбор `1_0` верен.
+
+`cpupcr` в ROM, READY=0, `wlan0` нет.
+
+Следующий шаг: проверить хвост тела — не нужен ли для ROMv4 срез CRC
+(у mt6765/6761 срезается `BCNT_PATCH_BUF_CHECKSUM`), из-за которого последний
+фрагмент валит ROM (229 ack → молчание). `refs/m38-stp-reinit-no-cycle.md`.
