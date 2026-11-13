@@ -4511,3 +4511,30 @@ warm reset: stp close/open/mode/en = 0/0/0/0        (вне среза: стро
 Вывод: AP_RGU-импульс возвращает чип только из состояния assert/dump; из состояния
 «WLAN-образ работает» его недостаточно — нужен SPM-путь (iso/power), который мы пока
 применяли лишь как полный цикл питания.
+
+## 74. M58: AP_RGU-сброс «до WIFI_START» тоже не оживляет чип (13.11)
+
+### 74.1 Правка
+
+`t1100_reset_before_start=1` в `wlan_drv_gen3`: после download, **до** первого `WIFI_START`,
+вызывается `mtk_wcn_consys_warm_reset()` (экспорт `wmt_drv`), затем `t1100_hif_state()`.
+
+### 74.2 Прогон
+
+```
+196.061  warm reset from wmt_drv: stp 0/0/0/0 hwcode 0x00000000 (ret -3)
+226.877  warm reset from wmt_drv: stp 0/0/0/0 hwcode 0x00000000 (ret -3)
+227.933  wlanProbe failed
+227.933  t1100_wlan_probe: wlanProbe returned -5
+```
+
+`WIFI_START` в этом прогоне **не отправлялся** — probe завершился на сбросе. Каждый сброс
+даёт 40 замеров `GEN_HCR` (≈80 с, по 2 с таймаута), и ни один не вернул `0x788`.
+
+### 74.3 Вывод
+
+AP_RGU-импульс оживляет чип **только из состояния assert/core dump** (M54, `hwcode 0x788`),
+а из состояния «WLAN-образ загружен, старт не подавался» — так же мёртв, как и после
+`WIFI_START`. Значит дело не в `WIFI_START`, а в типе сброса: MCU в этом состоянии держится
+чем-то, что AP_RGU не снимает (SPM iso / ctl). Нужен SPM-partial (iso + rst без SRAM_PD и без
+power-gating).
