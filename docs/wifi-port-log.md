@@ -3106,7 +3106,7 @@ SOC; патч трактует `INVALID` как SOC для MT6631.
 ### 48.4 WMT_SOC.cfg
 
 `wmt_lib_init()` = -1 без `/lib/firmware/WMT_SOC.cfg`. Конфиг — текст, не блоб;
-`rootfs-overlay/lib/firmware/WMT_SOC.cfg` собрана из имён полей `wmt_conf.c` со
+`rootfs-overlay/usr/lib/firmware/WMT_SOC.cfg` собрана из имён полей `wmt_conf.c` со
 значениями vendor-default. Формат: `key = value`, `#` не комментарий.
 
 ### 48.5 Что видно на железе
@@ -4575,3 +4575,31 @@ power-gating).
   патчей, и только затем `WIFI_START`.
 - Повторный download в этом прогоне не состоялся: `t1100_redownloaded` уже был израсходован
   первым сбросом (`glResetTrigger` отложенный), probe завершился.
+
+## 76. M75: расшифровка `u4DataMode` и уточнение вывода M74 (13.11)
+
+`include/nic_init_cmd_event.h`:
+
+```
+#define DOWNLOAD_CONFIG_ENCRYPTION_MODE   BIT(0)     /* 0x00000001 */
+#define DOWNLOAD_CONFIG_ENCRYPT_IDX_MASK  BITS(1, 2)
+#define DOWNLOAD_CONFIG_ENCRYPT_IDX_OFFSET 1
+#define DOWNLOAD_CONFIG_RESET_OPTION      BIT(3)     /* 0x00000008 */
+#define DOWNLOAD_CONFIG_ACK_OPTION        BIT(31)    /* 0x80000000 */
+```
+
+| значение | состав |
+|---|---|
+| `0x80000000` | ACK |
+| `0x80000001` | ACK + ENCRYPTION |
+| `0x80000009` | ACK + ENCRYPTION + RESET |
+
+Фактические значения из прогона M74 (после правки на per-section `ucEnc`):
+`cfg dst=0x020a1000 len=28032 dataMode=0x80000009` (index 0 ⇒ `fgReset=TRUE`, enc=1),
+`cfg dst=0x000a5800 len=33776 dataMode=0x80000001` (без reset, enc=1).
+
+**Уточнение к M74:** значение «до правки» (`0x80000009` для секции 1) было *выведено* из кода, а
+не измерено — логирования `u4DataMode` в M73 не было. Поэтому вывод «всем секциям ставился
+ENCRYPTION_MODE» требует проверки: параметр `wlanImageSectionConfig(..., IN UINT_8 ucEnc, ...)`
+и до правки получал `TRUE`, и после — `ucEnc` из заголовка; если у секции 1 в заголовке `ucEnc=1`,
+`u4DataMode` не изменился бы вообще. Проверка — лог `ucEnc` рядом с `u4DataMode`.
