@@ -59,19 +59,25 @@
 - **Нельзя одновременно** прошивать образ тача и Wi-Fi: по одному шагу за раз,
   после каждого проверять дисплей/GPU и оставлять точку отката.
 
-## Текущее состояние платы
+## Текущее состояние платы (13.11)
 
-- `boot_a` = `build/boot_touch8.img` (md5 p29
-  `75aff08106e36c5ba207081c8cfc77ad`): панель 1600×2176@58.93 (0046+0052),
-  рабочий тач (0051, native portrait), 8 ядер, GPU и KDE 6.6.4. Точки отката:
-  `build/boot_ubuntu27.img` (`a89b264d…`, дисплей без GPU-патча),
-  `build/boot_ubuntu28.img` (`0ae1c4b5…`, GPU включён),
-  `build/recovery/boot_a_ubuntu27.img`; старый рабочий backup
-  `/tmp/opencode/boot_a_backup.img` (`781d18eb…`).
+- `boot_a` = `build/boot_usb_host.img` (md5 p29
+  `d0d9bca926d8bf82e6a95732502b3c40`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+  панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
+  (0058/0059). USB role switch (0060/0061) в режиме `device`, RNDIS/SSH
+  работают; host-режим с флешкой проверен, возврат host→device — только
+  перезагрузкой.
+- **Микрофон работает:** причина прежнего `EINVAL` — выключенный DAPM-маршрут
+  `UL1_CH1/CH2 ADDA_UL`, а не формат. Маршрут и муксы (`PGA L/R = AIN0`)
+  применяет `t1100-audio-mixer.service`; PipeWire source `alsa_mic` (node 33)
+  — по умолчанию, `arecord` и `parecord` дают ненулевой сигнал. `PGA Volume`
+  после закрытия потока сбрасывается в 0 dB (`mt6358_amic_disable`), но захват
+  от этого не страдает.
 - На планшете стоит `t1100-power-guard` (гасит при `vbat < 3.6 В`, поднимает
   `ICHG` до 2 А); в recovery он не работает — там заряд ведёт LK.
-- Сейчас планшет на зарядке в **recovery** (Jolla, `2931:0a06`); для работы
-  нужен кабель в ноутбук и `10.42.66.67/29` на `enx*`.
+- Откат USB-эксперимента: `/tmp/opencode/boot_a_before_usb_role.img`
+  (md5 `d4cdc9ef…`, boot_gpudvfs10); старый рабочий backup
+  `/tmp/opencode/boot_a_backup.img` (`781d18eb…`).
 
 ## Что проверено на железе
 

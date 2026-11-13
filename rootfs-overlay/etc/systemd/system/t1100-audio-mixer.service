@@ -1,5 +1,7 @@
 [Unit]
-Description=Set MT6358 speaker route on the Fplus T1100
+Description=Set MT6358 speaker and microphone routes on the Fplus T1100
+After=alsa-restore.service sound.target
+Wants=alsa-restore.service
 
 [Service]
 Type=oneshot
