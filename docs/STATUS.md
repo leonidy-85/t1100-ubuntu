@@ -4773,3 +4773,22 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Откат: `/tmp/opencode/boot_a_before_battery.img` (md5 `ab00fd42…`,
   boot_nonwifi_pga). Интернет после reboot поднимается вручную:
   `nmcli con up t1100-usb0`.
+
+## 14.11 (4): гарнитура — 3.5 мм jack работает вручную (0070)
+
+- Физический 3.5 мм jack подтверждён. В mainline нет драйвера ACCDET,
+  поэтому автоматического определения вставки нет.
+- В machine driver `mt6771-mt6358.c` добавлены DAPM `Headphone Jack`,
+  `Speaker`, `Speaker Switch` и routes от codec `Headphone L/R` и
+  `Headphone L/R Ext Spk Amp` (патч 0070).
+- Ручное переключение: `HPL Mux`/`HPR Mux` = 2 (Audio Playback),
+  `Speaker Switch` = off, `Headphone Volume` = 12. Пользователь подтвердил
+  звук в наушниках; обратно — `Speaker Switch on`, mux = 1.
+- Образ `build/boot_nonwifi_hp.img`, sha256 `ebf9e1d5…`, md5 p29
+  `32b609a40de0afb6c7ff656d45e4de79`; Image `54736679…`, DTB `24bc37fd…`,
+  initramfs `0cfa596d…`.
+- Автоматический ACCDET: вендорский исходник MT6771 найден
+  (`/tmp/opencode/accdet/`), кодек уже включает ACCDET (`CON13=0x700E`),
+  но минимальный драйвер не реализован — отдельная задача.
+- Откат: `/tmp/opencode/boot_a_before_hp.img` (md5 `0b64a8af…`,
+  boot_nonwifi_battery).

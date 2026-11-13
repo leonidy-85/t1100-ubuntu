@@ -1,0 +1,52 @@
+From fab61bb72776b26c2bb9572bcc988bbb7dc77cab Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=D0=90=D0=BD=D0=B4=D1=80=D0=B5=D0=B9=20=D0=9C=D0=B0=D1=80?=
+ =?UTF-8?q?=D0=BA=D0=B8=D0=BD?= <py6on@yandex.ru>
+Date: Sat, 14 Nov 2026 01:47:19 +0300
+Subject: [PATCH] ASoC: mt6771-mt6358: add headphone jack and speaker DAPM
+ routes
+
+---
+ sound/soc/mediatek/mt6771/mt6771-mt6358.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/sound/soc/mediatek/mt6771/mt6771-mt6358.c b/sound/soc/mediatek/mt6771/mt6771-mt6358.c
+index 23b2baf..ee423b7 100644
+--- a/sound/soc/mediatek/mt6771/mt6771-mt6358.c
++++ b/sound/soc/mediatek/mt6771/mt6771-mt6358.c
+@@ -125,11 +125,33 @@ static struct snd_soc_dai_link mt6771_mt6358_dai_links[] = {
+ 	},
+ };
+ 
++static const struct snd_kcontrol_new mt6771_mt6358_controls[] = {
++	SOC_DAPM_PIN_SWITCH("Speaker"),
++};
++
++static const struct snd_soc_dapm_widget mt6771_mt6358_widgets[] = {
++	SND_SOC_DAPM_HP("Headphone Jack", NULL),
++	SND_SOC_DAPM_SPK("Speaker", NULL),
++};
++
++static const struct snd_soc_dapm_route mt6771_mt6358_routes[] = {
++	{ "Headphone Jack", NULL, "Headphone L" },
++	{ "Headphone Jack", NULL, "Headphone R" },
++	{ "Speaker", NULL, "Headphone L Ext Spk Amp" },
++	{ "Speaker", NULL, "Headphone R Ext Spk Amp" },
++};
++
+ static struct snd_soc_card mt6771_mt6358_card = {
+ 	.name = "mt6771-mt6358",
+ 	.owner = THIS_MODULE,
+ 	.dai_link = mt6771_mt6358_dai_links,
+ 	.num_links = ARRAY_SIZE(mt6771_mt6358_dai_links),
++	.controls = mt6771_mt6358_controls,
++	.num_controls = ARRAY_SIZE(mt6771_mt6358_controls),
++	.dapm_widgets = mt6771_mt6358_widgets,
++	.num_dapm_widgets = ARRAY_SIZE(mt6771_mt6358_widgets),
++	.dapm_routes = mt6771_mt6358_routes,
++	.num_dapm_routes = ARRAY_SIZE(mt6771_mt6358_routes),
+ };
+ 
+ static int mt6771_mt6358_probe(struct platform_device *pdev)
+-- 
+2.53.0
+
