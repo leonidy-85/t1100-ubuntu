@@ -4397,3 +4397,46 @@ wlanProbe failed (-5)
 `cpupcr` меняется (ядро исполняет код), но в тех же адресах `0x14f08/0x55c0`, что и
 assert-обработчик в M50 — похоже, прошивка после wifi-start снова уходит в assert-путь.
 `wlan0` нет.
+
+## 71. M55: тёплый сброс в WLAN-драйвере и повторный download — секции не скачиваются (13.11)
+
+### 71.1 Что сделано
+
+- `wlan_lib.c`: `t1100_warm_reset_hw()` (AP_RGU `0x10007018[12]` + key 0x88, без SPM/power-gate)
+  и параметр `t1100_warm_reset`; при неудачном `WIFI_START` — `warm reset + goto t1100_redownload`
+  (повторный `kalFirmwareImageMapping` + `wlanImageDividDownloadByEntry`).
+- `gl_rst.c`: `glResetTrigger()` при `t1100_warm_reset=1` делает тёплый сброс вместо
+  «whole chip reset через WMT».
+
+### 71.2 Прогон
+
+```
+54.525  t1100: warm reset done (AP_RGU bit12)      ← glResetTrigger во время download
+55.589  t1100: warm reset done (AP_RGU bit12)      ← ещё один, уже перед WIFI_START
+55.589  t1100-start[0]: addr=0x000a5800 cpupcr before 0x00017dcc
+55.589  t1100-mcif: WIFI_START addr=0x000a5800 seq=6 -> status=0
+57.281  Waiting for Ready bit timeout, Device to Host MailBox 0x20
+57.281  WCIR=0x00100788 READY=0 WASR=0x00000300 mbox0=0x02000020 cpupcr=0x000055be
+57.281  t1100-start[1]: addr=0x020a1000 seq=7 -> status=0
+58.961  Waiting for Ready bit timeout,… MailBox 0x20 / WCIR=0x00100788 READY=0
+58.961  t1100: WIFI_START failed, warm reset + re-download
+59.021  t1100: warm reset done
+60.029  glResetTrigger: warm reset instead of whole-chip reset (wlan_lib.c:3433)
+60.089  t1100: warm reset done
+60.089  wlanImageDividDownloadByEntry: Firmware download configuration failed! idx 0, dst 0x020a1000, len 28032
+60.089  FW download failed! → wlanProbe -5
+```
+
+### 71.3 Что это значит
+
+- Повторный download **запускается** (наш `goto` сработал), но **падает на первой же секции**:
+  после AP_RGU-сброса стек WMT/STP (`wmt_drv`) не знает о сбросе чипа — STP не
+  переинициализирован, и `wlanImageSectionConfig` не получает ответа.
+- Хуже: `glResetTrigger` теперь делает тёплый сброс **и во время download** (54.5, 55.6), т.е.
+  стирает уже загруженный образ прямо посреди процесса.
+- `WIFI_START` уходит по обоим адресам (`0x000a5800`, `0x020a1000`), оба `status=0`,
+  но `READY=0`, `mbox0=0x02000020`, `WASR=0x00000300`, `cpupcr` после первого старта
+  `0x00014f08` (тот же адрес, что в assert-пути M50).
+
+Вывод: тёплый сброс обязан быть **операцией wmt_drv** (AP_RGU + STP reinit + сброс
+STP-состояния), а не сырым poke'ом из wlan-модуля.
