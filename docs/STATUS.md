@@ -4147,3 +4147,15 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   подан» — нет. Гипотеза «дело в WIFI_START» снята.
 - Модули: `wmt_drv` `69f3c56f…`, `wlan_drv_gen3` `a2185d67…`, `mtk_btif_drv` `e29eaecb…`.
   `0018` обновлён (`t1100_reset_before_start`). `wlan0` нет.
+
+## 13.11 (50): M59 — SPM-partial оживляет чип; patchmark нули, нужен повторный набор патчей
+
+- `consys_hw_spm_partial_reset()`: `0x1000632c` `0x10d → 0x10e` (iso+rst) → `0x10d`, без
+  SRAM_PD/CLK_DIS/power-gating; затем STP `0/0/0/0`, `hwcode 0x00000788 (ret 0)` — впервые чип
+  ожил после сброса **из wlan-пути**.
+- `patchmark[0xf0078000]` и `[0x80098020]` — `0x0` (ret 0): патч частичный сброс не переживает,
+  значит после сброса нужен повторный набор патчей и только потом `WIFI_START`.
+- `WIFI_START` `0x000a5800`/`0x020a1000` (status=0), `WCIR=0x00100788` READY=0,
+  `mbox0=0x02000020`, `WASR=0x00000300`, `cpupcr=0x76e`; `wlan0` нет.
+- Модуль `wmt_drv` `9eb5b093…`, `wlan_drv_gen3` `a2185d67…`, `mtk_btif_drv` `e29eaecb…`.
+  `0014`/`0017` обновлены.

@@ -1,6 +1,6 @@
 diff -u -r a/common_main/core/wmt_lib.c b/common_main/core/wmt_lib.c
---- a/common_main/core/wmt_lib.c	2026-11-13 13:50:53.188853766 +0000
-+++ b/common_main/core/wmt_lib.c	2026-11-13 13:50:53.189828874 +0000
+--- a/common_main/core/wmt_lib.c	2026-11-13 14:04:20.633942246 +0000
++++ b/common_main/core/wmt_lib.c	2026-11-13 14:04:20.634910121 +0000
 @@ -1171,7 +1171,7 @@
  	}
  	osal_memset(met_dump_buf, 0, MET_DUMP_SIZE);
@@ -39,8 +39,8 @@ diff -u -r a/common_main/core/wmt_lib.c b/common_main/core/wmt_lib.c
  	} else if (op == BTM_DMP_OP) {
  
 diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
---- a/common_main/platform/mt6771.c	2026-11-13 13:50:53.190925492 +0000
-+++ b/common_main/platform/mt6771.c	2026-11-13 13:50:53.191822592 +0000
+--- a/common_main/platform/mt6771.c	2026-11-13 14:04:20.635891761 +0000
++++ b/common_main/platform/mt6771.c	2026-11-13 14:04:20.636986736 +0000
 @@ -34,6 +34,10 @@
  *                    E X T E R N A L   R E F E R E N C E S
  ********************************************************************************
@@ -292,7 +292,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  	if (!consys_if_pinmux_reg_base) {
  		WMT_PLAT_PR_ERR("consys_if_pinmux_reg_base(%x) ioremap fail\n", CONSYS_IF_PINMUX_REG_BASE);
  		return;
-@@ -434,6 +586,20 @@
+@@ -434,6 +586,52 @@
  		iounmap(consys_if_pinmux_reg_base);
  }
  
@@ -301,6 +301,38 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
 + * isolation, SRAM power-down or power gating.  The MCU memory (and therefore
 + * the patch downloaded into it) is supposed to survive it.
 + */
++/*
++ * T1100 M59: SPM-partial reset - isolation + SW reset only, without SRAM_PD,
++ * CLK_DIS and without power-gating the domain, so MCU memory (and the
++ * downloaded image) is expected to survive.
++ *   0x1000632C[1] = conn_top1_iso_en (1 = isolated)
++ *   0x1000632C[0] = conn_ap_sw_rst_b (0 = reset asserted, 1 = released)
++ */
++INT32 consys_hw_spm_partial_reset(VOID)
++{
++	void __iomem *r = ioremap(0x1000632c, 4);
++	UINT32 v0, v1, v2, v3;
++
++	if (!r) {
++		WMT_PLAT_PR_ERR("t1100: spm partial: ioremap failed\n");
++		return -1;
++	}
++	v0 = readl(r);
++	WMT_PLAT_PR_INFO("t1100: spm partial: 0x1000632c before = 0x%08x\n", v0);
++	writel((v0 | CONSYS_SPM_PWR_ISO_S_BIT) & ~CONSYS_SPM_PWR_RST_BIT, r);
++	v1 = readl(r);
++	WMT_PLAT_PR_INFO("t1100: spm partial: iso+rst asserted = 0x%08x\n", v1);
++	mdelay(10);
++	writel((v1 | CONSYS_SPM_PWR_RST_BIT) & ~CONSYS_SPM_PWR_ISO_S_BIT, r);
++	v2 = readl(r);
++	WMT_PLAT_PR_INFO("t1100: spm partial: iso released, rst released = 0x%08x\n", v2);
++	mdelay(50);
++	v3 = readl(r);
++	WMT_PLAT_PR_INFO("t1100: spm partial: final = 0x%08x\n", v3);
++	iounmap(r);
++	return 0;
++}
++
 +INT32 consys_hw_warm_reset(VOID)
 +{
 +	consys_hw_reset_bit_set(MTK_WCN_BOOL_TRUE);
@@ -313,7 +345,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  static VOID consys_hw_reset_bit_set(MTK_WCN_BOOL enable)
  {
  	if (enable) {
-@@ -452,23 +618,52 @@
+@@ -452,23 +650,52 @@
  static VOID consys_hw_spm_clk_gating_enable(VOID)
  {
  	/*turn on SPM clock gating enable PWRON_CONFG_EN 0x10006000 32'h0b160001 */
@@ -378,7 +410,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  		/*2.write conn_top1_pwr_on=1, power on conn_top1 0x1000632C [2]  1'b1 */
  		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
  				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
-@@ -478,17 +673,27 @@
+@@ -478,17 +705,27 @@
  				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) |
  				 CONSYS_SPM_PWR_ON_S_BIT);
  		/*3.read conn_top1_pwr_on_ack =1, power on ack ready 0x10006180 [1] */
@@ -416,7 +448,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  		/*6.write conn_clk_dis=0, enable connsys clock 0x1000632C [4]  1'b0 */
  		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
  				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
-@@ -499,33 +704,48 @@
+@@ -499,33 +736,48 @@
  		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
  				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
  				 ~CONSYS_SPM_PWR_ISO_S_BIT);
@@ -486,7 +518,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  		CONSYS_REG_WRITE(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET,
  				CONSYS_REG_READ(conn_reg.topckgen_base + CONSYS_TOPAXI_PROT_EN_OFFSET) |
  				CONSYS_PROT_MASK);
-@@ -547,14 +767,45 @@
+@@ -547,14 +799,45 @@
  		CONSYS_REG_WRITE(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET,
  				 CONSYS_REG_READ(conn_reg.spm_base + CONSYS_TOP1_PWR_CTRL_OFFSET) &
  				 ~(CONSYS_SPM_PWR_ON_BIT | CONSYS_SPM_PWR_ON_S_BIT));
@@ -537,7 +569,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  }
  
  static INT32 consys_ahb_clock_ctrl(MTK_WCN_BOOL enable)
-@@ -562,6 +813,109 @@
+@@ -562,6 +845,109 @@
  	return 0;
  }
  
@@ -647,7 +679,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  static INT32 polling_consys_chipid(VOID)
  {
  	UINT32 retry = 10;
-@@ -691,7 +1045,7 @@
+@@ -691,7 +1077,7 @@
  	UINT8 *consys_afe_reg_base = NULL;
  
  	/*15.default no need,update ANA_WBG(AFE) CR if needed, CONSYS_AFE_REG */
@@ -656,7 +688,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  	if (consys_afe_reg_base) {
  		CONSYS_REG_WRITE(consys_afe_reg_base + CONSYS_AFE_RG_WBG_PLL_03_OFFSET,
  				CONSYS_AFE_RG_WBG_PLL_03_VALUE);
-@@ -714,11 +1068,12 @@
+@@ -714,11 +1100,12 @@
  {
  #if CONSYS_PMIC_CTRL_ENABLE
  	if (enable) {
@@ -674,7 +706,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  		if (reg_VCN18) {
  			regulator_set_voltage(reg_VCN18, 1800000, 1800000);
  			if (regulator_enable(reg_VCN18))
-@@ -727,9 +1082,7 @@
+@@ -727,9 +1114,7 @@
  				WMT_PLAT_PR_DBG("enable VCN18 ok\n");
  		}
  
@@ -685,7 +717,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  		if (reg_VCN33_BT) {
  			regulator_set_voltage(reg_VCN33_BT, 3500000, 3500000);
  			if (regulator_enable(reg_VCN33_BT))
-@@ -754,15 +1107,18 @@
+@@ -754,15 +1139,18 @@
  
  static VOID consys_vcn28_hw_mode_ctrl(UINT32 enable)
  {
@@ -713,7 +745,7 @@ diff -u -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
  }
  
  static INT32 consys_hw_vcn28_ctrl(UINT32 enable)
-@@ -1034,7 +1390,7 @@
+@@ -1034,7 +1422,7 @@
  static INT32 consys_emi_coredump_remapping(UINT8 __iomem **addr, UINT32 enable)
  {
  	if (enable) {

@@ -4538,3 +4538,40 @@ AP_RGU-импульс оживляет чип **только из состоян
 `WIFI_START`. Значит дело не в `WIFI_START`, а в типе сброса: MCU в этом состоянии держится
 чем-то, что AP_RGU не снимает (SPM iso / ctl). Нужен SPM-partial (iso + rst без SRAM_PD и без
 power-gating).
+
+## 75. M59: SPM-partial (iso+rst, без power-gating) оживляет чип из wlan-пути (13.11)
+
+### 75.1 Реализация
+
+`t1100_spm_partial=1`: вместо AP_RGU — `consys_hw_spm_partial_reset()`:
+`0x1000632c`: выставить `conn_top1_iso_en` (бит1) и снять `conn_ap_sw_rst_b` (бит0) → 10 мс →
+снять изоляцию и вернуть reset → 50 мс. **Без** `SRAM_PD`, `CLK_DIS`, `PWR_ON/OFF`.
+Далее `stp_reset_seq_state` + `close/open/MODE/EN` → polling `GEN_HCR` → при живом чипе сразу
+`patchmark[0xf0078000]`, `patchmark[0x80098020]`.
+
+### 75.2 Прогон
+
+```
+57.661 spm partial: 0x1000632c before         = 0x0000010d
+57.661 spm partial: iso+rst asserted          = 0x0000010e      (бит1=1, бит0=0)
+57.671 spm partial: iso released, rst released= 0x0000010d
+57.721 spm partial: final                     = 0x0000010d
+57.722 warm reset from wmt_drv: stp 0/0/0/0 hwcode 0x00000788 (ret 0)   ← ЧИП ЖИВ
+57.723 patchmark[0xf0078000] = 0x00000000 (ret 0)
+57.724 patchmark[0x80098020] = 0x00000000 (ret 0)
+58.777 wlanProbe failed (-5)
+```
+
+`WIFI_START` до сброса: `0x000a5800` (seq 6) и `0x020a1000` (seq 7), оба `status=0`;
+`WCIR=0x00100788` (READY бит21 = 0), `mailbox 0x20`, `WASR=0x00000300`, `cpupcr=0x0000076e`.
+`wlan0` нет.
+
+### 75.3 Вывод
+
+- **SPM-partial снимает удержание MCU**, которое не снимал AP_RGU: после него `hwcode 0x788`
+  отвечает с первого же замера (`ret 0`), STP-коды `0/0/0/0`.
+- `patchmark` по `0xf0078000`/`0x80098020` — нули, т.е. патч после частичного сброса **не
+  сохраняется** (или метка не в этих ячейках). Значит после сброса нужен повторный набор
+  патчей, и только затем `WIFI_START`.
+- Повторный download в этом прогоне не состоялся: `t1100_redownloaded` уже был израсходован
+  первым сбросом (`glResetTrigger` отложенный), probe завершился.
