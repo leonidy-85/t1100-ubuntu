@@ -2,10 +2,15 @@
 #
 # Зачем: IAICR/ICHG живут в регистрах MT6370 и переживают отключение, но после
 # probe драйвера ICHG = 900 мА, а t1100-power-guard/ручные эксперименты могут
-# оставить другие значения. Политику сайта (профиль auto) навешиваем заново на
+# оставить другие значения. Политику сайта (профиль hub) навешиваем заново на
 # каждый attach — это идемпотентно и дёшево.
+#
+# Почему RUN, а не ENV{SYSTEMD_WANTS}: SYSTEMD_WANTS применяется systemd при
+# активации device-юнита (add), а attach кабеля — это change уже активного
+# устройства. Проверено 13.11: `udevadm test --action=change` показывает
+# SYSTEMD_WANTS, но юнит не стартует. RUN с --no-block работает на change.
 #
 # online=1 бывает только у mt6370-charger (у mt6370-battery такого атрибута
 # нет), поэтому правило не задевает батарею.
 ACTION=="change", SUBSYSTEM=="power_supply", ATTR{online}=="1", \
-	ENV{SYSTEMD_WANTS}+="t1100-charge-replug.service"
+	RUN+="/bin/systemctl --no-block restart t1100-charge-replug.service"
