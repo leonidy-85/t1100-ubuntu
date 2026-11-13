@@ -4625,3 +4625,16 @@ shutdown не может добить процесс `rmmod wmt_drv/wlan_drv_gen
 - Прогон: секция `idx0` снова `0xC0000001` (после нашего reset-пути MCU мёртв), `WIFI_START`
   `0x000a5800`/`0x020a1000 -> status=0`, `cpupcr=0x26b2`, `wlan0` нет.
 - Модуль `wlan_drv_gen3` `6a00e0e8…`; `wmt_drv` `d3b83212…`; `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (67): M72 — driver-own выключен; H2D/WSICR не входит в путь WIFI_START
+
+- `t1100_driver_own` по умолчанию **0**; если включать — пишется только `WHLPCR_FW_OWN_REQ_CLR`
+  (BIT9), `WHLPCR_IS_DRIVER_OWN` больше не трогается.
+- По коду: единственное место с `WSICR_H2D_SW_INT_SET` в вендорском стеке — ветка
+  `CFG_FORCE_RESET_UNDER_BUS_ERROR` (принудительный сброс при bus error), в
+  `wlanConfigWifiFunc`/`nicTxInitCmd` H2D-mailbox и software interrupt **не используются**;
+  `INIT_CMD_ID_WIFI_START` уходит только MCIF-командой (как у нас).
+- Прогон (потоковый `/root/m72-full.txt`, 6120 строк): после `WIFI_START` (оба адреса
+  `status=0`) регистры не меняются: `WCIR=0x00100788` (POR=1, READY=0), `mbox0=0x02000020`,
+  `cpupcr` `0x00000f86`/`0x00000764`, `WASR=0x00000300`; секция в повторе `0xC0000001`; `wlan0` нет.
+- Модуль `wlan_drv_gen3` `269b7f50…`; `wmt_drv` `d3b83212…`; `mtk_btif_drv` `e29eaecb…`.
