@@ -1,0 +1,648 @@
+diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
+--- a/common/wlan_lib.c	2026-11-13 13:43:47.037121095 +0000
++++ b/common/wlan_lib.c	2026-11-13 13:43:47.037507627 +0000
+@@ -30,6 +30,8 @@
+  ********************************************************************************
+  */
+ #include "precomp.h"
++#include <linux/fs.h>
++#include <linux/file.h>
+ /*******************************************************************************
+  *                              C O N S T A N T S
+  ********************************************************************************
+@@ -144,6 +146,279 @@
+ 		      IN UINT_32 u4FwLoadAddr,
+ 		      IN UINT_32 u4FwImageFileLength);
+ 
++/* T1100 debug: dump the whole MCR page of the AHB HIF (0x180f0000..+0x100),
++ * which is where WCIR/WASR/WSR/mailboxes live (include/nic/mt6630_reg.h).
++ */
++static void t1100_dump_mcr(P_ADAPTER_T prAdapter, const char *tag)
++{
++	UINT_32 r[64];
++	INT_32 i;
++
++	for (i = 0; i < 64; i++)
++		HAL_MCR_RD(prAdapter, (UINT_32)(i * 4), &r[i]);
++	pr_info("t1100-mcr[%s]:\n", tag);
++	for (i = 0; i < 64; i += 8)
++		pr_info("t1100-mcr[%s] %02x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
++			tag, i * 4, r[i], r[i + 1], r[i + 2], r[i + 3],
++			r[i + 4], r[i + 5], r[i + 6], r[i + 7]);
++}
++
++/*
++ * T1100 M20: the WCIR lives on the *MCU* side; the AP reaches it only through
++ * the SDIO-like command port of the AHB HIF (os/linux/hif/ahb_sdioLike/
++ * sdio_bus_driver.c: sdio_cr_readl() writes a CMD53 word to HifRegBaseAddr+0x0
++ * and reads the answer back from HifRegBaseAddr+0x1000). A plain load of
++ * 0x180f0000 therefore returns the *last command word*, not WCIR - that is
++ * where 0x1000f004 in §40.2 came from (addr=0x78, count=4, func=1, read =
++ * the D2H mailbox read of the READY timeout path). Print both so the two can
++ * never be confused again.
++ */
++extern void t1100_stp_probe(void);
++
++int t1100_rom_patch_mcif = 1;
++module_param(t1100_rom_patch_mcif, int, 0444);
++MODULE_PARM_DESC(t1100_rom_patch_mcif,
++		 "T1100: send ROMv4_be_patch_1_0_hdr.bin to the MCU ROM over the MCIF init-cmd channel");
++
++/*
++ * T1100 M22: deliver a ROM patch to the MCU ROM through the *MCIF init-command*
++ * channel -- the same one that carries section-config / WIFI_START, which is
++ * known to work (status=0 from the MCU).
++ *
++ * The command format is not invented: the gen4m driver in the public
++ * haretic/android-kernel-mt6765-rabbitr1 tree (drivers/staging/mtk-connectivity/
++ * gen4m) uses exactly these CIDs and structures:
++ *
++ *   gen4m/include/nic_init_cmd_event.h:137-139
++ *     INIT_CMD_ID_PATCH_START, INIT_CMD_ID_PATCH_WRITE, INIT_CMD_ID_PATCH_FINISH
++ *   gen4m/include/nic_init_cmd_event.h:227-230
++ *     struct INIT_CMD_PATCH_FINISH { uint8_t ucCheckCrc; uint8_t aucReserved[3]; };
++ *   gen4m/chips/common/fw_dl.c:1183-1204  (PATCH_START reuses DOWNLOAD_CONFIG)
++ *     NIC_FILL_CMD_TX_HDR(..., INIT_CMD_ID_PATCH_START, ...);
++ *     prInitCmdDownloadConfig->u4Address  = u4DestAddr;
++ *     prInitCmdDownloadConfig->u4Length   = u4ImgSecSize;
++ *     prInitCmdDownloadConfig->u4DataMode = u4DataMode;
++ *   gen4m/chips/common/fw_dl.c:1258-1310  (payload = raw bytes, own packet)
++ *   gen4m/chips/common/fw_dl.c:961-967    (PATCH_FINISH, ucCheckCrc = 0)
++ *
++ * The file is a WMT rom-patch container (header `struct wmt_rom_patch`,
++ * common_main/core/include/wmt_core.h:427: date[16], plat[4], u16 hw, u16 sw,
++ * u32 patchAddr, u32 patchType, u32 crc[4]; body follows). For
++ * ROMv4_be_patch_1_0_hdr.bin: plat=ALPS, hw=sw=0x108a, patchAddr=0xf0000000,
++ * patchType=0x04000000, body=229336 bytes.
++ */
++struct t1100_patch_finish {
++	UINT_8 ucCheckCrc;
++	UINT_8 aucReserved[3];
++};
++
++#define T1100_ROM_PATCH_FILE "/lib/firmware/ROMv4_be_patch_1_0_hdr.bin"
++
++/* Generic single init command with a payload; returns the MCU CMD_RESULT. */
++static WLAN_STATUS t1100_init_cmd(P_ADAPTER_T prAdapter, UINT_8 ucCID,
++				  PVOID pvPayload, UINT_32 u4PayloadLen,
++				  const char *tag, UINT_32 *pu4Result)
++{
++	P_CMD_INFO_T prCmdInfo;
++	P_INIT_HIF_TX_HEADER_T prHdr;
++	UINT_8 ucTC = TC4_INDEX;
++	UINT_8 ucSeq;
++	WLAN_STATUS u4Status = WLAN_STATUS_SUCCESS;
++
++	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter,
++					  sizeof(INIT_HIF_TX_HEADER_T) + u4PayloadLen);
++	if (!prCmdInfo) {
++		pr_info("t1100-patch[%s]: alloc cmd failed\n", tag);
++		return WLAN_STATUS_FAILURE;
++	}
++	kalMemZero(prCmdInfo->pucInfoBuffer, sizeof(INIT_HIF_TX_HEADER_T) + u4PayloadLen);
++	prCmdInfo->u2InfoBufLen = (UINT_16)(sizeof(INIT_HIF_TX_HEADER_T) + u4PayloadLen);
++
++	ucSeq = nicIncreaseCmdSeqNum(prAdapter);
++	prHdr = (P_INIT_HIF_TX_HEADER_T)prCmdInfo->pucInfoBuffer;
++	prHdr->u2TxByteCount = prCmdInfo->u2InfoBufLen;
++	prHdr->u2PQ_ID = INIT_CMD_PQ_ID;
++	prHdr->rInitWifiCmd.ucCID = ucCID;
++	prHdr->rInitWifiCmd.ucPktTypeID = INIT_CMD_PACKET_TYPE_ID;
++	prHdr->rInitWifiCmd.ucSeqNum = ucSeq;
++	if (u4PayloadLen && pvPayload)
++		kalMemCopy(prHdr->rInitWifiCmd.aucBuffer, pvPayload, u4PayloadLen);
++
++	while (1) {
++		if (nicTxAcquireResource(prAdapter, ucTC,
++					 nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) ==
++		    WLAN_STATUS_RESOURCES) {
++			if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
++				pr_info("t1100-patch[%s]: no TX resource\n", tag);
++				u4Status = WLAN_STATUS_FAILURE;
++				goto out;
++			}
++			continue;
++		}
++		break;
++	}
++	if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++		pr_info("t1100-patch[%s]: nicTxInitCmd failed\n", tag);
++		u4Status = WLAN_STATUS_FAILURE;
++		goto out;
++	}
++	if (pu4Result)
++		*pu4Result = wlanImageSectionDownloadStatus(prAdapter, ucSeq);
++out:
++	cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
++	return u4Status;
++}
++
++static void t1100_rom_patch_send(P_ADAPTER_T prAdapter)
++{
++	struct file *fp;
++	loff_t pos = 0;
++	PUINT_8 buf = NULL;
++	UINT_32 total, body, off, addr, type, hw, sw;
++	UINT_32 u4Tmp = 0;
++	void *cfg = NULL;
++	ssize_t rd;
++	int i;
++
++	if (!t1100_rom_patch_mcif)
++		return;
++
++	fp = filp_open(T1100_ROM_PATCH_FILE, O_RDONLY, 0);
++	if (IS_ERR(fp)) {
++		pr_info("t1100-patch: cannot open %s (%ld)\n", T1100_ROM_PATCH_FILE,
++			(long)PTR_ERR(fp));
++		return;
++	}
++	total = i_size_read(file_inode(fp));
++	if (total <= 48 || total > SZ_1M) {
++		pr_info("t1100-patch: bad size %u\n", total);
++		filp_close(fp, NULL);
++		return;
++	}
++	buf = kalMemAlloc(total, PHY_MEM_TYPE);
++	if (!buf) {
++		pr_info("t1100-patch: no memory for %u\n", total);
++		filp_close(fp, NULL);
++		return;
++	}
++	rd = kernel_read(fp, buf, total, &pos);
++	filp_close(fp, NULL);
++	if (rd != (ssize_t)total) {
++		pr_info("t1100-patch: short read %zd/%u\n", rd, total);
++		goto out;
++	}
++
++	hw = buf[20] | (buf[21] << 8);
++	sw = buf[22] | (buf[23] << 8);
++	addr = buf[24] | (buf[25] << 8) | (buf[26] << 16) | ((UINT_32)buf[27] << 24);
++	type = buf[28] | (buf[29] << 8) | (buf[30] << 16) | ((UINT_32)buf[31] << 24);
++	body = total - 48;
++	pr_info("t1100-patch: file=%.24s plat=%c%c%c%c hw=0x%04x sw=0x%04x addr=0x%08x type=0x%08x body=%u\n",
++		(char *)buf, buf[16], buf[17], buf[18], buf[19], hw, sw, addr, type, body);
++
++	cfg = kalMemAlloc(sizeof(INIT_CMD_DOWNLOAD_CONFIG), PHY_MEM_TYPE);
++	if (!cfg)
++		goto out;
++	((P_INIT_CMD_DOWNLOAD_CONFIG)cfg)->u4Address = addr;
++	((P_INIT_CMD_DOWNLOAD_CONFIG)cfg)->u4Length = body;
++	((P_INIT_CMD_DOWNLOAD_CONFIG)cfg)->u4DataMode = DOWNLOAD_CONFIG_ACK_OPTION;
++
++	/*
++	 * 0. PATCH_SEMAPHORE_CONTROL (CID 0x10) -- the gen4m flow always asks the
++	 * chip first (fw_dl.c:wlanPatchIsDownloaded(), struct
++	 * INIT_CMD_PATCH_SEMA_CONTROL { ucGetSemaphore; aucReserved[3]; }).
++	 * The answer tells whether the patch family is implemented at all.
++	 */
++	{
++		UINT_8 sema[4] = { 1, 0, 0, 0 };	/* PATCH_GET_SEMA_CONTROL */
++
++		/*
++		 * The gen3 enum stops at INIT_CMD_ID_NUM (7) and has no semaphore
++		 * ID, but the gen4m header gives it a concrete value:
++		 * gen4m/include/nic_init_cmd_event.h:143
++		 *     INIT_CMD_ID_PATCH_SEMAPHORE_CONTROL = 0x10,
++		 * so the wire value is known even though this header lacks the name.
++		 */
++		t1100_init_cmd(prAdapter, (UINT_8)0x10, sema, sizeof(sema), "sema", &u4Tmp);
++		pr_info("t1100-patch: PATCH_SEMAPHORE_CONTROL(get) -> result=%u (0=ok)\n", u4Tmp);
++	}
++
++	/* 1. PATCH_START {addr, len, dataMode} */
++	if (t1100_init_cmd(prAdapter, INIT_CMD_ID_PATCH_START, cfg,
++			   sizeof(INIT_CMD_DOWNLOAD_CONFIG), "start", &u4Tmp)) {
++		pr_info("t1100-patch: PATCH_START send failed\n");
++		goto out;
++	}
++	pr_info("t1100-patch: PATCH_START addr=0x%08x len=%u -> result=%u (0=ok)\n",
++		addr, body, u4Tmp);
++	if (u4Tmp) {
++		pr_info("t1100-patch: ROM rejected PATCH_START, stop\n");
++		goto out;
++	}
++
++	/* 2. payload, in CMD_PKT_SIZE_FOR_IMAGE pieces */
++	for (off = 0, i = 0; off < body; off += CMD_PKT_SIZE_FOR_IMAGE, i++) {
++		UINT_32 len = body - off;
++
++		if (len > CMD_PKT_SIZE_FOR_IMAGE)
++			len = CMD_PKT_SIZE_FOR_IMAGE;
++		if (wlanImageSectionDownload(prAdapter, len, buf + 48 + off) !=
++		    WLAN_STATUS_SUCCESS) {
++			pr_info("t1100-patch: chunk %d (off 0x%x len %u) failed\n", i, off, len);
++			break;
++		}
++	}
++	pr_info("t1100-patch: payload sent, %u chunks of <=%u\n", i, CMD_PKT_SIZE_FOR_IMAGE);
++
++	/* 3. PATCH_FINISH {ucCheckCrc = 0} */
++	{
++		struct t1100_patch_finish fin;
++
++		fin.ucCheckCrc = 0;
++		fin.aucReserved[0] = fin.aucReserved[1] = fin.aucReserved[2] = 0;
++		t1100_init_cmd(prAdapter, INIT_CMD_ID_PATCH_FINISH, &fin, sizeof(fin),
++			       "finish", &u4Tmp);
++		pr_info("t1100-patch: PATCH_FINISH -> result=%u (0=ok)\n", u4Tmp);
++	}
++out:
++	if (cfg)
++		kalMemFree(cfg, PHY_MEM_TYPE, sizeof(INIT_CMD_DOWNLOAD_CONFIG));
++	if (buf)
++		kalMemFree(buf, PHY_MEM_TYPE, total);
++}
++
++static void t1100_hif_state(P_ADAPTER_T prAdapter, const char *tag)
++{
++	UINT_32 u4Wcir = 0, u4Wasr = 0, u4Mbox0 = 0, u4Cpupcr = 0;
++
++	t1100_stp_probe();	/* one-shot: is the STP function reachable? */
++
++	HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Wcir);
++	HAL_MCR_RD(prAdapter, MCR_WASR, &u4Wasr);
++	HAL_MCR_RD(prAdapter, MCR_D2HRM0R, &u4Mbox0);
++	wlanGetCpupcr(&u4Cpupcr);
++
++	pr_info("t1100-hif[%s]: WCIR=0x%08x chipid=0x%04x rev=%u POR=%u READY=%u WASR=0x%08x mbox0=0x%08x cpupcr=0x%08x\n",
++		tag, u4Wcir, (UINT_16)(u4Wcir & WCIR_CHIP_ID),
++		(UINT_32)((u4Wcir & WCIR_REVISION_ID) >> 16),
++		!!(u4Wcir & WCIR_POR_INDICATOR), !!(u4Wcir & WCIR_WLAN_READY),
++		u4Wasr, u4Mbox0, u4Cpupcr);
++
++	/* the raw window: CMD_SETUP / CMD52_DATA / CMD53_DATA of the HIF */
++	if (prAdapter->prGlueInfo->rHifInfo.HifRegBaseAddr) {
++		UINT_8 *p = prAdapter->prGlueInfo->rHifInfo.HifRegBaseAddr;
++
++		pr_info("t1100-hif[%s]: raw hif phy=0x%lx setup=0x%08x cmd52=0x%08x cmd53=0x%08x (cmd word: func=%u addr=0x%x cnt=%u rw=%u)\n",
++			tag, prAdapter->prGlueInfo->rHifInfo.HifRegPhyBase,
++			readl((void __iomem *)(p + 0x0)), readl((void __iomem *)(p + 0x4)),
++			readl((void __iomem *)(p + 0x1000)),
++			(UINT_32)((readl((void __iomem *)(p + 0x0)) >> 28) & 0x7),
++			(UINT_32)((readl((void __iomem *)(p + 0x0)) >> 9) & 0x1ffff),
++			(UINT_32)(readl((void __iomem *)(p + 0x0)) & 0x1ff),
++			(UINT_32)((readl((void __iomem *)(p + 0x0)) >> 31) & 0x1));
++	}
++}
++
+ #if CFG_ENABLE_FW_DIVIDED_DOWNLOAD
+ static WLAN_STATUS
+ wlanImageDividDownloadByEntry(IN P_ADAPTER_T prAdapter,
+@@ -404,6 +679,35 @@
+ }
+ 
+ /*----------------------------------------------------------------------------*/
++/*
++ * T1100 M55: warm CONSYS reset (AP_RGU CPU reset bit 0x10007018[12] with the
++ * 0x88 key, no SPM isolation / power gating).  MCU memory survives it, but the
++ * WLAN RAM image does not - the caller has to download again.
++ */
++int t1100_warm_reset;
++module_param(t1100_warm_reset, int, 0444);
++MODULE_PARM_DESC(t1100_warm_reset, "T1100: use the AP_RGU warm reset instead of whole-chip reset");
++static int t1100_redownloaded;
++
++void t1100_warm_reset_hw(void)
++{
++	void __iomem *r = ioremap(0x10007018, 4);
++	u32 v;
++
++	if (!r) {
++		pr_info("t1100: warm reset ioremap failed\n");
++		return;
++	}
++	v = readl(r);
++	writel(v | BIT(12) | (0x88u << 24), r);
++	mdelay(10);
++	v = readl(r);
++	writel((v & ~BIT(12)) | (0x88u << 24), r);
++	mdelay(50);
++	iounmap(r);
++	pr_info("t1100: warm reset done (AP_RGU bit12)\n");
++}
++
+ /*!
+ * \brief Initialize the adapter. The sequence is
+ *        1. Disable interrupt
+@@ -540,6 +844,7 @@
+ 		nicRxInitialize(prAdapter);
+ 
+ #if CFG_ENABLE_FW_DOWNLOAD
++t1100_redownload:
+ 		if (!kalFirmwareImageMapping(prAdapter->prGlueInfo, &prFwBuffer, &u4FwSize)) {
+ 			DBGLOG(INIT, ERROR, "No valid RAM code found!\n");
+ 			u4Status = WLAN_STATUS_FAILURE;
+@@ -600,42 +905,98 @@
+ #endif
+ 		kalFirmwareImageUnmapping(prAdapter->prGlueInfo, NULL, prFwBuffer);
+ 		DBGLOG(INIT, INFO, "FW download end\n");
++
++		/*
++		 * T1100 M20: ask the MCU itself what it thinks about the image it
++		 * just received (INIT_CMD_ID_QUERY_PENDING_ERROR). With
++		 * CFG_ENABLE_FW_DOWNLOAD_ACK=1 the normal path never does this.
++		 */
++		{
++			WLAN_STATUS u4QueryStatus = wlanImageQueryStatus(prAdapter);
++
++			pr_info("t1100-query: wlanImageQueryStatus() -> %u (0=ok)\n",
++				(UINT_32)u4QueryStatus);
++		}
++		t1100_hif_state(prAdapter, "after-download");
++
++		/*
++		 * T1100 M22: hand the ROMv4 patch to the MCU ROM before asking it
++		 * to jump into the WLAN RAM code (see t1100_rom_patch_send()).
++		 */
++		t1100_rom_patch_send(prAdapter);
++		t1100_hif_state(prAdapter, "after-rompatch");
+ #endif
+ 
+ 		/* 4. send Wi-Fi Start command */
+-#if CFG_OVERRIDE_FW_START_ADDRESS
+-		wlanConfigWifiFunc(prAdapter, TRUE, prRegInfo->u4StartAddress);
+-#else
+-		wlanConfigWifiFunc(prAdapter, FALSE, 0);
+-#endif
++		{
++			/*
++			 * T1100 M20: the image has two candidate entry points, one
++			 * per MCU memory of the divided image: section 1 (0xa5800,
++			 * MCU IRAM, what the vendor DT passes) and section 0
++			 * (0x020a1000, MCU DRAM). Try both and log cpupcr after
++			 * each, so the two can be compared in one run.
++			 */
++			static const UINT_32 au4Start[2] = { 0x000a5800, 0x020a1000 };
++			BOOLEAN fgReady = FALSE;
++			UINT_32 u4Try;
++
++			for (u4Try = 0; u4Try < 2 && fgReady == FALSE; u4Try++) {
++				UINT_32 u4Cpupcr = 0;
++
++				wlanGetCpupcr(&u4Cpupcr);
++				pr_info("t1100-start[%u]: addr=0x%08x cpupcr before 0x%08x\n",
++					u4Try, au4Start[u4Try], u4Cpupcr);
++
++				wlanConfigWifiFunc(prAdapter, TRUE, au4Start[u4Try]);
++
++				DBGLOG(INIT, TRACE, "Waiting for Ready bit..\n");
++				/* 4 <5> check Wi-Fi FW asserts ready bit */
++				i = 0;
++				while (1) {
++					HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Value);
++
++					if (u4Value & WCIR_WLAN_READY) {
++						DBGLOG(INIT, INFO, "Ready bit asserted\n");
++						fgReady = TRUE;
++						break;
++					} else if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE ||
++						   fgIsBusAccessFailed == TRUE) {
++						break;
++					} else if (i >= CFG_RESPONSE_POLLING_TIMEOUT) {
++						UINT_32 u4MailBox0;
+ 
+-		DBGLOG(INIT, TRACE, "Waiting for Ready bit..\n");
+-		/* 4 <5> check Wi-Fi FW asserts ready bit */
+-		i = 0;
+-		while (1) {
+-			HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Value);
++						nicGetMailbox(prAdapter, 0, &u4MailBox0);
++						DBGLOG(INIT, ERROR,
++						       "Waiting for Ready bit timeout, Device to Host MailBox 0x%x\n",
++						       (u4MailBox0 & 0x0000FFFF));
++						break;
++					}
+ 
+-			if (u4Value & WCIR_WLAN_READY) {
+-				DBGLOG(INIT, INFO, "Ready bit asserted\n");
+-				break;
+-			} else if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE || fgIsBusAccessFailed == TRUE) {
+-				u4Status = WLAN_STATUS_FAILURE;
+-				eFailReason = WAIT_FIRMWARE_READY_FAIL;
+-				break;
+-			} else if (i >= CFG_RESPONSE_POLLING_TIMEOUT) {
+-				UINT_32 u4MailBox0;
++					i++;
++					kalMsleep(10);
++				}
++
++				wlanGetCpupcr(&u4Cpupcr);
++				pr_info("t1100-start[%u]: addr=0x%08x cpupcr after 0x%08x ready=%u\n",
++					u4Try, au4Start[u4Try], u4Cpupcr, fgReady);
++				t1100_hif_state(prAdapter, "after-wifi-start");
++			}
++
++			if (fgReady == FALSE && t1100_warm_reset && !t1100_redownloaded) {
++				/* T1100 M55: the warm reset wipes the MCU RAM, so the
++				 * RAM image must be downloaded again before a second
++				 * WIFI_START. */
++				t1100_redownloaded = 1;
++				pr_info("t1100: WIFI_START failed, warm reset + re-download\n");
++				t1100_warm_reset_hw();
++				goto t1100_redownload;
++			}
+ 
+-				nicGetMailbox(prAdapter, 0, &u4MailBox0);
+-				DBGLOG(INIT, ERROR, "Waiting for Ready bit timeout, Device to Host MailBox 0x%x\n",
+-				       (u4MailBox0 & 0x0000FFFF));
++			if (fgReady == FALSE) {
+ 				u4Status = WLAN_STATUS_FAILURE;
+ 				eFailReason = WAIT_FIRMWARE_READY_FAIL;
+ 				GL_RESET_TRIGGER(prAdapter, RST_FLAG_DO_CORE_DUMP | RST_FLAG_PREVENT_POWER_OFF);
+-				break;
+ 			}
+-
+-			i++;
+-			kalMsleep(10);
+ 		}
+ 
+ 		if (u4Status == WLAN_STATUS_SUCCESS) {
+@@ -689,7 +1050,7 @@
+ 
+ 		/* Power state initialization */
+ 		prAdapter->fgWiFiInSleepyState = FALSE;
+-		prAdapter->rAcpiState = ACPI_STATE_D0;
++		prAdapter->rAcpiState = WLAN_ACPI_STATE_D0;
+ 
+ 		/* Online scan option */
+ 		if (prRegInfo->fgDisOnlineScan == 0)
+@@ -958,6 +1319,42 @@
+ 	UINT_8 __iomem *prWifiEmiBaseAddr;
+ #endif
+ 
++	/*
++	 * T1100 debug: the download itself is otherwise invisible, and the
++	 * sections are addressed by their own u4DestAddr (entries >= 2 go to
++	 * EMI through ioremap(gConEmiPhyBase)), *not* to the DT load address
++	 * "hardware-values[1]". Print the table so EMI can be checked at the
++	 * real destinations. Deliberately no EMI read-back here: an out-of-range
++	 * destination would fault inside the driver (the ioremap window is
++	 * WIFI_EMI_AVAILABLE_MEM_SIZE, the bound check uses WIFI_EMI_MEM_SIZE).
++	 */
++	pr_info("t1100-fw: entries=%u secsz=%zu\n",
++		prFwHead->u4NumOfEntries, sizeof(prFwHead->arSection[0]));
++	for (i = 0; i < prFwHead->u4NumOfEntries && i < 16; i++)
++		pr_info("t1100-fw: sec[%u] dest=0x%08x len=%u off=0x%x enc=%u\n",
++			i, prFwHead->arSection[i].u4DestAddr,
++			prFwHead->arSection[i].u4Length,
++			prFwHead->arSection[i].u4Offset,
++			prFwHead->arSection[i].ucEnc);
++
++	/*
++	 * T1100 debug: the download itself is otherwise invisible, and the
++	 * sections are addressed by their own u4DestAddr (entries >= 2 go to
++	 * EMI through ioremap(gConEmiPhyBase)), *not* to the DT load address
++	 * "hardware-values[1]". Print the table so EMI can be checked at the
++	 * real destinations. Deliberately no EMI read-back here: an out-of-range
++	 * destination would fault inside the driver (the ioremap window is
++	 * WIFI_EMI_AVAILABLE_MEM_SIZE, the bound check uses WIFI_EMI_MEM_SIZE).
++	 */
++	pr_info("t1100-fw: entries=%u secsz=%zu\n",
++		prFwHead->u4NumOfEntries, sizeof(prFwHead->arSection[0]));
++	for (i = 0; i < prFwHead->u4NumOfEntries && i < 16; i++)
++		pr_info("t1100-fw: sec[%u] dest=0x%08x len=%u off=0x%x enc=%u\n",
++			i, prFwHead->arSection[i].u4DestAddr,
++			prFwHead->arSection[i].u4Length,
++			prFwHead->arSection[i].u4Offset,
++			prFwHead->arSection[i].ucEnc);
++
+ 	/* engage divided firmware downloading */
+ 	/* DLM + ILM */
+ 	for (i = 0; i < prFwHead->u4NumOfEntries && i < ENTRY_DIRECTLY_TO_CHIP; i++) {
+@@ -977,7 +1374,7 @@
+ 	}
+ 
+ 	kalSetEmiMpuProtection(gConEmiPhyBase, WIFI_EMI_MEM_SIZE, FALSE);
+-	prWifiEmiBaseAddr = ioremap_nocache(gConEmiPhyBase, WIFI_EMI_AVAILABLE_MEM_SIZE);
++	prWifiEmiBaseAddr = ioremap(gConEmiPhyBase, WIFI_EMI_AVAILABLE_MEM_SIZE);
+ 
+ 	/* IEMI + DEMI */
+ 	for (i = ENTRY_DIRECTLY_TO_CHIP; i < prFwHead->u4NumOfEntries; i++) {
+@@ -1081,7 +1478,7 @@
+ 
+ #endif
+ 
+-	if (prAdapter->rAcpiState == ACPI_STATE_D0 &&
++	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D0 &&
+ 	    !wlanIsChipNoAck(prAdapter) && !kalIsCardRemoved(prAdapter->prGlueInfo)) {
+ 		UINT_32 u4RegValue = 0;
+ 		UINT_32 u4RegValueNew = 0;
+@@ -2708,6 +3105,10 @@
+ 		/* 7. Wait for INIT_EVENT_ID_CMD_RESULT */
+ 		u4Status = wlanImageSectionDownloadStatus(prAdapter, ucCmdSeqNum);
+ #endif
++		pr_info("t1100-mcif: section-config dst=0x%08x len=%u reset=%u -> status=%u (0=ok)\n",
++			u4DestAddr, u4ImgSecSize, fgReset, u4Status);
++		if (fgReset)
++			t1100_dump_mcr(prAdapter, "after-first-section-config");
+ 		break;
+ 	}
+ 
+@@ -2865,7 +3266,13 @@
+ 	}
+ }
+ 
+-#if !CFG_ENABLE_FW_DOWNLOAD_ACK
++/*
++ * T1100: compiled unconditionally. With CFG_ENABLE_FW_DOWNLOAD_ACK=1 the
++ * driver never learns what the MCU thinks about the image it just received,
++ * which is exactly the information missing at the "READY never asserts" step
++ * (docs/wifi-port-log.md §32). wlanAdapterStart() calls it once for the log.
++ */
++#if 1 /* was: #if !CFG_ENABLE_FW_DOWNLOAD_ACK */
+ /*----------------------------------------------------------------------------*/
+ /*!
+ * @brief This function is called to confirm previously firmware download is done without error
+@@ -2985,7 +3392,8 @@
+ 	return u4Status;
+ }
+ 
+-#else
++#endif /* T1100: was #else - the ACK path below is independent of the query */
++#if CFG_ENABLE_FW_DOWNLOAD_ACK
+ /*----------------------------------------------------------------------------*/
+ /*!
+ * @brief This function is called to confirm the status of
+@@ -3119,10 +3527,14 @@
+ 			continue;
+ 		}
+ 		/* 5.2 Send CMD Info Packet */
++		t1100_dump_mcr(prAdapter, "before-wifi-start");
+ 		if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			DBGLOG(INIT, ERROR, "Fail to transmit WIFI start command\n");
+ 		}
++		pr_info("t1100-mcif: WIFI_START override=%u addr=0x%08x seq=%u -> status=%u\n",
++			fgEnable, u4StartAddress, ucCmdSeqNum, u4Status);
++		t1100_dump_mcr(prAdapter, "after-wifi-start");
+ 
+ 		break;
+ 	};
+@@ -4754,8 +5166,8 @@
+ *
+ * @param prAdapter      Pointer of Adapter Data Structure
+ *
+-* @return ACPI_STATE_D0 Normal Operation Mode
+-*         ACPI_STATE_D3 Suspend Mode
++* @return WLAN_ACPI_STATE_D0 Normal Operation Mode
++*         WLAN_ACPI_STATE_D3 Suspend Mode
+ */
+ /*----------------------------------------------------------------------------*/
+ ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
+@@ -4770,8 +5182,8 @@
+ * @brief This function is to update current ACPI state only
+ *
+ * @param prAdapter      Pointer of Adapter Data Structure
+-* @param ePowerState    ACPI_STATE_D0 Normal Operation Mode
+-*                       ACPI_STATE_D3 Suspend Mode
++* @param ePowerState    WLAN_ACPI_STATE_D0 Normal Operation Mode
++*                       WLAN_ACPI_STATE_D3 Suspend Mode
+ *
+ * @return none
+ */
+@@ -4779,7 +5191,7 @@
+ VOID wlanSetAcpiState(IN P_ADAPTER_T prAdapter, IN ENUM_ACPI_STATE_T ePowerState)
+ {
+ 	ASSERT(prAdapter);
+-	ASSERT(ePowerState <= ACPI_STATE_D3);
++	ASSERT(ePowerState <= WLAN_ACPI_STATE_D3);
+ 
+ 	prAdapter->rAcpiState = ePowerState;
+ }
+diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
+--- a/os/linux/gl_rst.c	2026-11-13 13:43:47.039525612 +0000
++++ b/os/linux/gl_rst.c	2026-11-13 13:43:47.040374781 +0000
+@@ -221,10 +221,31 @@
+ 	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
+ }
+ 
++extern int t1100_no_reset;
++
++extern int t1100_warm_reset;
++extern void t1100_warm_reset_hw(void);
++
+ BOOLEAN glResetTrigger(P_ADAPTER_T prAdapter, UINT_32 u4RstFlag, const PUINT_8 pucFile, UINT_32 u4Line)
+ {
+ 	BOOLEAN fgResult = TRUE;
+ 
++	if (t1100_warm_reset) {
++
++		DBGLOG(INIT, ERROR,
++		       "T1100: warm reset instead of whole-chip reset (%s line %u)\n",
++		       pucFile, u4Line);
++		t1100_warm_reset_hw();
++		return TRUE;
++	}
++
++	if (t1100_no_reset) {
++		DBGLOG(INIT, ERROR,
++		       "T1100: whole-chip reset suppressed (t1100_no_reset=1), %s line %u\n",
++		       pucFile, u4Line);
++		return TRUE;
++	}
++
+ 	if (fgIsResetting || fgResetTriggered) {
+ 		DBGLOG(INIT, ERROR,
+ 		       "Skip trigger whole-chip reset in %s line %u, during resetting! Chip[%04X E%u]\n",

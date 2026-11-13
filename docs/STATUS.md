@@ -4099,3 +4099,15 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   Ready bit timeout`, `cpupcr` в assert-адресах → `wlanProbe -5`, `wlan0` нет.
 - Патчи: `0014` обновлён, новый `0017-common-warm-reset-and-mt6771-platform.patch`.
   Модуль `wmt_drv` `47ad7db4…`.
+
+## 13.11 (46): M55 — тёплый сброс в WLAN + перезакачка: секции падают на первой конфигурации
+
+- `t1100_warm_reset` в `wlan_drv_gen3`: `t1100_warm_reset_hw()` (AP_RGU bit12) в
+  `glResetTrigger` и повторный download при неудачном `WIFI_START`.
+- `WIFI_START` уходит на `0x000a5800` (seq 6) и `0x020a1000` (seq 7), оба `status=0`;
+  `READY=0`, `WCIR=0x00100788`, `WASR=0x00000300`, `mbox0=0x02000020`, `cpupcr 0x14f08`.
+- Перезакачка стартует, но падает: `Firmware download configuration failed! idx 0,
+  dst 0x020a1000, len 28032` — после AP_RGU-сброса STP/WMT не переинициализирован
+  (сброс делается из wlan-модуля). Плюс `glResetTrigger` сбрасывает чип **во время download**.
+- Модули: `wmt_drv` `47ad7db4…`, `wlan_drv_gen3` `6df08e83…`, `mtk_btif_drv` `e29eaecb…`.
+  Новый `0018-wlan-warm-reset-and-redownload.patch`; `wlan0` нет.
