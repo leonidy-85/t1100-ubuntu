@@ -3431,3 +3431,41 @@ ROM подтверждает фрагменты 1…229 и **молчит на 2
 `read patch info:0x%02x × 4`; возможно, для ROMv4 нужен ещё `u4PatchType`
 (`0x0fe3ffff` из заголовка), без которого ROM отбрасывает хвост. Факты —
 `refs/m32-best-effort-reset.md`.
+
+## 55. M33: последний фрагмент уходит целиком, `u4PatchType` ядру не нужен (13.11)
+
+### 55.1 Трассировка TX (п.1)
+
+Инструментированы `mtk_wcn_consys_stp_btif_tx()` (печать кадров ≥256 Б) и цикл
+патча:
+
+```
+[36.214] [STP-BTIF] t1100: stp->btif len=366 written=366
+[36.218] [STP-BTIF] t1100: stp->btif len=347 written=347   ← последний фрагмент
+[38.373] [WMT-IC]  t1100: reset ack: no
+```
+
+`347 = 4 (STP hdr) + 5 (WMT PATCH_CMD) + 336 (тело) + 2 (CRC)`;
+`written=347` ⇒ кадр принят BTIF целиком, ветки `recovered`/`write fail` не
+срабатывали. **Обрезки нет** — ROM действительно игнорирует 230-й фрагмент.
+
+### 55.2 Patch info (п.2)
+
+`struct wmt_rom_patch` (`wmt_core.h:428`): `ucDateTime[16] | ucPLat[4] |
+u2HwVer | u2SwVer | u4PatchAddr=0x00098022 | u4PatchType=0x0fe3ffff | u4CRC[4]`.
+Ядро из userspace берёт **только 4 байта адреса**
+(`ctrlData.au4CtrlData[2] = (SIZE_T)&addressByte`), а `addressByte` идёт лишь в
+`WMT_PATCH_P_ADDRESS_CMD[12..15]`; `u4PatchType` в ядре не используется нигде
+(метаданные `srh_rom_patch`). Наш загрузчик передаёт ровно то же ⇒ гипотеза
+закрыта.
+
+### 55.3 Вывод
+
+Патч передан (230/230, последний кадр целый), reset best-effort (`ack: no`),
+`cpupcr` в ROM-диапазоне — что нормально и для пропатченного ROM. Стек доходит
+до `nicpmSetDriverOwn` (`DRIVER OWN, status=0 count=513`) и падает на READY=0;
+`wlan0` нет.
+
+Один следующий шаг: прочитать через работающий WMT `REG_READ` (opcode `0x08`)
+слова по адресу патча `0x00098022` и сравнить с телом файла (offset 48) —
+ответит, применён ли патч. Факты: `refs/m33-last-fragment-and-patchinfo.md`.
