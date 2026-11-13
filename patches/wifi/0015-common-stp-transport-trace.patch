@@ -1,0 +1,109 @@
+diff -u -r a/common_main/linux/stp_btif.c b/common_main/linux/stp_btif.c
+--- a/common_main/linux/stp_btif.c	2026-11-13 13:07:20.617022287 +0000
++++ b/common_main/linux/stp_btif.c	2026-11-13 13:07:20.618036289 +0000
+@@ -57,6 +57,55 @@
+ ********************************************************************************
+ */
+ struct stp_btif g_stp_btif;
++/*
++ * T1100 M50: STP frame / BTIF transport trace.  The vendor stack has no padding
++ * and no CRC over anything but the payload, so the only remaining difference on
++ * the wire can be shown here: full frame hex (STP header + payload + 2 CRC),
++ * the BTIF LSR/IIR before and after the write and the count actually written.
++ */
++#include <linux/io.h>
++#include <linux/module.h>
++
++#define T1100_BTIF_PA 0x1100c000
++#define T1100_BTIF_LSR 0x14
++#define T1100_BTIF_IIR 0x08
++
++static int t1100_stp_trace;
++module_param(t1100_stp_trace, int, 0444);
++MODULE_PARM_DESC(t1100_stp_trace, "T1100: trace STP frames and BTIF TX state");
++static int t1100_frame_hex = 1;
++module_param(t1100_frame_hex, int, 0444);
++MODULE_PARM_DESC(t1100_frame_hex, "T1100: full hex of every short frame + first long frame");
++/* only the ROMv4 patch download path may be re-sent (set in wmt_ctrl.c) */
++extern int t1100_patch_active;
++static int t1100_trace_all;
++module_param(t1100_trace_all, int, 0444);
++MODULE_PARM_DESC(t1100_trace_all, "T1100: trace every STP frame, not just short ones");
++static int t1100_tail_resend;
++module_param(t1100_tail_resend, int, 0444);
++MODULE_PARM_DESC(t1100_tail_resend, "T1100: resend short frames (100..199 B) N times");
++
++static void __iomem *t1100_btif;
++static int t1100_big_dumped;
++
++static u32 t1100_btif_reg(u32 off)
++{
++	if (!t1100_btif)
++		t1100_btif = ioremap(T1100_BTIF_PA, 0x1000);
++	return t1100_btif ? readl(t1100_btif + off) : 0;
++}
++
++static void t1100_stp_dump(const PUINT8 b, UINT32 len)
++{
++	UINT32 off;
++
++	for (off = 0; off < len; off += 32) {
++		UINT32 n = (len - off) > 32 ? 32 : (len - off);
++
++		WMT_INFO_FUNC("t1100: stpx %03u/%u %*phN\n", off, len, (int)n, b + off);
++	}
++}
++
+ /*******************************************************************************
+ *                           P R I V A T E   D A T A
+ ********************************************************************************
+@@ -156,6 +205,21 @@
+ 
+ 	*written_len = 0;
+ 
++	if (t1100_stp_trace && len > 4 &&
++	    (t1100_trace_all || len < 200 || !t1100_big_dumped)) {
++		WMT_INFO_FUNC("t1100: stp tx len=%u hdr=%02x %02x %02x %02x crc=%02x %02x lsr=0x%08x iir=0x%08x\n",
++			      len, pBuf[0], pBuf[1], pBuf[2], pBuf[3],
++			      pBuf[len - 2], pBuf[len - 1],
++			      t1100_btif_reg(T1100_BTIF_LSR),
++			      t1100_btif_reg(T1100_BTIF_IIR));
++		if (t1100_frame_hex && (len > 16) &&
++		    (len < 200 || !t1100_big_dumped)) {
++			t1100_stp_dump(pBuf, len);
++			if (len >= 200)
++				t1100_big_dumped = 1;
++		}
++	}
++
+ 	if (len > STP_MAX_PACKAGE_ALLOWED) {
+ 		WMT_WARN_FUNC("abnormal pacage length,len(%d),pid[%d/%s]\n", len, current->pid, current->comm);
+ 		return -2;
+@@ -167,6 +231,27 @@
+ 		*written_len = 0;
+ 		return -3;
+ 	}
++	if (t1100_stp_trace)
++		WMT_INFO_FUNC("t1100: stp tx done len=%d written=%d lsr=0x%08x iir=0x%08x\n",
++			      len, wr_count, t1100_btif_reg(T1100_BTIF_LSR),
++			      t1100_btif_reg(T1100_BTIF_IIR));
++
++	if (wr_count == len && t1100_tail_resend > 0 && t1100_patch_active &&
++	    len >= 100 && len < 200 &&
++	    ((((pBuf[1] & 0x0f) << 8) | pBuf[2]) + 6 == (int)len)) {
++		int i;
++		int w2;
++
++		for (i = 1; i <= t1100_tail_resend; i++) {
++			osal_sleep_ms(100);
++			w2 = mtk_wcn_btif_write(g_stp_btif.stpBtifId, pBuf, len);
++			WMT_INFO_FUNC("t1100: tail resend %d/%d len=%u wrote=%d lsr=0x%08x iir=0x%08x\n",
++				      i, t1100_tail_resend, len, w2,
++				      t1100_btif_reg(T1100_BTIF_LSR),
++				      t1100_btif_reg(T1100_BTIF_IIR));
++		}
++	}
++
+ 	if (wr_count == len) {
+ 		/*perfect case */
+ 		*written_len = wr_count;
