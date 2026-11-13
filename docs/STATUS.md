@@ -3677,3 +3677,17 @@ RNDIS-гаджету), делать при физическом доступе �
 - `cpupcr=0x14ee4`, READY=0, `wlan0` нет. Патч не применён (область читалась
   нулями), передача переводит ROM в необслуживаемое состояние. Следующий шаг —
   проверить восстановление после power-cycle CONSYS (`refs/m35-control-readback.md`).
+
+## 13.11 (25): M36 — вендор домен после патча не сбрасывает; наш power-cycle STP не оживил
+
+- По коду вендора (`wmt_ic_soc.c:1283-1330`) после `mtk_wcn_soc_patch_dwn()`
+  идут только `WMT_STEP`-хук (пуст в продукте) и `init_table_3`
+  (`WMT_RESET_CMD`); `consys_hw_reset_bit_set`/`consys_hw_pwr_ctrl`/
+  `wmt_lib_hw_rst` **не вызываются**.
+- Наш `t1100_pwr_cycle_after_patch` реально погасил и поднял домен
+  (`CONSYS-HW-PWR-OFF/ON`, `cpupcr` 0 после сброса), но `REG_READ` всё равно
+  `ret -3` — и по адресу патча, и по контролю `GEN_HCR`.
+- Причина по коду: после сброса чипа STP-состояние хоста не переинициализировано
+  (`txseq`/`stp_en`, заморожены через `t1100_patch_active`). Следующий шаг —
+  пройти `wmt_core_stp_init()` после power-cycle и повторить `hw_check`
+  (`refs/m36-power-cycle-after-patch.md`).
