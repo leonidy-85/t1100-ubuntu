@@ -61,14 +61,15 @@
 
 ## Текущее состояние платы (14.11)
 
-- `boot_a` = `build/boot_nonwifi_pga.img` (md5 p29
-  `ab00fd42c039c23a06f36b584775fcfe`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+- `boot_a` = `build/boot_nonwifi_battery.img` (md5 p29
+  `0b64a8aff662af3e295eb46aaadb047f`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
   (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
   `schedutil`) и CPU thermal zone (0064: 80/90/115 °C, throttling
   проверен). Wi-Fi в этот образ не включён. Type-C dual-role (0066/0067):
   host с флешкой работает, VBUS 5.05 В / 2.4 А, возврат host→device через
-  helper `t1100-usb-role` без перезагрузки. SVS пока выключен;
+  helper `t1100-usb-role` без перезагрузки. Батарея: ёмкость по OCV
+  (0069), при 3.77 В — 27 %. SVS пока выключен;
   efuse-калибровка MT6771 не декодируется, thermal использует дефолтные
   коэффициенты (см. STATUS 13.11 (10), 14.11 (1)).
 - **Suspend:** `systemctl suspend` работает через s2idle (`SuspendState=freeze`).

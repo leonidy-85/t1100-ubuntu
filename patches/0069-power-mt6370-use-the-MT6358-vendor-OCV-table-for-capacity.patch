@@ -1,0 +1,34 @@
+From 8ec6e1f0c2292f57dc4754b8d1cbaa1130498ee0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=D0=90=D0=BD=D0=B4=D1=80=D0=B5=D0=B9=20=D0=9C=D0=B0=D1=80?=
+ =?UTF-8?q?=D0=BA=D0=B8=D0=BD?= <py6on@yandex.ru>
+Date: Sat, 14 Nov 2026 01:02:46 +0300
+Subject: [PATCH] power: mt6370: use the MT6358 vendor OCV table for capacity
+
+---
+ drivers/power/supply/mt6370-charger.c | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/power/supply/mt6370-charger.c b/drivers/power/supply/mt6370-charger.c
+index 587bcf2..e9564ff 100644
+--- a/drivers/power/supply/mt6370-charger.c
++++ b/drivers/power/supply/mt6370-charger.c
+@@ -573,10 +573,12 @@ static int mt6370_chg_get_property(struct power_supply *psy,
+  * counter, enough for UPower/PowerDevil).
+  */
+ static const struct { int mv; int pct; } t1100_ocv[] = {
+-	{ 4400, 100 }, { 4300, 95 }, { 4200, 88 }, { 4100, 80 },
+-	{ 4000, 70 }, { 3900, 60 }, { 3800, 50 }, { 3750, 45 },
+-	{ 3700, 40 }, { 3650, 33 }, { 3600, 25 }, { 3500, 15 },
+-	{ 3400, 8 }, { 3300, 3 }, { 3000, 0 },
++	{ 4337, 100 }, { 4255, 95 }, { 4195, 90 }, { 4140, 85 },
++	{ 4090, 80 }, { 4038, 75 }, { 3975, 70 }, { 3947, 65 },
++	{ 3901, 60 }, { 3861, 55 }, { 3833, 50 }, { 3816, 45 },
++	{ 3799, 40 }, { 3786, 35 }, { 3776, 30 }, { 3766, 25 },
++	{ 3749, 20 }, { 3722, 15 }, { 3698, 10 }, { 3655, 5 },
++	{ 3372, 0 },
+ };
+ 
+ static int t1100_ocv_to_pct(int mv)
+-- 
+2.53.0
+
