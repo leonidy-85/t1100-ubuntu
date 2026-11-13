@@ -3549,3 +3549,17 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
 - Осталось: пост-патчевый «WMT reset» (`init_table_3`) падает
   (`cmd len err(-2, 5)`), `cpupcr` в ROM (`0x14xxx` < `0xa5800`), `WLAN_READY=0`,
   `wlan0` нет. Артефакты — `refs/m29-btif-early-probe.md`, §51 журнала.
+
+## 13.11 (17): M30 — `-2` = STP закрыт (assert после таймаута RX патча); блокер — «wmt reset» без ответа
+
+- `-2` и `err(-2,5)` расшифрованы: `wmt_ctrl_tx_ex` «STP is not enabled»; STP
+  закрывал in-band assert, который вызывал таймаут RX на последнем фрагменте
+  патча. На последнем фрагменте RX больше не читается (+пауза 100 мс), у
+  `init_table_3` 3 попытки — `-2` ушёл.
+- Патч по-прежнему доставляется целиком (`ROMv4 patch download -> 0`), но ROM не
+  отвечает на `WMT_RESET_CMD {01 07 01 00 04}` (`rx:0`) → assert → STP закрыт →
+  `init_table_3 fail`; `cpupcr=0x14eea` (ROM), `WLAN_READY=0`, `wlan0` нет.
+- BTIF здоров: `IER=1`, `IIR=1`, `LSR=0x60`, IRQ 395 = 94 028 (RX шёл),
+  `IFR0=0x1befff5d` (клок открыт). Следующее: прогон без reset
+  (`t1100_skip_reset`) и/или подавление assert на время патча —
+  `refs/m30-wmt-reset-blocker.md`, §52 журнала.
