@@ -4085,3 +4085,17 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
 - С флагом дамп присылает 1 пакет вместо 34, `[core dump end]` не появляется, страниц нет,
   `hwcode -3`, `wmt reset -1`, `1_0 → -1`; `hwcode 0x788` — только после power-cycle.
 - `0014`/`0016` обновлены. Модуль `wmt_drv` `f26f6158…`; `wlan0` нет.
+
+## 13.11 (45): M54 — тёплый AP_RGU-сброс; `1_0` доставлен, оба reset ack: yes
+
+- `consys_hw_warm_reset()` (только `0x10007018` bit12 + key 0x88, без SPM iso/power-gate)
+  в обход `wmt_lib_cmb_rst`; после него чип отвечает (`hwcode 0x788 ret 0`), STP-reinit
+  `0/0/0/0`, `WMT_RESET` проходит (`reset ack: yes`).
+- `1_0` (229356 Б, addr 22800900) **доставлен**: `download -> 0`, `reset ack after patch 1: yes`
+  — впервые оба файла набора уложены в одном сеансе без полного цикла питания.
+- `patchmark[0xf0078000]` и `[0x80098020]` читаются (`ret 0`), но нули — метка не в них;
+  критерий «патч жив» выполнен приёмом `1_0`.
+- WLAN: `WCIR=0x00100788` (бит21 READY=0), `mbox0=0x02000020`, `wlanAdapterStart: Waiting for
+  Ready bit timeout`, `cpupcr` в assert-адресах → `wlanProbe -5`, `wlan0` нет.
+- Патчи: `0014` обновлён, новый `0017-common-warm-reset-and-mt6771-platform.patch`.
+  Модуль `wmt_drv` `47ad7db4…`.
