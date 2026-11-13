@@ -4612,3 +4612,16 @@ shutdown не может добить процесс `rmmod wmt_drv/wlan_drv_gen
 - После неудачи наш reset-путь: `hwcode poll timeout, continue` → `patch 0/2 -> -1` → `rc=-1`,
   повторный probe `-5`. Ребута не было, лог целый (6120 строк).
 - Модуль `wmt_drv` `d3b83212…`; `wlan_drv_gen3` `3af8c62a…`; `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (66): M71 — разбор handshake: `WCIR` держит **POR** (бит20), driver-own пишется неверно
+
+- Регистры: `WCIR=0x00100788` → бит20 `WCIR_POR_INDICATOR` = **1** (чип в состоянии POR),
+  бит21 `WCIR_WLAN_READY` = 0. `mbox0=0x02000020` (`MCR_D2HRM0R` = 0x78 — слово статуса от
+  прошивки, младшие 16 бит = 0x20). `MCR_WHLPCR` до правки = **0x00000100**
+  (`WHLPCR_IS_DRIVER_OWN` = BIT8 уже стоял).
+- Правка `t1100_driver_own`: запись `WHLPCR_FW_OWN_REQ_CLR` (BIT9) + `WHLPCR_IS_DRIVER_OWN`
+  привела к `WHLPCR 0x100 -> 0x000` — то есть мы **сняли** владение вместо удержания;
+  `WCIR` не изменился (`0x00100788`), READY не встал.
+- Прогон: секция `idx0` снова `0xC0000001` (после нашего reset-пути MCU мёртв), `WIFI_START`
+  `0x000a5800`/`0x020a1000 -> status=0`, `cpupcr=0x26b2`, `wlan0` нет.
+- Модуль `wlan_drv_gen3` `6a00e0e8…`; `wmt_drv` `d3b83212…`; `mtk_btif_drv` `e29eaecb…`.
