@@ -1,0 +1,38 @@
+; stock wmt_ctrl_rx — timeout for the EVT (WMT_LIB_RX_TIMEOUT=2000ms, /4=500ms x4 when WMT driver is FUNC_ON)
+01a2f0: 0c0080d2   mov      x12, #0   ; RELOC .rodata.str1.1+0x224c2 "[HIF-SDIO][I]%s:check rx pending data(%d)\n"
+01a2f4: 130080d2   mov      x19, #0   ; RELOC .rodata.str1.1+0x26a "wmt_ctrl_rx"
+01a2f8: 0d0080d2   mov      x13, #0   ; RELOC .rodata.str1.1+0xc3ef "[HIF-SDIO][I]%s:stp has pending data, extend ~4 seconds\n"
+01a2fc: 0a0080d2   mov      x10, #0   ; RELOC .bss+0x302c8
+01a31c: 08fa8052   mov      w8, #0x7d0
+01a320: 893e8052   mov      w9, #0x1f4
+01a340: da069f1a   csinc    w26, w22, wzr, eq
+01a344: 3c01881a   csel     w28, w9, w8, eq
+; ---- 4000 ms extension when STP still has pending data ----
+01a520: 00000094   bl       #0x1a520   ; RELOC .text+0x4f51c
+01a524: e81740f9   ldr      x8, [sp, #0x28]
+01a528: 09f48152   mov      w9, #0xfa0
+01a52c: a1a300d1   sub      x1, x29, #0x28
+01a530: e00316aa   mov      x0, x22
+01a534: 080140b9   ldr      w8, [x8]
+01a538: 3a09c81a   udiv     w26, w9, w8
+01a53c: 00000094   bl       #0x1a53c   ; RELOC .text+0x4fc50
+01a540: 28008052   mov      w8, #1
+01a544: 09000014   b        #0x1a568
+; ---- timeout report + poll_cpupcr(5,1,1) ----
+01a680: e80300f9   str      x8, [sp]
+01a684: 00000094   bl       #0x1a684   ; RELOC .text+0x4f320
+01a688: a0008052   mov      w0, #5
+01a68c: 21008052   mov      w1, #1
+01a690: 22008052   mov      w2, #1
+01a694: 00000094   bl       #0x1a694   ; RELOC .text+0x670e4
+01a698: 680340b9   ldr      w8, [x27]
+01a69c: f40f40b9   ldr      w20, [sp, #0xc]
+01a6a0: e801f837   tbnz     w8, #0x1f, #0x1a6dc
+01a6a4: 080080d2   mov      x8, #0   ; RELOC +0x0
+01a6b4: 030140f9   ldr      x3, [x8]
+01a6b8: e81740f9   ldr      x8, [sp, #0x28]
+01a6bc: 000080d2   mov      x0, #0   ; RELOC .rodata.str1.1+0x21ddb "[HIF-SDIO][E]%s(%d):wmt_dev_rx_timeout: timeout,jiffies(%lu),timeoutvalue(%d)\n"
+01a6c8: 040140b9   ldr      w4, [x8]
+01a6d0: c2268052   mov      w2, #0x136
+01a6d4: e10313aa   mov      x1, x19
+01a6d8: 00000094   bl       #0x1a6d8   ; RELOC .text+0x4f320
