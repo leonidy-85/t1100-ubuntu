@@ -4838,3 +4838,16 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Зависимость `kdialog` установлена на планшет (apt). Пользователь проверил
   кнопку «Динамик»: `HPL/HPR Mux=1`, `Speaker Switch=on`; окно работает.
 - p29 `build/boot_nonwifi_amp.img` md5 `61e08a8b…`; HEAD до коммита `2dd6a37`.
+
+## 14.11 (7): UI «USB режим»
+
+- Добавлено KDialog-приложение `Аудиовыход` (`/usr/local/bin/t1100-audio-ui`) —
+  переключение динамик/наушники; и `USB режим` (`/usr/local/bin/t1100-usb-ui`) —
+  переключение USB host/device.
+- `USB host` вызывает `t1100-usb-role host` и предупреждает, что RNDIS/SSH
+  пропадут; `USB device` возвращает peripheral, размонтирует `/dev/sd*` и
+  останавливает xHCI.
+- Для KDialog на планшете установлен пакет `kdialog`; при пересборке rootfs
+  его нужно добавить в образ.
+- Текущий p29 `build/boot_nonwifi_amp.img` md5 `61e08a8b…`; вручную проверены
+  динамик/наушники (Speaker Switch off глушит динамик) и USB host с флешкой.
