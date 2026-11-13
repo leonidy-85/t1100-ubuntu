@@ -3348,3 +3348,44 @@ IRQ 395 = 94 028 (RX работал), `IFR0=0x1befff5d` (клок открыт),
 `init_table_3` (`t1100_skip_reset=1`) с замером `cpupcr` сразу после патча; если
 нет — на время патча подавить `wmt_lib_trigger_assert` и увеличить таймаут RX
 для reset, чтобы ретраи доходили. Подробности: `refs/m30-wmt-reset-blocker.md`.
+
+## 53. M31: `wmt_loader`/mt6765 не знают иной «start»-команды; reset всё ещё без ответа (13.11)
+
+### 53.1 Стоковые бинари
+
+`/home/l/aurora_root.img` → `/vendor/bin`:
+
+* `wmt_loader` (11 696 Б): только `/dev/wmtdetect`, `ioctl`,
+  `/proc/driver/wmt_dbg` — чип-id + `DO_MODULE_INIT`, никаких патч-команд;
+* `wmt_launcher` (33 864 Б): `srh_rom_patch`, `srh_patch`, `/dev/stpwmt`,
+  `patch info:0x%02x,…`, `read patch info:0x%02x,…`, `rom patch type = [%d]`,
+  **«Stp Mode is not set, common interface use default: BTIF Mode»**.
+  Отдельной «start patch» команды нет: userspace отдаёт имя файла и 4 байта
+  адреса, а старт делает ядро `WMT_RESET_CMD`.
+
+### 53.2 mt6765
+
+`mt6765.c:681` → `consys_dl_rom_patch()` (EMI-путь), после чего тот же
+`init_table_3` → `WMT_RESET_CMD {0x01,0x07,0x01,0x00,0x04}`. Альтернативного
+payload в публичном коде нет.
+
+### 53.3 `P_ADDRESS` подтверждён
+
+В `mtk_wcn_soc_normal_patch_dwn` обе address-команды идут до цикла и любая
+ошибка даёт `return -1`; мы доходим до `patch dwn:0` (230/230) ⇒
+`WMT_PATCH_ADDRESS_EVT` и `WMT_PATCH_P_ADDRESS_EVT` получены.
+
+### 53.4 Reset: подавление assert не помогло
+
+Сделано: `t1100_patch_active` (не звать `wmt_lib_trigger_assert`),
+`mtk_wcn_stp_set_wmt_trg_assert(0)` перед каждой попыткой, 3 попытки по 200 мс.
+Результат тот же: `read (wmt reset) … rx:0` → `write … iRet(-2)` ×2 →
+`init_table_3 fail`, `cpupcr=0x14ef8`. STP-состояние сбрасывает
+coredump/assert-путь WMT (`mtk_wcn_stp_coredump_start_ctrl: set f/w assert (0)/(1)`
+→ `wmt_lib_hw_rst` чистит `WMT_STAT_STP_OPEN/EN`), поэтому ретраи не доходят до
+чипа.
+
+Следующий шаг: заглушить на время патча весь coredump/assert-путь
+(`wmt_core_set_coredump_state`, `mtk_wcn_stp_coredump_start_ctrl`,
+`wmt_lib_hw_rst`), чтобы STP дожил до 2-й попытки reset.
+Подробности: `refs/m31-wmt-loader-and-reset.md`.
