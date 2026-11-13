@@ -1,0 +1,32 @@
+diff -u -r a/common_main/core/stp_core.c b/common_main/core/stp_core.c
+--- a/common_main/core/stp_core.c	2026-11-13 13:18:35.494016322 +0000
++++ b/common_main/core/stp_core.c	2026-11-13 13:18:35.494972564 +0000
+@@ -2331,6 +2331,9 @@
+ INT32 mtk_wcn_stp_parser_data(PUINT8 buffer, UINT32 length)
+ #endif
+ {
++	extern int t1100_rx_trace;
++	extern int t1100_rx_bytes;
++
+     /*----------------------------------------------------------------*/
+ 	/* Local Variables                                                */
+     /*----------------------------------------------------------------*/
+@@ -2343,6 +2346,18 @@
+ 	STP_TRACE_FUNC("++, rx (cnt=%d,len=%d)\n", ++counter, length);
+ #endif
+ 
++	if (t1100_rx_trace && buffer && length) {
++		UINT32 t1100_off;
++
++		t1100_rx_bytes += (int)length;
++		for (t1100_off = 0; t1100_off < length; t1100_off += 32) {
++			UINT32 n = (length - t1100_off) > 32 ? 32 : (length - t1100_off);
++
++			STP_INFO_FUNC("t1100: rpx %03u/%u %*phN\n", t1100_off, length,
++				      (int)n, buffer + t1100_off);
++		}
++	}
++
+ 	i = length;
+ 	p_data = (PUINT8) buffer;
+ 

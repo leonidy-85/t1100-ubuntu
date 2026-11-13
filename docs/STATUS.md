@@ -4047,3 +4047,18 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   `t1100_patch_active`), новый `patches/wifi/0015-common-stp-transport-trace.patch`
   (`t1100_stp_trace`, `t1100_frame_hex`, `t1100_trace_all`, `t1100_tail_resend`).
 - Модуль `wmt_drv` `b67ad482…`; `wlan0` нет.
+
+## 13.11 (42): M51 — дамп доходит целиком; reset блокирует наш же STP (assert-режим)
+
+- Тихое окно 20 с (`t1100_quiet_ms`): дамп — 34 пакета type=5 (`IPC=0x10134` ROM,
+  `EVA=R1=0xF0078029` — окно `0xF0078000+0x29`, `R6=0x5C`=92 — длина хвоста,
+  `asser_type=4`) приходит за 1.2 мс, затем **200×100 мс полной тишины** (`rx_bytes=0`,
+  `LSR=0x60`, `rxq_empty=1`). Чип сам не перезагружается.
+- После окна `hwcode ret -2`, `WMT_RESET -1`, `1_0 → -1` мгновенно; `hwcode 0x788`
+  возвращается только после power-cycle домена.
+- Причина: `stp_core.c:2255` по первому же пакету `STP_TASK_INDX` при включённом STP-dbg
+  делает `coredump_start_ctrl(1)` («set f/w assert (1)»), после чего STP не ретраит и
+  WMT-команды не проходят. То есть reset не «не успевает» — его блокирует наш STP.
+- Патчи: `0014` обновлён (тихое окно, `t1100_quiet_ms`, `t1100_rx_trace`), новый
+  `0016-common-stp-rx-trace.patch` (hex-трасса RX в `stp_parser_data`).
+  Модуль `wmt_drv` `29ef3bcd…`; `wlan0` нет.

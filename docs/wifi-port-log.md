@@ -4181,3 +4181,71 @@ hdr a3 40 61 44: txseq 4 / txack 3, type 4, len 0x061 = 97 = 5 (WMT cmd 01 01 5d
 Ответ ROM на последний фрагмент — `assert (asser_type=4)` + core dump с R6=92 и указателем
 в патч-область. Значит расхождение не на транспорте, а в состоянии, с которым чип встречает
 последний фрагмент (порядок/набор патчей).
+
+## 67. M51: тихое окно 20 с — дамп доходит целиком и обрывается сам; чип ждёт, STP уходит в assert-режим (13.11)
+
+### 67.1 Дамп целиком (34 пакета type=5, пришли за 1.2 мс после хвоста)
+
+```
+{asser_type=4} , Dump=34     {ast_t=17162}   {LP=0x10126}   {ITYPE=0x0}
+{EVA=0xF0078029}  {PC=0x8}  {PSW=0xA}  {IPC=0x10134}  {IPSW=0x8}
+{R0=0x2000020} {R1=0xF0078029} {R2=0x18F8C} {R3=0x112} {R4=0x3} {R5=0x1} {R6=0x5C}
+{R7=0x2091945} {R8=0x209179C} {R9=0x8} {R10..R15=0x0}
+{WMT_ST=0x0} {BT_ST=0x0} {WIFI_ST=0xFFFFFFFF} {FM_ST=0xFFFFFFFF}
+{GPS_ST=0xFFFFFFFF} {FLP_ST=0xFFFFFFFF} {CUR_TASK=0} {asser_type=4}
+;;[CONNSYS]core dump start ..
+```
+
+Расшифровка (ядро CONNSYS — **ARC**, поэтому в дампе ARC-регистры исключения):
+
+| поле | значение | смысл |
+|---|---|---|
+| `IPC` | `0x10134` | прерванный PC — **ROM-код**, не патч |
+| `ITYPE` | `0` | тип исключения ARC |
+| `EVA` = `R1` | `0xF0078029` | адрес вектора исключения — окно `0xF0078000` + `0x29` (то самое «patch RAM», которое читали в M34) |
+| `R6` | `0x5C` = **92** | длина хвостового фрагмента — момент обработки хвоста |
+| `R7/R8` | `0x2091945` / `0x209179C` | указатели в образ загруженного патча |
+| `ast_t` | `17162` (0x430a) | счётчик/метка assert'а |
+
+Строки в `ROMv4_be_patch_1_1_hdr.bin` (`strings -t x`): `0x3fdd4 [core dump end]`,
+`0x3ffbc exp_main: jump from cos_assert`, `0x3ffdc EXP_MAIN_ENTRY_CNT=%d`,
+`0x40008 EXP_MAIN_REENTRY!NO_DUMP!(Cnt=%d > 1)`, `0x40038 exp_main: maybe jump from RST`,
+`0x3f49a xCHIP_DUMP_STATE_ERR@cos_exp.c,%d`. `;;[CONNSYS]core dump start ..` есть только
+в `1_0`. То есть вход в патч (`exp_main`) штатно бывает **из `cos_assert`** или **из RST**,
+а сам дамп печатает код набора патчей. `[core dump end]` в лог **не пришёл**.
+
+### 67.2 Тайминги (один прогон, `t1100_quiet_ms=20000`)
+
+```
+76.734  hwcode 0x788
+76.764  downloading 1_1 (seq 1) 314092 bytes, addr 218007f0
+77.218  34 × type=5 + ;;CONNSYS core dump start ..        (через 455 мс после начала, = хвост)
+77.321  quiet window 20000 ms, no reset/readback
+98.121  quiet end, rx_bytes=0      ← 200 замеров ×100 мс: ни байта (LSR=0x60, IIR=0x01, rxq_empty=1)
+98.121  after quiet hwcode 0x00000000 (ret -2)
+98.121  after quiet wmt reset: -1
+98.121  patch dwn:0 frag(315, 92) ok → 1_1 download -> 0
+98.529  reset ack after patch 0: no
+98.530  downloading 1_0 (seq 2) → download -> -1   (мгновенно)
+98.654  hwcode 0x788                              ← только после power-cycle домена
+```
+
+### 67.3 Почему reset не доходит: STP сам уходит в «f/w assert»
+
+```
+55.300  mtk_wcn_stp_coredump_start_ctrl: set f/w assert (1)
+55.301  stp_parser_data_in_full_mode: ++ start to read paged dump and paged trace ++/--
+55.301  wmt_lib_cmb_rst: coredump mode == 0. Connsys coredump is disabled.
+76.733  mtk_wcn_stp_coredump_start_ctrl: set f/w assert (0)   (после power-cycle)
+77.218  mtk_wcn_stp_coredump_start_ctrl: set f/w assert (1)   (снова на хвосте)
+```
+
+Ветка `stp_core.c:2255` при `type == STP_TASK_INDX`, `rx_counter == 0` и включённом STP-dbg
+делает `mtk_wcn_stp_coredump_start_ctrl(1)`, сохраняет контекст и пытается читать paged dump;
+с этого момента `stp_tx_timeout_handler` не ретраит (`skip tx retry`), а WMT-команды
+возвращают `-2`. Поэтому `hwcode` и `WMT_RESET` **после дампа не доходят до чипа** — их
+блокирует наш STP, а не «мёртвый» чип.
+
+**Итог M51:** дамп доходит целиком и заканчивается сам; чип после него молчит 20 с и не
+перезагружается; связь не оживает, потому что STP переведён в assert-режим. Ждать дольше
+бесполезно — вопрос не в таймауте.
