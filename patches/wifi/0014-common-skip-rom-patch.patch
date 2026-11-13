@@ -1,0 +1,27 @@
+--- a/common_main/core/wmt_ic_soc.c	2026-11-13 12:15:15.609169568 +0000
++++ b/common_main/core/wmt_ic_soc.c	2026-11-13 12:15:15.609347395 +0000
+@@ -45,6 +45,10 @@
+ 		    sizeof(t1100_rom_patch), 0444);
+ MODULE_PARM_DESC(t1100_rom_patch,
+ 		 "T1100: ROMv4 patch file under /lib/firmware (empty = ask userspace)");
++static int t1100_no_rom_patch;
++module_param(t1100_no_rom_patch, int, 0444);
++MODULE_PARM_DESC(t1100_no_rom_patch,
++		 "T1100: skip the ROMv4 patch download and talk to the bare ROM (bring-up aid)");
+ #define CFG_IC_SOC 1
+ 
+ /*******************************************************************************
+@@ -1225,7 +1229,12 @@
+ 	/* 6.2 Read patch number */
+ 	/* If patch number is 0, it's first time connys power on */
+ 	patch_num = mtk_wcn_soc_get_patch_num();
+-	if (patch_num == 0) {
++	if (t1100_no_rom_patch) {
++		/* T1100 bring-up aid: skip the patch and talk to the bare ROM, so a
++		 * post-patch hang can be told apart from a missing ROM handler. */
++		WMT_INFO_FUNC("t1100: ROM patch download skipped on request\n");
++		patch_num = 0;
++	} else if (patch_num == 0) {
+ 		if (t1100_rom_patch[0]) {
+ 			/* T1100: the patch comes from /lib/firmware, not from
+ 			 * the (absent) userspace launcher's srh_patch. */

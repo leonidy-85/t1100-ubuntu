@@ -105,6 +105,8 @@ MODULE_PARM_DESC(m23_selftest, "T1100: 1 = dump BTIF registers and run one open/
 #define M23_INFRA_AO_BASE	0x10001000
 #define M23_IFR2_SET		0x80
 #define M23_IFR3_SET		0x88
+#define M23_IFR2_CLR		0x84
+#define M23_IFR3_CLR		0x8c
 #define M23_IFR2_STA		0x90
 #define M23_IFR3_STA		0x94
 #define M23_CG_BTIF		BIT(31)
@@ -204,19 +206,27 @@ int m23_clk_enable(void)
 
 	sta2 = readl(m23_infra + M23_IFR2_STA);
 	sta3 = readl(m23_infra + M23_IFR3_STA);
-	pr_info("m23-btif: infra sta2=0x%08x (btif %s) sta3=0x%08x (apdma %s)\n",
-		sta2, sta2 & M23_CG_BTIF ? "on" : "OFF",
-		sta3, sta3 & M23_CG_APDMA ? "on" : "OFF");
+	pr_info("m23-btif: infra sta2=0x%08x (btif gate %s) sta3=0x%08x (apdma gate %s)\n",
+		sta2, sta2 & M23_CG_BTIF ? "CLOSED" : "open",
+		sta3, sta3 & M23_CG_APDMA ? "CLOSED" : "open");
 
-	/* Writing 1 to a bit that is already set is a no-op. */
-	writel(M23_CG_BTIF, m23_infra + M23_IFR2_SET);
-	writel(M23_CG_APDMA, m23_infra + M23_IFR3_SET);
+	/*
+	 * MT6771 inverts the meaning of these bits compared to the mt8183 /
+	 * mt6765 CCF tables this port inherits: the IFR bit is the gate
+	 * *enable*, so 1 = clock cut, 0 = clock running.  Writing SET (as
+	 * mtk_clk_gate_ops_setclr and our first glue version did) therefore
+	 * *turned BTIF off*, which is why every BTIF register write was
+	 * silently dropped from M23 to M28 while reads returned the values
+	 * the bootloader had left there.  Open the gates through CLR.
+	 */
+	writel(M23_CG_BTIF, m23_infra + M23_IFR2_CLR);
+	writel(M23_CG_APDMA, m23_infra + M23_IFR3_CLR);
 	wmb();
 
 	sta2 = readl(m23_infra + M23_IFR2_STA);
 	sta3 = readl(m23_infra + M23_IFR3_STA);
-	if (!(sta2 & M23_CG_BTIF) || !(sta3 & M23_CG_APDMA)) {
-		pr_err("m23-btif: clock gate did not come up (sta2=0x%08x sta3=0x%08x)\n",
+	if ((sta2 & M23_CG_BTIF) || (sta3 & M23_CG_APDMA)) {
+		pr_err("m23-btif: clock gate still closed (sta2=0x%08x sta3=0x%08x)\n",
 		       sta2, sta3);
 		return -EIO;
 	}

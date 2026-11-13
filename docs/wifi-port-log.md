@@ -3880,3 +3880,132 @@ ROM при этом живой (chipId `0x788`, `cpupcr 0x1170`), TX-путь BT
 `infra_audio`-класса), (б) чип ждёт другого первого кадра (не REG_READ), тогда
 нужен порядок вендорского `wmt_loader` (PATCH → ASSERT → REG_READ),
 (в) скорость/формат BTIF UART (регистр `0x00` читается как 0).
+
+## 57. M43: BTIF ожил (полярность гейта), power-on проходит, HIF читается (13.11, 15:00-15:45)
+
+### 57.1 Причина «чип молчит»: инвертированный смысл бита гейта на MT6771
+
+Записи в блок BTIF (`0x1100c000`) отбрасывались: после `mempeek2 --write
+0x1100c060 0x31` TRI_LVL оставался `0x5a`, IER `0`, HANDSHAKE `3` — т.е.
+значения загрузчика. Ни `CONSYS_IF_PINMUX`, ни `co_clock_flag` в `WMT_SOC.cfg`,
+ни `m23_no_handshake/m23_wak_pulse` на это не влияли.
+
+Причина описана в `refs/m29-btif-early-probe.md`: на MT6771 бит гейта в
+INFRACFG_AO — это «gate enable», т.е. **1 = клок выключен**, 0 = работает
+(в таблицах mt8183/mt6765 наоборот). Наш glue писал в **SET** (`0x80`/`0x88`),
+т.е. всё время гасил BTIF, и `clk_prepare_enable()` через CCF делает то же
+самое (M28: `clk_summary` enable=1, а записи всё равно теряются).
+
+Проверено вручную:
+
+```
+SET 0x80 / CLR 0x84 / STA 0x90 = 0x9beff95d   (бит31 = 1, гейт закрыт)
+write 0x10001084 <- 0x80000000
+SET = 0x1beff95d  CLR = 0x1beffb5d  STA = 0x1beffb5d   (бит31 = 0, открыт)
+TRI_LVL <- 0x18  -> 0x18   IER <- 0x1 -> 0x1
+```
+
+Раскладка INFRACFG_AO: mode-0 SET/CLR/STA = `0x80/0x84/0x90`, mode-1 =
+`0x88/0x8c/0x94`; IFR2 bit31 = btif, IFR3 bit18 = ap_dma.
+
+**Фикс** — `scripts/remote/m23-btif/m23_board.c`: добавлены
+`M23_IFR2_CLR 0x84` / `M23_IFR3_CLR 0x8c`, `m23_clk_enable()` пишет **CLR** и
+проверяет, что биты стали 0 (иначе `-EIO`), в лог печатает `btif gate
+open/CLOSED`. После фикса: `infra sta2=0x1beffb5d (btif gate open)`,
+`IER readback 0x00000001 (RX=1)`.
+
+### 57.2 Чип ответил по STP
+
+```
+mtk-btif[hw_init:after] TRI_LVL = 0x18
+hal_btif_hw_init: IER readback 0x00000001 (RX=1 TX=0)
+[WMT-CORE][I]wmt_core_hw_check:get hwcode (chip id) (0x788)
+[WMT-IC][W]mtk_wcn_soc_ver_check:0x788: ic info: SOC_CONSYS.E1 (0x8a00/0x8a00, patch_ext:_e1)
+```
+
+Т.е. путь REG_READ через STP работает; BTIF-прерывание при этом так и не
+появляется в `/proc/interrupts`, но в PIO-режиме оно и не нужно.
+
+### 57.3 ROM-патч по STP вешает чип, без патча power-on проходит
+
+`modprobe wmt_drv t1100_btif_stp=1 t1100_rom_patch=ROMv4_be_patch_1_0_hdr.bin`:
+патч уходит целиком (`patch size(229348) fragNum(230)`, последний фрагмент
+`348` Б, `patch dwn:0`), но дальше чип перестаёт отвечать:
+`read (wmt reset) iRet(-1) evt len err(rx:0, exp:5)`,
+`write (wmt reset) iRet(-2)`, `whole chip reset fail`, `init_table_3 fail(-1)`.
+
+Добавлен диагностический параметр (патч `0014-common-skip-rom-patch.patch`):
+`t1100_no_rom_patch=1` пропускает загрузку патча. С ним:
+
+```
+wmt_core_hw_check … (0x788)
+t1100: ROM patch download skipped on request
+wmt_plat_get_soc_chipid:current SOC chip:0x6771
+mtk_wcn_soc_sw_init:bt_tssi_from_wifi=3, bt_tssi_target=3815
+wmt_stp_init_epa:epa_mode:0x0 / wmt_stp_init_coex ok
+mtk_wcn_soc_sw_init:co-clock disabled.
+WMT_OPID_PWR_ON (BTIF STP, ROM patch) -> 1        <-- power-on УСПЕШЕН
+```
+
+То есть `wmt reset` (первый элемент `init_table_3`) на «голом» ROM проходит, а
+после STP-загрузки ROMv4-патча — нет. Значит проблема в самом переносе патча
+(или в его применимости к этому ROM), а не в STP.
+
+Доставка патча через EMI (`t1100_emi_rom_patch=1` → `consys_dl_rom_patch()`,
+`soc3_0_ram_mcu_e1_hdr.bin`, `u4PatchAddr & 0xfffff` = 0): тело действительно
+попадает в EMI (`EMI 0xbfc00000 readback 0000dbb0 00018830 000021a0 00002130`),
+но `cpupcr` после сброса остаётся `0x1170` — ROM этот механизм не подхватывает
+(в отличие от mt6765/mt6761), т.е. MT6771 ждёт патч именно по STP.
+
+### 57.4 В DTS не было узла Wi-Fi HIF — `wlanProbe` падал с Oops
+
+`wlan_drv_gen3` с `t1100_pwr_on_done=1 t1100_probe=1` умирал:
+
+```
+t1100-stp: HIF base not set yet, probe skipped
+[wlan]wlanNetCreate: net_device allocated
+Internal error: Oops … pc : glSetHifInfo+0x60/0x1c0 [wlan_drv_gen3]
+lr : wlanProbe+0x314/0xec0
+```
+
+Причина: `t1100_wlan_probe()` передаёт `&HifAhbPDev->dev`, а `HifAhbPDev`
+заполняется только в `HifAhbPltmProbe()` — probe платформенного драйвера
+`mt-wifi`, который матчится по `compatible = "mediatek,wifi"`. Такого узла в
+нашем DTS не было, `HifAhbPDev` оставался NULL, и `&HifAhbPDev->dev` — это
+смещение внутри NULL.
+
+**Добавлен узел** (коммит ядра `80cf5d36f`): `wifi@180f0000` с окнами
+`0x180f0000` (WFDMA), `0x10212180` (CQDMA), `0x10001000` (INFRACFG_AO),
+`0x180e0000` (CONN remap), IRQ 290/118, `clocks = <&infracfg CLK_INFRA_CQ_DMA>`,
+`hardware-values = <0x788 0xa5800 0xa5800>`.
+
+После этого `180f0000.wifi` есть в `/sys/bus/platform/devices/`, а
+`wlanAdapterStart` доходит до чтения HIF:
+
+```
+t1100-hif[after-wifi-start]: WCIR=0x00100788 chipid=0x0788 rev=0 POR=1
+                             READY=0 WASR=0x00000000 mbox0=0x00000000 cpupcr=0x00001170
+t1100-start[0]: addr=0x000a5800 cpupcr after 0x00001170 ready=0
+t1100-mcif: WIFI_START override=1 addr=0x020a1000 seq=7 -> status=0
+t1100-start[1]: addr=0x020a1000 cpupcr after 0x00014ee4 ready=0
+[wlan]wlanAdapterStart: Wait firmware ready fail
+[wlan]wlanProbe: wlanProbe failed      (t1100_wlan_probe = -5)
+```
+
+`WCIR` читается правильно — значит AHB-HIF и `of_iomap` окон работают, и
+`hardware-values` (chip id `0x788`) совпадают. Но MCU остаётся в ROM
+(`cpupcr` = `0x1170/0x26b4/0x55c2/0x14ee4` — цикл ROM), `READY=0`, mailbox пуст:
+загруженная в RAM прошивка не запускается, потому что ROM-патч не применён.
+
+### 57.5 Итог и следующий шаг
+
+Сделано: BTIF работает (полярность гейта), WMT power-on проходит без ROM-патча,
+AHB-HIF описан в DTS и читается, `wlanProbe` больше не падает.
+
+Осталось одно: **довезти ROMv4-патч так, чтобы чип его принял**. Варианты:
+1. разобрать, чем наш перенос отличается от вендорского: сколько EVT ждём,
+   что делаем с последним фрагментом (`WMT_PATCH_FRAG_LAST`), нужен ли
+   `WMT_PATCH_P_POSTACK`/повторный `WMT_PATCH_P_ADDRESS_CMD`;
+2. снять трафик вендорского `wmt_drv.ko` (или дизассемблировать
+   `mtk_wcn_soc_normal_patch_dwn`) и сравнить последовательность;
+3. проверить `t1100_rom_patch_mcif=1` — доставка патча по MCIF init-каналу.
