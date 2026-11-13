@@ -4462,3 +4462,16 @@ user != root quiet_success`. Правило отказывает root **до** �
   чипа после частичного сброса обесточена/изолирована. При обычном power-on (как при загрузке)
   секции скачиваются нормально.
 - Модуль `wlan_drv_gen3` `1301f157…`; `wmt_drv` `ef0ea37c…`; `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (56): M64 — full power-on + патчи в retry: набор принят, но чип снова мёртв (`hwcode -3`)
+
+- `t1100_probe_retry`: в retry-ветке `t1100_pwr_on_done=0` → `wmt_plat_pwr_ctrl(FUNC_ON)`
+  (полный power-on) → `mtk_wcn_wmt_redownload_patch_set()` → `pfWlanProbe()`; в самой операции
+  сброс перед патчами пропускается, если не задан `t1100_spm_partial`/`t1100_warm_reset`
+  (вызывающий уже включил домен).
+- Прогон: `retry 1 patch set = 0` (оба патча приняты), но сразу после набора
+  `after quiet hwcode 0x00000000 (ret -3)` → `retry 1 returned -5`: probe падает **до** первой
+  секции (дамп `t1100-mcr[...]` и `section-config` в логе отсутствуют).
+- Итог: и с SPM-partial (M63), и с полным power-on (M64) доставка набора заканчивается
+  assert-состоянием чипа; MCR после этого либо нули (M63), либо недостижим.
+- Модули: `wmt_drv` `87dc76e2…`, `wlan_drv_gen3` `2a02b92d…`, `mtk_btif_drv` `e29eaecb…`.
