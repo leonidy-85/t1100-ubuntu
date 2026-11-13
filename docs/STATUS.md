@@ -3387,3 +3387,70 @@ MCR-STP закрыт железом (`CTDR/CRDR`=0, func2 = тот же `WCIR`).
   `rootfs-overlay/etc/systemd/system/t1100-suspend-default.service`.
 - Boot-образ не менялся: p29 остаётся `boot_thermal_final.img`
   (md5 `e96c91…`); suspend — это userspace/rootfs-настройка.
+
+## 13.11 (12): SVS на MT6771 нет; efuse-калибровка thermal расшифрована; qmmp на PipeWire; образ собран
+
+### SVS — включать нечего (вопрос закрыт)
+
+Стоковая конфигурация (`refs/device/config-stock.gz`) содержит
+`CONFIG_MTK_CPU_FREQ=y`, `CONFIG_MTK_CM_MGR=y`, `CONFIG_MTK_SWPM=y`,
+`CONFIG_MTK_CPU_CTRL_CFP=y` — и **ни `CONFIG_MTK_SVS`, ни `CONFIG_MTK_PPM`,
+ни `CONFIG_MTK_EEM`**. В вендорском дереве (Motorola/Realme, 4.14) каталога
+`svs` в `drivers/misc/mediatek/` тоже нет: в `base/power/` лежат `eem_v1`,
+`eem_v2` (в т.ч. `eem_v2/mt6771/`), `cpufreq_v1/v2`, `spm_v4`, `hps_*`,
+`pbm_*`, `upower_*`, а `base/power/mt6771/` — только GPU
+(`mtk_gpufreq_core.c`, `mtk_gpu_bw.c`, `mtk_picachu.c`).
+
+Значит на MT6771 SVS не использовался и в стоке: `&svs { status = "disabled" }`
+в `mt6771.dtsi` — не «недоделка», а правильное состояние. Из ограничений
+пункт убираем (формулировка: «SVS на MT6771 отсутствует и в стоке»).
+
+### Thermal: efuse-калибровка MT6771 расшифрована, адрес ячейки — кандидат
+
+Вендорский `thermal/mt6771/src/mtk_tc.c` + `inc/tscpu_settings.h` (ветка
+`android-13.0`) дают точную раскладку: `ADDRESS_INDEX_1=100` → `buf0`
+(VTS1 `[25:17]`, VTS2 `[16:8]`, O_SLOPE_SIGN `[7]`, DEGC_CALI `[6:1]`,
+ADC_CALI_EN `[0]`, O_SLOPE `[31:26]`), `ADDRESS_INDEX_0=101` → `buf1`
+(ADC_GE `[31:22]`, ADC_OE `[21:12]`, VTS3 `[8:0]`), `ADDRESS_INDEX_2=102`
+→ `buf2` (VTS4 `[31:23]`, VTSABB `[22:14]`, VTS5 `[13:5]`).
+
+Это **бит-в-бит mainline `MTK_THERMAL_V1`**, причём индексы 100/101/102 идут
+подряд, поэтому одно 12-байтовое чтение от слова 100 даёт ровно
+`[buf0, buf1, buf2]`. Вендорские дефолты совпадают с mainline
+(`adc_ge` 265..758 иначе 512, `vts` −8..484 иначе 260, `degc_cali` 1..63
+иначе 40), а множитель `1534/10` = mainline `cali_val 153`. То есть драйвер
+менять не нужно — только указать правильный адрес ячейки.
+
+Отображение индекс→смещение: `offset = 4 * index` (на MT8183 индекс 96 →
+0x180 = `calib@180`). Для MT6771 это `0x190`, т.е. ячейка должна читать
+`reg = <0x190 0xc>`.
+
+**Риск:** на MT8183 ровно по 0x190 лежит `mipi_tx_calibration`, которую
+использует `&mipi_tx0` (DSI работает, панель жива). Поэтому адрес меняем
+только после чтения реальных слов efuse на плате. Утилита для этого —
+`tools/device/efuse-thermal-decode.sh`: перебирает слова nvmem-устройства,
+проверяет каждый трёхсловный блок по вендорской валидации, разбирает поля
+для 0x190 и печатает сырые слова вокруг 0x180/0x190.
+
+### qmmp переключён на PipeWire
+
+Плагин в пакете есть (`plugins/Output/libpipewire.so`), имя плагина —
+`pipewire`. Ключ подтверждён по исходнику `src/qmmp/output.cpp`:
+`Output/current_plugin`. В образ положен
+`rootfs-overlay/root/.config/qmmp/qmmp.conf`:
+
+```ini
+[Output]
+current_plugin=pipewire
+```
+
+### Итоговый образ rootfs собран
+
+- overlay (PAM для root, drop-in'ы PipeWire, `t1100-audio-mixer`, qmmp,
+  пакеты `cadcraft/gridcraft/photocraft/wordcraft`) применён в chroot
+  `/home/l/t1100-rootfs2604`;
+- проверено: `/etc/pam.d/kde` без `user != root`, `/root/.config/qmmp/qmmp.conf`;
+- архив: `/home/l/t1100-rootfs2604-full-2026-11-13.tar.gz`,
+  **1 846 217 781 Б**, sha256
+  `7b407d93c8d3f9d1b62865004ddf3a7518508ce42ddcc81aaa58760a0762eadf`,
+  `gzip -t` — OK.
