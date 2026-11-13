@@ -4587,3 +4587,16 @@ shutdown не может добить процесс `rmmod wmt_drv/wlan_drv_gen
   `00: 00100788 00000100 0000000d`, `e0: 00020100 … 20130512`; `cpupcr=0x14f0e` (assert-петля).
 - `section-config dst=0x020a1000 -> 0xC0000001`, `WIFI_START` не дошёл, `wlan0` нет.
 - Модули: `wmt_drv` `4d874056…`, `wlan_drv_gen3` `3af8c62a…`, `mtk_btif_drv` `e29eaecb…`.
+
+## 13.11 (64): M69 — прогон 1 уронил плату (watchdog), артефактов нет
+
+- Правка M69 (poll `GEN_HCR` 40 × 100 мс, лог `hwcode poll: ... after N tries`) собрана
+  (`wmt_drv` `80ddf322…`) и задеплоена; рестарт через `sync; sysrq-b` прошёл, модули загрузились.
+- Прогон 1 (`op_between_reset=wmt`, `patches_before_probe=1`, `op_no_first_reset=1`): плата
+  **сама перезагрузилась** (uptime 2 мин, `lsmod` = 0); `/root/m69-run1-full.txt` не создан —
+  скрипт умер вместе с ядром, данных по точкам нет.
+- Подозрение №1: при молчащем чипе каждое чтение `GEN_HCR` стоит 2 с, 40 попыток = ~80 с
+  блокировки внутри WMT-колбэка → watchdog. Это согласуется с M58/M68 (там прогон тоже
+  растягивался на ~110 с).
+- Модули: `wmt_drv` `80ddf3221e6ed955295a79543cb2796e0455785c73bf5a4ef1269bf0721607a1`,
+  `wlan_drv_gen3` `3af8c62a…`, `mtk_btif_drv` `e29eaecb…`.
