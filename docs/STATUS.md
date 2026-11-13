@@ -4159,3 +4159,14 @@ ACK, reset без ожидания EVT, либо `t1100_patch_hdr_len=28`.
   `mbox0=0x02000020`, `WASR=0x00000300`, `cpupcr=0x76e`; `wlan0` нет.
 - Модуль `wmt_drv` `9eb5b093…`, `wlan_drv_gen3` `a2185d67…`, `mtk_btif_drv` `e29eaecb…`.
   `0014`/`0017` обновлены.
+
+## 13.11 (51): M60 — «сброс → патчи → старт»: `1_1` доставлен, `1_0` снова -1
+
+- `mtk_wcn_wmt_redownload_patch_set()` (экспорт): SPM-partial → STP reinit → `hwcode`
+  (**`0x788`, ret 0**) → оба патча по порядку. `1_1` доставлен (`patch 0/2 -> 0`,
+  `reset ack after patch 0: yes`), `1_0` → **-1** (адресная команда), `rc=-1`.
+- WIFI_START до сброса: `0x000a5800`/`0x020a1000` (status=0), `WCIR=0x00100788` READY=0,
+  `mbox0=0x02000020`, `WASR=0x00000300`, `cpupcr=0xf83e`/`0x14f08`. `wlan0` нет.
+- Значит после `1_1` чип опять уходит в assert/dump (M50) — обычный `init_table_3` его не
+  возвращает (M45/M46), а SPM-partial возвращает (M59).
+- Модули: `wmt_drv` `48c754dc…`, `wlan_drv_gen3` `156c4688…`, `mtk_btif_drv` `e29eaecb…`.
