@@ -3523,3 +3523,15 @@ upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, 
   запрошены (enable_cnt=0), гейт BTIF включается сырой записью мимо CCF ⇒
   родители (`axi_sel`/PLL) не включаются. Запись в BTIF по-прежнему
   отбрасывается, `wlan0` нет. Факты — `refs/m27-recovery-discriminator.md`.
+
+## 13.11 (15): M28 — CCF/XO_WCN/домен CONNSYS включены, записи в BTIF всё равно теряются
+
+- `infra_btif`/`infra_device_apc` включены **через CCF** (не сырым битом):
+  `enable_cnt 0→1`, родитель `axi_sel` 156 МГц; но `clk_summary` для
+  `infra_btif` остаётся `hw=N` при сыром бите31=1 (`0x10001090=0x9befff5d`).
+- `pwrap+0x184 = 0x3` (`DCXO_CONN_ENABLE` стоит), домен поднят
+  (`cpupcr=0x1170`, `chipid=0x788`) — записи в `0x1100c000` по-прежнему
+  отбрасываются: `IER 0→0`, `TRI_LVL 0x5a→0x5a` после `hw_init`.
+- Критерий «`TRI_LVL` стал 0x18» не достигнут ⇒ STP/ROMv4/`WLAN_READY`/`wlan0`
+  не запускались. Остаток подозрений (CCF `hw=N`, третья частота из домена
+  CONNSYS, APB write-protect без VIO) — `refs/m28-btif-ccf.md`, §50 журнала.
