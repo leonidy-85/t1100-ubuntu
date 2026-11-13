@@ -3482,3 +3482,27 @@ current_plugin=pipewire
 Замечание: комментарии в шапке режима («1702 x 2432 x 60 = 248355840 Hz»)
 оставлены как есть — они описывают вывод `clock` из вендорских 2432 строк,
 сам `clock` не меняется.
+
+### 13.11 (14): пропал значок батареи — патч 0053 не был в дереве
+
+После пересборки ядра из `/home/leo/Aurora_All/device/linux-t1100` в
+`/sys/class/power_supply/` остался только `mt6370-charger` (line-power);
+UPower показывал `DisplayDevice: unknown, 0%`,
+`icon-name: battery-missing-symbolic`, и KDE прятал индикатор.
+
+Причина: в mainline нет топливного счётчика (`mt6358_gauge`), заряд отдаёт
+второй `power_supply` `mt6370-battery`, который добавляет патч
+**0053** (`drivers/power/supply/mt6370-charger.c`, +96 строк OCV-таблицы).
+В дереве ядра его не было (`git apply --check` проходил чисто), поэтому
+пересобранное ядро ушло без батареи. Применено и закоммичено (`6f577eafa`).
+
+Проверено на железе после прошивки (`6.12.114-g6f577eafa7`):
+
+```
+/sys/class/power_supply/  mt6370-battery  mt6370-charger
+capacity=22 status=Charging present=1 voltage_now=3570000
+upower: Device /org/freedesktop/UPower/devices/battery_mt6370_battery (battery, has statistics)
+```
+
+Заодно закоммичен `vcn33` (`c6f3a4e1c`): рейка CONN теперь always-on 3.3 В,
+`regulator_summary: vcn33 use_count=1 3300mV` (было 0 / 3500 mV).
