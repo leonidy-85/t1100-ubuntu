@@ -1,0 +1,328 @@
+diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
+--- a/common/wlan_lib.c	2026-11-14 12:37:09.333892303 +0000
++++ b/common/wlan_lib.c	2026-11-14 12:37:09.354808795 +0000
+@@ -417,6 +417,178 @@
+ 			(UINT_32)(readl((void __iomem *)(p + 0x0)) & 0x1ff),
+ 			(UINT_32)((readl((void __iomem *)(p + 0x0)) >> 31) & 0x1));
+ 	}
++
++	/*
++	 * T1100 M81: HIF write mode and driver-own state. HAL_PORT_WR() only takes
++	 * the DMA path (CQDMA, DmaConf.Dst = HifRegPhyBase + 0x1000) when
++	 * fgDmaEnable is TRUE and DmaOps is set; otherwise it falls back to PIO.
++	 * Which one was active is relevant for any conclusion about the download:
++	 * both carry the 8-byte INIT_HIF_TX_HEADER, so if the small config
++	 * commands are ACKed the write path works, and the remaining suspect for
++	 * the 2 KB data packets is the block-mode framing, not the HIF itself.
++	 */
++	{
++		UINT_32 u4Whl = 0;
++
++		HAL_MCR_RD(prAdapter, MCR_WHLPCR, &u4Whl);
++		pr_info("t1100-hif[%s]: WHLPCR=0x%08x driver_own=%u fw_own_req=%u dma_en=%u dma_ops=%u\n",
++			tag, u4Whl, !!(u4Whl & WHLPCR_IS_DRIVER_OWN),
++			!!(u4Whl & WHLPCR_FW_OWN_REQ_SET),
++			prAdapter->prGlueInfo->rHifInfo.fgDmaEnable,
++			prAdapter->prGlueInfo->rHifInfo.DmaOps != NULL);
++	}
++}
++
++/*
++ * T1100 M81: read the MCU address space through the ROM's own
++ * INIT_CMD_ID_ACCESS_REG (CID 3).
++ *
++ * Why this exists. Until M80 the conclusion "the image did not land in MCU
++ * memory" rested on two reads that cannot see MCU memory at all:
++ *
++ *  - HAL_MCR_RD(prAdapter, 0x000a5800 + n, &v) is kalDevRegRead() ->
++ *    sdio_cr_readl(HifRegBaseAddr, addr): a CMD53 word whose address field is
++ *    17 bits wide (sdio_gen3_cmd53_info.addr in ahb_sdioLike/include/sdio.h).
++ *    0x000a5800 does not fit and is truncated to 0x25800, so what comes back
++ *    is HIF register window + 0x25800, never MCU SRAM. The all-zero "t1100-rb"
++ *    dumps of M73/M76 are an artefact of that, not evidence about the image.
++ *  - MCR_WTMCR (0x00b4) and MCR_WSR (0x00d8) are the "test mode control" and
++ *    "WLAN snapshot" registers (include/nic/mt6630_reg.h), not TX descriptors,
++ *    so M77's "TX descriptors do not move" measured nothing either.
++ *
++ * The ROM does serve CID 3: its init-command table ends at CID 4 (M43: CID 5+
++ * are not answered), and gen4m drives exactly this command in
++ * wlanAccessRegister() -- haretic/android-kernel-mt6765-rabbitr1,
++ * drivers/staging/mtk-connectivity/gen4m/common/wlan_lib.c. A read is answered
++ * with INIT_EVENT_ID_ACCESS_REG (EID 2, seq + {u4Address,u4Data}) instead of
++ * INIT_EVENT_ID_CMD_RESULT (EID 1), which is what the ucSetQuery=0 path checks.
++ *
++ * So this is the only valid way to answer "did the payload reach 0x000a5800":
++ * ask the MCU's own boot ROM to read that address back.
++ */
++static WLAN_STATUS t1100_mem_read(P_ADAPTER_T prAdapter, UINT_32 u4Addr, UINT_32 *pu4Val)
++{
++	P_CMD_INFO_T prCmdInfo;
++	P_INIT_HIF_TX_HEADER_T prHdr;
++	P_INIT_CMD_ACCESS_REG prReq;
++	P_INIT_HIF_RX_HEADER_T prRsp;
++	P_INIT_EVENT_ACCESS_REG prEvt;
++	UINT_8 aucBuf[sizeof(INIT_HIF_RX_HEADER_T) + sizeof(INIT_EVENT_ACCESS_REG)];
++	UINT_32 u4Len = 0;
++	UINT_8 ucSeq;
++	WLAN_STATUS u4Status;
++
++	*pu4Val = 0;
++
++	prCmdInfo = cmdBufAllocateCmdInfo(prAdapter,
++					  sizeof(INIT_HIF_TX_HEADER_T) + sizeof(INIT_CMD_ACCESS_REG));
++	if (!prCmdInfo)
++		return WLAN_STATUS_FAILURE;
++	kalMemZero(prCmdInfo->pucInfoBuffer,
++		   sizeof(INIT_HIF_TX_HEADER_T) + sizeof(INIT_CMD_ACCESS_REG));
++	prCmdInfo->u2InfoBufLen = sizeof(INIT_HIF_TX_HEADER_T) + sizeof(INIT_CMD_ACCESS_REG);
++
++	ucSeq = nicIncreaseCmdSeqNum(prAdapter);
++	prHdr = (P_INIT_HIF_TX_HEADER_T)prCmdInfo->pucInfoBuffer;
++	prHdr->u2TxByteCount = prCmdInfo->u2InfoBufLen;
++	prHdr->u2PQ_ID = INIT_CMD_PQ_ID;
++	prHdr->rInitWifiCmd.ucCID = INIT_CMD_ID_ACCESS_REG;
++	prHdr->rInitWifiCmd.ucPktTypeID = INIT_CMD_PACKET_TYPE_ID;
++	prHdr->rInitWifiCmd.ucSeqNum = ucSeq;
++
++	prReq = (P_INIT_CMD_ACCESS_REG)prHdr->rInitWifiCmd.aucBuffer;
++	prReq->ucSetQuery = 0;	/* 0 = read (query), 1 = write (set) */
++	prReq->u4Address = u4Addr;
++	prReq->u4Data = 0;
++
++	while (1) {
++		if (nicTxAcquireResource(prAdapter, TC0_INDEX,
++					 nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) ==
++		    WLAN_STATUS_RESOURCES) {
++			if (nicTxPollingResource(prAdapter, TC0_INDEX) != WLAN_STATUS_SUCCESS) {
++				pr_info("t1100-mem[0x%08x]: no TX resource\n", u4Addr);
++				cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
++				return WLAN_STATUS_FAILURE;
++			}
++			continue;
++		}
++		break;
++	}
++	if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
++		return WLAN_STATUS_FAILURE;
++	}
++	cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
++
++	u4Status = nicRxWaitResponse(prAdapter, 0, aucBuf, sizeof(aucBuf), &u4Len);
++	if (u4Status != WLAN_STATUS_SUCCESS)
++		return u4Status;
++
++	prRsp = (P_INIT_HIF_RX_HEADER_T)aucBuf;
++	if (prRsp->rInitWifiEvent.ucEID != INIT_EVENT_ID_ACCESS_REG) {
++		pr_info("t1100-mem[0x%08x]: unexpected EID %u (want %u)\n", u4Addr,
++			prRsp->rInitWifiEvent.ucEID, INIT_EVENT_ID_ACCESS_REG);
++		return WLAN_STATUS_FAILURE;
++	}
++	if (prRsp->rInitWifiEvent.ucSeqNum != ucSeq) {
++		pr_info("t1100-mem[0x%08x]: seq %u, want %u\n", u4Addr,
++			prRsp->rInitWifiEvent.ucSeqNum, ucSeq);
++		return WLAN_STATUS_FAILURE;
++	}
++
++	prEvt = (P_INIT_EVENT_ACCESS_REG)prRsp->rInitWifiEvent.aucBuffer;
++	if (prEvt->u4Address != u4Addr) {
++		pr_info("t1100-mem[0x%08x]: event reports 0x%08x\n", u4Addr, prEvt->u4Address);
++		return WLAN_STATUS_FAILURE;
++	}
++	*pu4Val = prEvt->u4Data;
++	return WLAN_STATUS_SUCCESS;
++}
++
++/* Dump u4Words MCU words; stops at the first read the ROM refuses (a silent
++ * chip would otherwise cost RX_RESPONSE_TIMEOUT = 1 s per word). */
++static void t1100_mem_dump(P_ADAPTER_T prAdapter, UINT_32 u4Addr, UINT_32 u4Words,
++			   const char *tag)
++{
++	UINT_32 n, u4Val = 0;
++	WLAN_STATUS rc;
++
++	for (n = 0; n < u4Words; n++) {
++		rc = t1100_mem_read(prAdapter, u4Addr + n * 4, &u4Val);
++		pr_info("t1100-mem[%s] 0x%08x = 0x%08x (rc %d)\n",
++			tag, u4Addr + n * 4, u4Val, (int)rc);
++		if (rc != WLAN_STATUS_SUCCESS) {
++			pr_info("t1100-mem[%s]: ROM does not serve ACCESS_REG here, stop\n", tag);
++			break;
++		}
++	}
++}
++
++/*
++ * T1100 M81: the TX/completion state the HIF actually maintains.
++ *
++ * WHISR is the host interrupt status: TX_DONE (BIT0) is set when the HIF/WFDMA
++ * has accepted a packet from the host port; WTQCR0..7 are the released TX page
++ * counts the driver's own HAL_READ_TX_RELEASED_COUNT() uses. They are the
++ * instruments for "did the chip consume the packet", unlike WTMCR/WSR.
++ */
++static void t1100_tx_state(P_ADAPTER_T prAdapter, const char *tag)
++{
++	UINT_32 u4Whisr = 0, u4Wasr = 0, u4Wrplr = 0;
++	UINT_32 au4Q[4] = { 0, 0, 0, 0 };
++	int k;
++
++	HAL_READ_INTR_STATUS(prAdapter, 4, (PUINT_8)&u4Whisr);
++	HAL_MCR_RD(prAdapter, MCR_WASR, &u4Wasr);
++	HAL_MCR_RD(prAdapter, MCR_WRPLR, &u4Wrplr);
++	for (k = 0; k < 4; k++)
++		HAL_MCR_RD(prAdapter, MCR_WTQCR0 + 4 * k, &au4Q[k]);
++
++	pr_info("t1100-tx[%s]: WHISR=0x%08x txdone=%u rx0=%u rx1=%u abnorm=%u WASR=0x%08x WRPLR=0x%08x WTQCR0..7=0x%08x 0x%08x 0x%08x 0x%08x\n",
++		tag, u4Whisr, !!(u4Whisr & WHISR_TX_DONE_INT),
++		!!(u4Whisr & WHISR_RX0_DONE_INT), !!(u4Whisr & WHISR_RX1_DONE_INT),
++		!!(u4Whisr & WHISR_ABNORMAL_INT), u4Wasr, u4Wrplr,
++		au4Q[0], au4Q[1], au4Q[2], au4Q[3]);
+ }
+ 
+ #if CFG_ENABLE_FW_DIVIDED_DOWNLOAD
+@@ -956,16 +1128,15 @@
+ #endif
+ 		kalFirmwareImageUnmapping(prAdapter->prGlueInfo, NULL, prFwBuffer);
+ 		DBGLOG(INIT, INFO, "FW download end\n");
+-		if (t1100_readback) {	/* M76: did the image land? */
+-			UINT_32 rb_off, rb_v;
+ 
+-			for (rb_off = 0; rb_off < 16; rb_off++) {
+-				rb_v = 0;
+-				HAL_MCR_RD(prAdapter, 0x000a5800 + rb_off * 4, &rb_v);
+-				pr_info("t1100-rb[0x%08x] = 0x%08x\n",
+-					0x000a5800 + rb_off * 4, rb_v);
+-			}
+-		}
++		/*
++		 * T1100 M81: ask the MCU ROM itself what it wrote. The M73/M76
++		 * "readback" (HAL_MCR_RD at 0x000a5800) could never work -- see
++		 * t1100_mem_read() -- so whether section 1 (dest 0x000a5800, the
++		 * firmware's ILM) actually landed has never been measured.
++		 */
++		if (t1100_readback)
++			t1100_mem_dump(prAdapter, 0x000a5800, 8, "after-dl");
+ 
+ 		/*
+ 		 * T1100 M20: ask the MCU itself what it thinks about the image it
+@@ -997,38 +1168,55 @@
+ 			t1100_hif_state(prAdapter, "after-reset-before-start");
+ 		}
+ 
+-		if (t1100_readback) {	/* M73: did the RAM image actually land? */
+-			UINT_32 rb_off, rb_v;
+-
+-			for (rb_off = 0; rb_off < 16; rb_off++) {
+-				rb_v = 0;
+-				HAL_MCR_RD(prAdapter, 0x000a5800 + rb_off * 4, &rb_v);
+-				pr_info("t1100-rb[0x%08x] = 0x%08x\n", 0x000a5800 + rb_off * 4, rb_v);
+-			}
+-		}
++		/*
++		 * T1100 M81: re-check the ILM through the ROM just before the start,
++		 * and once more after the start attempts below.
++		 */
++		if (t1100_readback)
++			t1100_mem_dump(prAdapter, 0x000a5800, 8, "before-start");
+ 
+ 		/* 4. send Wi-Fi Start command */
+ 		{
+ 			/*
+-			 * T1100 M20: the image has two candidate entry points, one
+-			 * per MCU memory of the divided image: section 1 (0xa5800,
+-			 * MCU IRAM, what the vendor DT passes) and section 0
+-			 * (0x020a1000, MCU DRAM). Try both and log cpupcr after
+-			 * each, so the two can be compared in one run.
++			 * T1100 M81: the *vendor-faithful* start comes first.
++			 *
++			 * The vendor driver sends wlanConfigWifiFunc(prAdapter, FALSE, 0),
++			 * i.e. u4Override = 0 and u4Address = 0: the ROM then starts the
++			 * image at the address of the last DOWNLOAD_CONFIG, without any
++			 * override. CFG_OVERRIDE_FW_START_ADDRESS (patch 0008) is an
++			 * *optional* path that replaces it, and every start this branch
++			 * has sent so far used override=1 with an explicit address --
++			 * the one variant the known-working stack never sends.
++			 * 0xffffffff is the sentinel for "override = 0".
++			 *
++			 * The explicit addresses follow only if that fails: section 1
++			 * (0x000a5800, MCU IRAM, what the vendor DT passes as
++			 * hardware-values[1..2]), section 0 (0x020a1000, MCU DRAM) and
++			 * the 0x00091400 address seen in an earlier run.
+ 			 */
+-			static const UINT_32 au4Start[3] = { 0x000a5800, 0x020a1000, 0x00091400 };
++			static const UINT_32 au4Start[4] = {
++				0xffffffff, 0x000a5800, 0x020a1000, 0x00091400
++			};
+ 			BOOLEAN fgReady = FALSE;
+ 			UINT_32 u4Try;
++			char acTagStart[16];
+ 
+-			for (u4Try = 0; u4Try < 3 && fgReady == FALSE; u4Try++) {
++			for (u4Try = 0; u4Try < 4 && fgReady == FALSE; u4Try++) {
+ 				UINT_32 u4Cpupcr = 0;
+ 
+ 				wlanGetCpupcr(&u4Cpupcr);
+-				pr_info("t1100-start[%u]: addr=0x%08x cpupcr before 0x%08x\n",
+-					u4Try, au4Start[u4Try], u4Cpupcr);
++				pr_info("t1100-start[%u]: addr=0x%08x%s cpupcr before 0x%08x\n",
++					u4Try, au4Start[u4Try],
++					au4Start[u4Try] == 0xffffffff ? " (vendor override=0)" : "",
++					u4Cpupcr);
+ 
+ 				if (u4Try) kalMsleep(300);	/* M73: pause between start addresses */
+-				wlanConfigWifiFunc(prAdapter, TRUE, au4Start[u4Try]);
++				if (au4Start[u4Try] == 0xffffffff)
++					wlanConfigWifiFunc(prAdapter, FALSE, 0);
++				else
++					wlanConfigWifiFunc(prAdapter, TRUE, au4Start[u4Try]);
++				snprintf(acTagStart, sizeof(acTagStart), "start%u", u4Try);
++				t1100_tx_state(prAdapter, acTagStart);
+ 
+ 				DBGLOG(INIT, TRACE, "Waiting for Ready bit..\n");
+ 				/* 4 <5> check Wi-Fi FW asserts ready bit */
+@@ -1063,6 +1251,10 @@
+ 				t1100_hif_state(prAdapter, "after-wifi-start");
+ 			}
+ 
++			/* T1100 M81: is the ILM still what the download left there? */
++			if (t1100_readback)
++				t1100_mem_dump(prAdapter, 0x000a5800, 4, "after-start");
++
+ 			if (fgReady == FALSE && t1100_warm_reset && !t1100_redownloaded) {
+ 				/* T1100 M55: the warm reset wipes the MCU RAM, so the
+ 				 * RAM image must be downloaded again before a second
+@@ -1352,8 +1544,13 @@
+ 	UINT_32 u4ImgSecSize;
+ 	UINT_32 j;
+ 	WLAN_STATUS u4Status = WLAN_STATUS_SUCCESS;
++	char acTag[32];
+ 
+ 	do {
++		/* T1100 M81: baseline before the section config / data packets. */
++		snprintf(acTag, sizeof(acTag), "sec%u-pre", index);
++		t1100_tx_state(prAdapter, acTag);
++
+ 		if (wlanImageSectionConfig(prAdapter,
+ 					   prFwHead->arSection[index].u4DestAddr,
+ 					   prFwHead->arSection[index].u4Length,
+@@ -1394,6 +1591,20 @@
+ 				u4Status = WLAN_STATUS_FAILURE;
+ 				break;
+ 			}
++
++			/*
++			 * T1100 M81: after the first and after the last packet of
++			 * the section. Running this outside the loop is not enough:
++			 * a packet is only 2056 bytes and the chip answers config
++			 * commands, so the discriminator is whether *data* packets
++			 * move TX_DONE / WTQCR at all.
++			 */
++			if (j == 0 ||
++			    j + CMD_PKT_SIZE_FOR_IMAGE >= prFwHead->arSection[index].u4Length) {
++				snprintf(acTag, sizeof(acTag), "sec%u-pkt%u", index,
++					 j / CMD_PKT_SIZE_FOR_IMAGE);
++				t1100_tx_state(prAdapter, acTag);
++			}
+ 		}
+ 
+ 	} while (0);
