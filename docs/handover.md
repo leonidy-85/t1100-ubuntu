@@ -61,15 +61,17 @@
 
 ## Текущее состояние платы (14.11)
 
-- `boot_a` = `build/boot_gauge.img` (p29 md5
-  `34db0025a4f683248c0fab7a4cd9195e`): тот же userspace/десктоп, что и
-  `boot_nonwifi_wifi` (d401cf2d…), плюс минимальный MT6358 gauge (0072).
-  **На железе не проверен**: планшет отключён от USB. v1 использует
-  vendor latch-запись `FGADC_CON1`; предпочтительный для проверки —
-  `build/boot_gauge_v2.img` (md5 `9d2bf057…`), страховочный без тока —
-  `build/boot_gauge_nocurrent.img` (md5 `226f56e3…`). Откат —
-  `build/recovery/boot_a_before_gauge.img` (md5 `d401cf2d…`, копия
-  `build/boot_nonwifi_wifi.img`). Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+- `boot_a` = `build/gauge/boot_gauge_v5.img` (p29 md5
+  `e8fe189611166c4d0246a8dced1f38c6`, sha256 `2d1177c6…`): тот же
+  userspace/десктоп, что и `boot_nonwifi_wifi` (d401cf2d…), плюс
+  минимальный MT6358 gauge (0072 + 0073). **Проверено на железе:**
+  capacity 54–58 % при 3.82–3.88 В, ток −45…−797 мА, status
+  `Discharging` под нагрузкой; load-step не меняет capacity больше чем
+  на ±3 %. Откат — `build/recovery/boot_a_before_gauge.img` (md5
+  `d401cf2d…`, копия `build/boot_nonwifi_wifi.img`); предыдущие
+  состояния — `build/recovery/boot_a_before_v5.img` (v4, sha256
+  `fee0c71d…`), `boot_a_before_v4.img` (v3, `4b9fa9f7…`),
+  `boot_a_before_v3.img` (v2, `705c9ccf…`). Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
   (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
   `schedutil`) и CPU thermal zone (0064: 80/90/115 °C, throttling
