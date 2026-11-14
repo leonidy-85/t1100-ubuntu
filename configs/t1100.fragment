@@ -187,3 +187,23 @@ CONFIG_ARM_MEDIATEK_CPUFREQ=y
 # exposes only the CPU zone with 80/90/115 C trips.
 CONFIG_MTK_THERMAL=y
 CONFIG_MTK_SOC_THERMAL=y
+
+# --- USB Wi-Fi adapters (host mode; built-in CONSYS is not supported) --------
+# Common mainline USB Wi-Fi drivers. Firmware comes from linux-firmware; for
+# MT7601U/RT2870/RTL8XXXU, Ubuntu ships .zst firmware, so decompress it in the
+# rootfs (or enable CONFIG_FW_LOADER_COMPRESS_ZSTD in a future image).
+CONFIG_WLAN=y
+CONFIG_CFG80211=y
+CONFIG_MAC80211=y
+CONFIG_RFKILL=y
+CONFIG_MT7601U=y
+CONFIG_RTL8XXXU=y
+CONFIG_RTL8XXXU_UNTESTED=y
+CONFIG_RT2X00=y
+CONFIG_RT2800USB=y
+CONFIG_RT73USB=y
+CONFIG_RT2500USB=y
+CONFIG_ATH9K_HTC=y
+CONFIG_CARL9170=y
+CONFIG_BRCMFMAC=y
+CONFIG_BRCMFMAC_USB=y

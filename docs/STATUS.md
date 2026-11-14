@@ -4851,3 +4851,20 @@ BTIF/STP-транспорт (включая исправленную поляр�
   его нужно добавить в образ.
 - Текущий p29 `build/boot_nonwifi_amp.img` md5 `61e08a8b…`; вручную проверены
   динамик/наушники (Speaker Switch off глушит динамик) и USB host с флешкой.
+
+## 14.11 (8): USB Wi-Fi — common mainline drivers built-in
+
+- В non-WiFi образ добавлены built-in USB Wi-Fi драйверы:
+  `MT7601U`, `RTL8XXXU` (+UNTESTED), `RT2X00`/`RT2800USB`/`RT73USB`/
+  `RT2500USB`, `ATH9K_HTC`, `CARL9170`, `BRCMFMAC_USB`;
+  `CFG80211`/`MAC80211`/`RFKILL`/`WLAN` = y.
+- MT76 USB включить не удалось (hidden Kconfig/olddefconfig), `R8188EU`
+  в 6.12 отсутствует.
+- Образ `build/boot_nonwifi_wifi.img`, sha256 `34e16243…`, md5 p29
+  `d401cf2dc27fda719f89848cbe0aa787`; Image `feee8c22…` (42,160,640 B).
+  В dmesg: `mt7601u` и `rtl8xxxu` registered; `cfg80211` built-in;
+  `regulatory.db` после установки `linux-firmware`/`wireless-regdb`.
+- Установлены `linux-firmware`, `wireless-regdb`, `iw`, `rfkill`, `zstd`.
+  Распакованы `mt7601u.bin`, `rt2870.bin`, `rtlwifi/*.bin`; firmware
+  `ath9k_htc`/`carl9170` в пакете не найдены.
+- USB Wi-Fi донгл пока не подключался, реальный `wlan0` не проверен.
