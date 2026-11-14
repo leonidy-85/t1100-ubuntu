@@ -29,9 +29,9 @@ cat refs/wifi-dt-nodes-nonwifi.dts \
 # исходный DTS сохранён как ...dts.pre-wifi.bak
 
 # 2) config
-merge_config.sh -m out-wifi/.config <(cp out-nonwifi/.config)   # см. §3
-merge_config.sh -m out-wifi/.config configs/t1100-wifi.fragment
-merge_config.sh -m out-wifi/.config configs/t1100-wifi-image.fragment
+mkdir -p out-wifi && cp out-nonwifi/.config out-wifi/.config
+merge_config.sh -m -O out-wifi out-wifi/.config configs/t1100-wifi.fragment
+merge_config.sh -m -O out-wifi out-wifi/.config configs/t1100-wifi-image.fragment
 make -C src-nonwifi O=out-wifi ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
 # 3) ядро
