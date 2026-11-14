@@ -5023,3 +5023,23 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Замечание по расхождению: в задании текущий p29 назван v3 (`fee0c71d…`), а в
   STATUS ниже — gauge v5 (`2d1177c6…`). До любого деплоя сверить фактический
   `dd`-дамп p29.
+
+## 14.11 (10): Wi-Fi-образ собран (build-only): `6.12.114-wifi1` + CONSYS/Wi-Fi в DTB
+
+- **Собран, на планшет не прошивался**: `build/wifi-image/boot_wifi.img`
+  sha256 `b52feb4c…`, md5 `ae94ab58…`. Ядро `6.12.114-wifi1` из того же
+  `src-nonwifi`, что дал p29 (`Image` p29 = `8aeea8a5…`), + `CONFIG_WIRELESS_EXT`
+  и WLAN-опции; gauge v5 сохранён (`CONFIG_MT6358_GAUGE=y`, driver в Image,
+  ramdisk/cmdline байт в байт из p29).
+- **DTB пришлось изменить**: в DTB p29 (`4f01d337…`) нет узлов CONSYS/Wi-Fi
+  (снимок дерева до 0049/0056). Добавлен ровно блок `consys@18070000` +
+  `wifi@180f0000` + `consys-reserve-memory` (+3 phandle); дисплей/тач/регуляторы
+  побайтово как в p29. DTB: `8362894f…`, блок — `refs/wifi-dt-nodes-nonwifi.dts`.
+- **Модули** против того же out-дерева: `wmt_drv.ko` `56e4a663…`,
+  `wlan_drv_gen3.ko` `f3ba6536…`, `mtk_btif_drv.ko` `92d4740c…`; vermagic у всех
+  трёх `6.12.114-wifi1` (= баннер Image, `uname -r`).
+- Суффикс `-wifi1` — намеренно: WEXT/NL80211_TESTMODE меняют ABI, и с прежним
+  `6.12.114` старый .ko прошёл бы vermagic и молча испортил память.
+- Детали, diff конфига, команды прошивки через recovery и риски —
+  `docs/wifi-image.md`. Откат: `build/gauge/boot_gauge_v5.img` (sha256
+  `2d1177c6…` = текущий p29).

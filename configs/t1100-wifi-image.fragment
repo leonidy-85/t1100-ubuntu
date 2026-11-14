@@ -1,0 +1,39 @@
+# Kconfig fragment: the boot image that runs the *internal* MT6631 stack
+# (wmt_drv + wlan_drv_gen3) on top of the gauge v5 base.
+#
+# Apply *after* configs/t1100-wifi.fragment.  That fragment is written for the
+# separate build-only module tree, where CFG80211/MAC80211 are modules; on the
+# tablet image they are built-in (CONFIG_CFG80211=y, CONFIG_MAC80211=y in
+# out-nonwifi) and the USB Wi-Fi dongle drivers (MT7601U, RTL8XXXU, ATH9K_HTC)
+# depend on them as =y.  Taking the build-only fragment as-is silently demotes
+# those drivers to modules, and the device has no /lib/modules tree to load
+# them from -- USB Wi-Fi would regress.  So the two tristates are pinned back
+# to =y here; the WLAN-relevant additions are WEXT and NL80211_TESTMODE:
+#
+#   CONFIG_CFG80211_WEXT=y   -> WEXT_CORE; the vendor driver is built against
+#                               this ABI (struct iw_handler_def / net_device)
+#   CONFIG_IPW2200=m         -> selects WEXT_SPY/WEXT_PRIV and WIRELESS_EXT,
+#                               which are hidden bools with no prompt.  The
+#                               module is never installed or loaded: this is
+#                               only the smallest driver that flips the symbols
+#                               (same trick as configs/t1100-wifi.fragment).
+#   CONFIG_NL80211_TESTMODE=y -> hard requirement of os/linux/include/
+#                               gl_cfg80211.h (#error without it) and part of
+#                               struct cfg80211_ops.
+#
+# A localversion suffix is not cosmetic here: the gauge v5 image and this
+# bring-up image are built from the same 6.12.114 source, but
+# CONFIG_WIRELESS_EXT changes the layout of struct net_device (and
+# CONFIG_NL80211_TESTMODE the layout of struct cfg80211_ops).  Without the
+# suffix both kernels report "6.12.114", so a .ko built against the wrong one
+# still passes the vermagic check and corrupts memory silently.  With it,
+# uname -r, the module directory and the vermagic all distinguish the two.
+CONFIG_LOCALVERSION="-wifi1"
+
+# CONFIG_MODULES=y is kept because the vendor stack is out-of-tree.
+CONFIG_MODULES=y
+CONFIG_CFG80211=y
+CONFIG_MAC80211=y
+CONFIG_CFG80211_WEXT=y
+CONFIG_NL80211_TESTMODE=y
+CONFIG_IPW2200=m
