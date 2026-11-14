@@ -1,0 +1,163 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=D0=90=D0=BD=D0=B4=D1=80=D0=B5=D0=B9=20=D0=9C=D0=B0=D1=80=D0=BA=D0=B8=D0=BD?= <py6on@yandex.ru>
+Date: Sat, 14 Nov 2026 15:10:00 +0300
+Subject: [PATCH] power: mt6358-gauge: fix the profile units and the FG current read
+
+The first version read FG_CURRENT_OUT without the vendor latch
+sequence, so it returned 0 on the T1100, and it compared the OCV in
+mV against the profile voltages in 0.1 mV.  The gauge therefore
+reported capacity=0% at any voltage.
+
+Verified on the tablet with a debugfs latch test: the sequence
+SW_READ_PRE -> LATCHDATA_ST -> read -> SW_CLEAR makes 0x0d8a
+return a signed current (about -750 at a ~0.7 A discharge).  The
+vendor intermediate value is in 0.1 mA, so divide it by 10; the
+load-step test then gives about 0.76 mA per LSB.
+
+Also report DISCHARGING when the gauge current is below -50 mA:
+the MT6370 charger keeps status=Charging while the system load is
+above the input limit and the battery is actually discharging.
+
+---
+diff --git a/drivers/power/supply/mt6358-gauge.c b/drivers/power/supply/mt6358-gauge.c
+--- a/drivers/power/supply/mt6358-gauge.c
++++ b/drivers/power/supply/mt6358-gauge.c
+@@ -47,7 +47,16 @@
+ #include <linux/slab.h>
+ #include <linux/types.h>
+ 
++#define MT6358_FGADC_CON1		0x0d0a
+ #define MT6358_FG_CURRENT_OUT		0x0d8a
++
++/* FGADC_CON1 bits used by the vendor latch sequence. */
++#define MT6358_FG_SW_READ_PRE		BIT(0)
++#define MT6358_FG_SW_CLEAR		BIT(3)
++#define MT6358_FG_LATCHDATA_ST		BIT(15)
++
++#define MT6358_FG_POLL_US		1000
++#define MT6358_FG_TIMEOUT_US		20000
+ 
+ /*
+  * Vendor conversion constants (mt6358_gauge.c):
+@@ -122,29 +131,56 @@
+ 	int ret;
+ 
+ 	/*
+-	 * FGADC_CUR_CON0 is a free-running read-only sample register.  Do not
+-	 * touch FGADC_CON1 here: the vendor latch sequence writes PMIC state
+-	 * and was the only part of this driver that could disturb the PMIC
+-	 * (the mainline AUXADC IMP path with the same writes made the ADC
+-	 * stuck on this board).
++	 * FG_CURRENT_OUT is only refreshed by the vendor latch sequence
++	 * (SW_READ_PRE -> LATCHDATA_ST -> read -> SW_CLEAR).  A plain read
++	 * returns a stale zero on this PMIC; the sequence itself is safe and
++	 * was verified on the tablet with a debugfs test before being used
++	 * here.
+ 	 */
++	ret = regmap_write(g->regmap, MT6358_FGADC_CON1,
++			   MT6358_FG_SW_READ_PRE);
++	if (ret)
++		return ret;
++
++	ret = regmap_read_poll_timeout(g->regmap, MT6358_FGADC_CON1, val,
++				       val & MT6358_FG_LATCHDATA_ST,
++				       MT6358_FG_POLL_US,
++				       MT6358_FG_TIMEOUT_US);
++	if (ret)
++		goto out_clear;
++
+ 	ret = regmap_read(g->regmap, MT6358_FG_CURRENT_OUT, &val);
+ 	if (ret)
+-		return ret;
++		goto out_clear;
+ 
+ 	raw = (s16)val;
+ 	cur = (s64)raw * MT6358_FG_CURRENT_LSB;
+ 	cur = div_s64(cur, MT6358_FG_CURRENT_DIV);
+ 	cur = cur * 100 / g->r_fg_value;
+ 	cur = cur * g->car_tune_value / 1000;
++	/*
++	 * The vendor intermediate value is in 0.1 mA (UNIT_FGCURRENT is the
++	 * shunt LSB, not a full mA); the tablet's load-step test gave about
++	 * 0.76 mA per LSB, which matches this division.
++	 */
++	cur = div_s64(cur, 10);
+ 
+ 	/* A bogus sample must not move the state of charge by amps. */
+-	if (cur < -10000 || cur > 10000)
+-		return -ERANGE;
++	if (cur < -10000 || cur > 10000) {
++		ret = -ERANGE;
++		goto out_clear;
++	}
+ 
+ 	*ma = cur;
+ 
+-	return 0;
++out_clear:
++	regmap_write(g->regmap, MT6358_FGADC_CON1, MT6358_FG_SW_CLEAR);
++	regmap_read_poll_timeout(g->regmap, MT6358_FGADC_CON1, val,
++				 !(val & MT6358_FG_LATCHDATA_ST),
++				 MT6358_FG_POLL_US, MT6358_FG_TIMEOUT_US);
++	regmap_write(g->regmap, MT6358_FGADC_CON1, 0);
++
++	return ret;
+ }
+ 
+ /*
+@@ -184,11 +220,13 @@
+ 	*resistance = p[g->profile_len - 1].resistance;
+ }
+ 
+-static int mt6358_gauge_capacity(struct mt6358_gauge *g, int ocv, int *capacity)
++static int mt6358_gauge_capacity(struct mt6358_gauge *g, int ocv_mv,
++				 int *capacity)
+ {
+ 	u32 mah, resistance, soc;
+ 
+-	mt6358_gauge_profile_lookup(g, ocv, &mah, &resistance);
++	/* The profile stores voltages in 0.1 mV, the driver works in mV. */
++	mt6358_gauge_profile_lookup(g, ocv_mv * 10, &mah, &resistance);
+ 	if (!g->qmax)
+ 		return -EINVAL;
+ 
+@@ -229,10 +267,10 @@
+ 	ocv = vbat;
+ 	capacity = 0;
+ 	mt6358_gauge_capacity(g, ocv, &capacity);
+-	mt6358_gauge_profile_lookup(g, ocv, &mah, &resistance);
++	mt6358_gauge_profile_lookup(g, ocv * 10, &mah, &resistance);
+ 	ocv = vbat - div_s64((s64)cur_ma * (resistance / 10), 1000);
+ 	mt6358_gauge_capacity(g, ocv, &capacity);
+-	mt6358_gauge_profile_lookup(g, ocv, &mah, &resistance);
++	mt6358_gauge_profile_lookup(g, ocv * 10, &mah, &resistance);
+ 	ocv = vbat - div_s64((s64)cur_ma * (resistance / 10), 1000);
+ 	mt6358_gauge_capacity(g, ocv, &capacity);
+ 
+diff --git a/drivers/power/supply/mt6370-charger.c b/drivers/power/supply/mt6370-charger.c
+--- a/drivers/power/supply/mt6370-charger.c
++++ b/drivers/power/supply/mt6370-charger.c
+@@ -621,6 +621,21 @@
+ 		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
+ 		return 0;
+ 	case POWER_SUPPLY_PROP_STATUS:
++		/*
++		 * The charger reports "Charging" as long as it is enabled, even
++		 * when the system load is higher than the input limit and the
++		 * battery is actually discharging.  The gauge current is the
++		 * reliable source for the sign; keep the charger state near 0.
++		 */
++		if (mt6370_bat_gauge_state(&state)) {
++			if (state.current_ma < -50)
++				val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
++			else if (state.current_ma > 50)
++				val->intval = POWER_SUPPLY_STATUS_CHARGING;
++			else
++				return mt6370_chg_get_status(priv, val);
++			return 0;
++		}
+ 		return mt6370_chg_get_status(priv, val);
+ 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+ 		if (mt6370_bat_gauge_state(&state)) {
+-- 
+2.53.0

@@ -16,7 +16,7 @@
 6. **Мелочи (текущий).**
    - [x] 6.1 Постоянный PGA-гейн микрофона (патч 0068).
    - [x] 6.2 Точность индикации батареи (0069: вендорская OCV-таблица).
-   - [ ] 6.2a Топливомер MT6358 (0072): драйвер собран и прошит, на железе не проверен (планшет отключён от USB).
+   - [x] 6.2a Топливомер MT6358 (0072/0073): capacity/voltage/current/status проверены на железе (v5, p29 `2d1177c6…`).
    - [ ] 6.3 Длительный suspend/разряд/wakeup.
    - [x] 6.4 Гарнитура: ручное переключение speaker/headphones (авто-ACCDET — отдельный драйвер).
 
@@ -43,29 +43,31 @@ PGA 0 dB, поэтому 4,4 (24 dB) действовали только до к
 `Charging`. Интернет через `t1100-usb0` после reboot включается
 вручную (`nmcli con up t1100-usb0`).
 
-### 6.2a Минимальный порт MT6358 gauge (0072)
+### 6.2a Минимальный порт MT6358 gauge (0072 + 0073) — проверено
 
 Проблема 0069: MT6370 меряет VBAT под нагрузкой, поэтому при снятии кабеля
 проценты падают (~20 %), а на зарядке растут (~50 %) — это IR drop, а не
 заряд. Патч 0072 добавляет MFD-ячейку `mediatek,mt6358-gauge` и драйвер
-`drivers/power/supply/mt6358-gauge.c`:
+`drivers/power/supply/mt6358-gauge.c`; патч 0073 исправляет единицы профиля
+(мВ vs 0.1 мВ) и добавляет vendor latch для `FG_CURRENT_OUT`:
 
-- напряжение — BATADC MT6358 через mainline IIO (`mt6359-auxadc`),
-  `raw 23280…23352 × 5400 / 32768 = 3836…3845 мВ` (проверено на auxadc-образе);
-- ток — `FGADC_CUR_CON0` 0x0d8a через parent regmap (знаковый, 381.470 мкА/LSB,
-  `r_fg=5`, `car_tune=100` из стокового DTS);
+- напряжение — BATADC MT6358 через mainline IIO (`mt6359-auxadc`);
+- ток — `FG_CURRENT_OUT` 0x0d8a через parent regmap; без latch-последовательности
+  (`SW_READ_PRE` → `LATCHDATA_ST` → read → `SW_CLEAR`) регистр читался как 0;
+- масштаб vendor — 0.1 мА, поэтому после `car_tune/r_fg` делится на 10
+  (~0.76 мА/LSB, проверено load-step);
 - OCV = VBAT − I·R(SOC), профиль `battery0_profile_t2` (100 троек) в board DTS;
-- `mt6370-battery` берёт capacity/voltage/current из gauge, если он поднялся;
-  старая таблица 0069 остаётся fallback;
+- `mt6370-battery` берёт capacity/voltage/current из gauge, status =
+  `Discharging` при токе < −50 мА; таблица 0069 остаётся fallback;
 - пороги `t1100-power-guard` 3.72/3.60 В не менялись.
 
-Сборка: `Image` sha256 `18efb451…`, DTB `4f01d337…`.
-Образ `build/boot_gauge.img` (v1) прошит в p29 (md5 `34db0025…`), но
-**на железе не проверен**: планшет был отключён от USB и поставлен на
-зарядку. v1 использует vendor latch-запись `FGADC_CON1`; в v2
-(`build/boot_gauge_v2.img`, md5 `9d2bf057…`) она убрана, ток читается
-простым `regmap_read`. Страховочный вариант без чтения FG —
-`build/boot_gauge_nocurrent.img` (md5 `226f56e3…`).
+Проверка на v5 (p29 sha256 `2d1177c6…`, md5 `e8fe1896…`):
+dmesg `vbat 3869 mV, current -45 mA, ocv 3873 mV, capacity 56%`;
+load-step 3.849 В/−133 мА/55 % → 3.825 В/−519 мА/57 % → 3.857 В/−22 мА/54 %
+(capacity стабилен 54–57 %); при −666 мА `status=Discharging`.
+Профиль t2 даёт 3.85 В → 53 %, 3.88 В → 58 %; ожидавшиеся 30 % не
+подтверждаются ни t2, ни таблицей 0069 (для кулоновского счётчика нужен
+отдельный порт CAR/NCAR).
 Откат: `build/recovery/boot_a_before_gauge.img` (md5 `d401cf2d…`).
 
 
