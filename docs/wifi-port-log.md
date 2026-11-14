@@ -4806,3 +4806,29 @@ vendor-вариант старта: `wlanConfigWifiFunc(prAdapter, FALSE, 0)`, �
 `WHISR/WTQCR/WCIR/WHLPCR` сразу после `wlanAdapterStart` (или дизассемблировать
 стоковый `wlanConfigWifiFunc`/`wlanAdapterStart` из `wlan_drv_gen3.ko` 4.14 —
 .symtab там есть, обе функции не static).
+
+### 82.7 Что нужно, чтобы прогнать 0020 на планшете (и почему образ всё-таки новый)
+
+- Текущий p29 — `build/gauge/Image-gauge-v5`, sha256
+  `8aeea8a5df50…c9630a`; на build-хосте он **байт в байт совпадает** с
+  `/home/l/t1100-ubuntu-build/out-nonwifi/arch/arm64/boot/Image`. Это ядро
+  `6.12.114` (без localversion), собрано **без** Wi-Fi-фрагмента:
+  `CONFIG_CFG80211=y`, `CONFIG_MAC80211=y` (USB-донгл), но `CONFIG_WIRELESS_EXT`
+  нет.
+- Вендорский `wlan_drv_gen3.ko` требует WEXT: без `CONFIG_WIRELESS_EXT` в ядре
+  у `struct net_device` другой layout, и `scripts/remote/build-wifi-remote.sh`
+  такой out-tree **отвергает** (`refuses to build`, §29). Поэтому модули под
+  текущий образ собрать нельзя — нужен kernel с
+  `configs/t1100-wifi.fragment` (`CFG80211_WEXT` тянет `WEXT_CORE/SPY/PRIV` и
+  `WIRELESS_EXT`), т.е. **новый boot-образ**.
+- Модули M80 собраны против `t1100-merge2-out` (release
+  `6.12.114-g400cb6f-touch-rot`) — на текущем образе они не загрузятся по
+  vermagic. Для прогона 0020 нужна пара «ядро + модули» из одного out-дерева и
+  с одним `LOCALVERSION`.
+- DTB менять не нужно: узлы `consys@18070000`/`wifi@180f0000` уже в образе
+  (патчи 0049 и 0056 в `patches/series`), тот же DTB годится.
+- Порядок: (1) собрать ядро из `src-nonwifi` + `configs/t1100.fragment` +
+  `configs/t1100-wifi.fragment`, (2) собрать `wmt_drv.ko`/`wlan_drv_gen3.ko`
+  против **этого** out-дерева, (3) перепаковать boot тем же DTB, (4) прошить с
+  бэкапом p29, (5) положить `.ko` в `/lib/modules/<release>/updates/wifi/`,
+  `modprobe wmt_drv` → `modprobe wlan_drv_gen3 t1100_probe=1 …`, снять dmesg.
