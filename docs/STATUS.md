@@ -4958,6 +4958,10 @@ BTIF/STP-транспорт (включая исправленную поляр�
     → 3.857 В/−22 мА/54 %; capacity стабилен 54–57 %, скачка в 0/20 %
     больше нет;
   - при −666 мА: `status=Discharging`, `capacity=58`;
+  - при 3.846 В / −406 мА: `capacity=58 %`, `status=Discharging`;
+    при 3.836 В / −545 мА: `capacity=59 %`; на зарядке 3.905 В / +321 мА:
+    `capacity=56 %`, `status=Charging` — разброс ±3 % на 4-кратном
+    изменении тока;
   - p29 sha256 `2d1177c6d5c6e71b7cc4bf61bc79aec48d76730cee294d10c56414ee41a17861`
     (md5 `e8fe189611166c4d0246a8dced1f38c6`);
   - guard не тронут: `VBAT_LOW_MV=3600`, `VBAT_WARN_MV=3720`,
