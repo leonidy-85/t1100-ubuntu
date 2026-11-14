@@ -66,3 +66,4 @@
 0069-power-mt6370-use-the-MT6358-vendor-OCV-table-for-capacity.patch
 0070-ASoC-mt6771-mt6358-add-headphone-jack-and-speaker-DAPM-routes.patch
 0071-ASoC-mt6771-gate-the-speaker-amp-with-the-DAPM-Speaker-path.patch
+0072-power-supply-add-a-minimal-MT6358-fuel-gauge.patch

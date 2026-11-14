@@ -61,15 +61,22 @@
 
 ## Текущее состояние платы (14.11)
 
-- `boot_a` = `build/boot_nonwifi_wifi.img` (md5 p29
-  `d401cf2dc27fda719f89848cbe0aa787`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+- `boot_a` = `build/boot_gauge.img` (p29 md5
+  `34db0025a4f683248c0fab7a4cd9195e`): тот же userspace/десктоп, что и
+  `boot_nonwifi_wifi` (d401cf2d…), плюс минимальный MT6358 gauge (0072).
+  **На железе не проверен**: планшет отключён от USB. v1 использует
+  vendor latch-запись `FGADC_CON1`; предпочтительный для проверки —
+  `build/boot_gauge_v2.img` (md5 `9d2bf057…`), страховочный без тока —
+  `build/boot_gauge_nocurrent.img` (md5 `226f56e3…`). Откат —
+  `/tmp/opencode/boot_a_before_gauge.img` (md5 `d401cf2d…`,
+  `build/boot_nonwifi_wifi.img`). Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
   (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
   `schedutil`) и CPU thermal zone (0064: 80/90/115 °C, throttling
   проверен). Встроенный CONSYS/MT6631 Wi-Fi не включён; built-in USB Wi-Fi драйверы (MT7601U/RTL8XXXU/RT2X00/ATH9K_HTC/CARL9170/BRCMFMAC_USB) добавлены, firmware установлена, донгл не проверялся. Type-C dual-role (0066/0067):
   host с флешкой работает, VBUS 5.05 В / 2.4 А, возврат host→device через
-  helper `t1100-usb-role` без перезагрузки. Батарея: ёмкость по OCV
-  (0069). Гарнитура: jack работает вручную (`HPL/HPR Mux=2`,
+  helper `t1100-usb-role` без перезагрузки. Батарея: OCV-таблица 0069 как
+  fallback + минимальный MT6358 gauge 0072 (на железе не проверен). Гарнитура: jack работает вручную (`HPL/HPR Mux=2`,
   `Speaker Switch=off`, патчи 0070/0071); авто-ACCDET не сделан. SVS пока выключен;
   efuse-калибровка MT6771 не декодируется, thermal использует дефолтные
   коэффициенты (см. STATUS 13.11 (10), 14.11 (1)).
