@@ -1,6 +1,6 @@
 diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
---- a/common/wlan_lib.c	2026-11-13 21:35:44.050540122 +0000
-+++ b/common/wlan_lib.c	2026-11-13 21:35:44.051766106 +0000
+--- a/common/wlan_lib.c	2026-11-14 12:31:28.029577588 +0000
++++ b/common/wlan_lib.c	2026-11-14 12:31:28.048538984 +0000
 @@ -30,6 +30,8 @@
   ********************************************************************************
   */
@@ -10,27 +10,10 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*******************************************************************************
   *                              C O N S T A N T S
   ********************************************************************************
-@@ -144,6 +146,279 @@
- 		      IN UINT_32 u4FwLoadAddr,
- 		      IN UINT_32 u4FwImageFileLength);
+@@ -161,6 +163,262 @@
+ 			r[i + 4], r[i + 5], r[i + 6], r[i + 7]);
+ }
  
-+/* T1100 debug: dump the whole MCR page of the AHB HIF (0x180f0000..+0x100),
-+ * which is where WCIR/WASR/WSR/mailboxes live (include/nic/mt6630_reg.h).
-+ */
-+static void t1100_dump_mcr(P_ADAPTER_T prAdapter, const char *tag)
-+{
-+	UINT_32 r[64];
-+	INT_32 i;
-+
-+	for (i = 0; i < 64; i++)
-+		HAL_MCR_RD(prAdapter, (UINT_32)(i * 4), &r[i]);
-+	pr_info("t1100-mcr[%s]:\n", tag);
-+	for (i = 0; i < 64; i += 8)
-+		pr_info("t1100-mcr[%s] %02x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-+			tag, i * 4, r[i], r[i + 1], r[i + 2], r[i + 3],
-+			r[i + 4], r[i + 5], r[i + 6], r[i + 7]);
-+}
-+
 +/*
 + * T1100 M20: the WCIR lives on the *MCU* side; the AP reaches it only through
 + * the SDIO-like command port of the AHB HIF (os/linux/hif/ahb_sdioLike/
@@ -290,7 +273,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  #if CFG_ENABLE_FW_DIVIDED_DOWNLOAD
  static WLAN_STATUS
  wlanImageDividDownloadByEntry(IN P_ADAPTER_T prAdapter,
-@@ -404,6 +679,46 @@
+@@ -421,6 +679,46 @@
  }
  
  /*----------------------------------------------------------------------------*/
@@ -337,7 +320,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*!
  * \brief Initialize the adapter. The sequence is
  *        1. Disable interrupt
-@@ -540,12 +855,53 @@
+@@ -557,12 +855,53 @@
  		nicRxInitialize(prAdapter);
  
  #if CFG_ENABLE_FW_DOWNLOAD
@@ -391,7 +374,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  #if defined(MT6631) && defined(CONFIG_OF)
  		if (prAdapter->prGlueInfo->rHifInfo.Dev) {
-@@ -600,42 +956,144 @@
+@@ -617,42 +956,144 @@
  #endif
  		kalFirmwareImageUnmapping(prAdapter->prGlueInfo, NULL, prFwBuffer);
  		DBGLOG(INIT, INFO, "FW download end\n");
@@ -489,22 +472,18 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 +						break;
 +					} else if (i >= CFG_RESPONSE_POLLING_TIMEOUT) {
 +						UINT_32 u4MailBox0;
-+
-+						nicGetMailbox(prAdapter, 0, &u4MailBox0);
-+						DBGLOG(INIT, ERROR,
-+						       "Waiting for Ready bit timeout, Device to Host MailBox 0x%x\n",
-+						       (u4MailBox0 & 0x0000FFFF));
-+						break;
-+					}
  
 -		DBGLOG(INIT, TRACE, "Waiting for Ready bit..\n");
 -		/* 4 <5> check Wi-Fi FW asserts ready bit */
 -		i = 0;
 -		while (1) {
 -			HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Value);
-+					i++;
-+					kalMsleep(10);
-+				}
++						nicGetMailbox(prAdapter, 0, &u4MailBox0);
++						DBGLOG(INIT, ERROR,
++						       "Waiting for Ready bit timeout, Device to Host MailBox 0x%x\n",
++						       (u4MailBox0 & 0x0000FFFF));
++						break;
++					}
  
 -			if (u4Value & WCIR_WLAN_READY) {
 -				DBGLOG(INIT, INFO, "Ready bit asserted\n");
@@ -515,15 +494,16 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 -				break;
 -			} else if (i >= CFG_RESPONSE_POLLING_TIMEOUT) {
 -				UINT_32 u4MailBox0;
++					i++;
++					kalMsleep(10);
++				}
++
 +				wlanGetCpupcr(&u4Cpupcr);
 +				pr_info("t1100-start[%u]: addr=0x%08x cpupcr after 0x%08x ready=%u\n",
 +					u4Try, au4Start[u4Try], u4Cpupcr, fgReady);
 +				t1100_hif_state(prAdapter, "after-wifi-start");
 +			}
- 
--				nicGetMailbox(prAdapter, 0, &u4MailBox0);
--				DBGLOG(INIT, ERROR, "Waiting for Ready bit timeout, Device to Host MailBox 0x%x\n",
--				       (u4MailBox0 & 0x0000FFFF));
++
 +			if (fgReady == FALSE && t1100_warm_reset && !t1100_redownloaded) {
 +				/* T1100 M55: the warm reset wipes the MCU RAM, so the
 +				 * RAM image must be downloaded again before a second
@@ -542,7 +522,10 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 +				}
 +				goto t1100_redownload;
 +			}
-+
+ 
+-				nicGetMailbox(prAdapter, 0, &u4MailBox0);
+-				DBGLOG(INIT, ERROR, "Waiting for Ready bit timeout, Device to Host MailBox 0x%x\n",
+-				       (u4MailBox0 & 0x0000FFFF));
 +			if (fgReady == FALSE) {
  				u4Status = WLAN_STATUS_FAILURE;
  				eFailReason = WAIT_FIRMWARE_READY_FAIL;
@@ -561,16 +544,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  		}
  
  		if (u4Status == WLAN_STATUS_SUCCESS) {
-@@ -689,7 +1147,7 @@
- 
- 		/* Power state initialization */
- 		prAdapter->fgWiFiInSleepyState = FALSE;
--		prAdapter->rAcpiState = ACPI_STATE_D0;
-+		prAdapter->rAcpiState = WLAN_ACPI_STATE_D0;
- 
- 		/* Online scan option */
- 		if (prRegInfo->fgDisOnlineScan == 0)
-@@ -900,13 +1358,10 @@
+@@ -917,13 +1358,10 @@
  					   prFwHead->arSection[index].u4DestAddr,
  					   prFwHead->arSection[index].u4Length,
  					   index == 0 ? TRUE : FALSE,
@@ -586,68 +560,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  			) != WLAN_STATUS_SUCCESS) {
  
  			DBGLOG(INIT, ERROR, "Firmware download configuration failed! idx %u, dst 0x%08x, len %u\n",
-@@ -958,6 +1413,42 @@
- 	UINT_8 __iomem *prWifiEmiBaseAddr;
- #endif
- 
-+	/*
-+	 * T1100 debug: the download itself is otherwise invisible, and the
-+	 * sections are addressed by their own u4DestAddr (entries >= 2 go to
-+	 * EMI through ioremap(gConEmiPhyBase)), *not* to the DT load address
-+	 * "hardware-values[1]". Print the table so EMI can be checked at the
-+	 * real destinations. Deliberately no EMI read-back here: an out-of-range
-+	 * destination would fault inside the driver (the ioremap window is
-+	 * WIFI_EMI_AVAILABLE_MEM_SIZE, the bound check uses WIFI_EMI_MEM_SIZE).
-+	 */
-+	pr_info("t1100-fw: entries=%u secsz=%zu\n",
-+		prFwHead->u4NumOfEntries, sizeof(prFwHead->arSection[0]));
-+	for (i = 0; i < prFwHead->u4NumOfEntries && i < 16; i++)
-+		pr_info("t1100-fw: sec[%u] dest=0x%08x len=%u off=0x%x enc=%u\n",
-+			i, prFwHead->arSection[i].u4DestAddr,
-+			prFwHead->arSection[i].u4Length,
-+			prFwHead->arSection[i].u4Offset,
-+			prFwHead->arSection[i].ucEnc);
-+
-+	/*
-+	 * T1100 debug: the download itself is otherwise invisible, and the
-+	 * sections are addressed by their own u4DestAddr (entries >= 2 go to
-+	 * EMI through ioremap(gConEmiPhyBase)), *not* to the DT load address
-+	 * "hardware-values[1]". Print the table so EMI can be checked at the
-+	 * real destinations. Deliberately no EMI read-back here: an out-of-range
-+	 * destination would fault inside the driver (the ioremap window is
-+	 * WIFI_EMI_AVAILABLE_MEM_SIZE, the bound check uses WIFI_EMI_MEM_SIZE).
-+	 */
-+	pr_info("t1100-fw: entries=%u secsz=%zu\n",
-+		prFwHead->u4NumOfEntries, sizeof(prFwHead->arSection[0]));
-+	for (i = 0; i < prFwHead->u4NumOfEntries && i < 16; i++)
-+		pr_info("t1100-fw: sec[%u] dest=0x%08x len=%u off=0x%x enc=%u\n",
-+			i, prFwHead->arSection[i].u4DestAddr,
-+			prFwHead->arSection[i].u4Length,
-+			prFwHead->arSection[i].u4Offset,
-+			prFwHead->arSection[i].ucEnc);
-+
- 	/* engage divided firmware downloading */
- 	/* DLM + ILM */
- 	for (i = 0; i < prFwHead->u4NumOfEntries && i < ENTRY_DIRECTLY_TO_CHIP; i++) {
-@@ -977,7 +1468,7 @@
- 	}
- 
- 	kalSetEmiMpuProtection(gConEmiPhyBase, WIFI_EMI_MEM_SIZE, FALSE);
--	prWifiEmiBaseAddr = ioremap_nocache(gConEmiPhyBase, WIFI_EMI_AVAILABLE_MEM_SIZE);
-+	prWifiEmiBaseAddr = ioremap(gConEmiPhyBase, WIFI_EMI_AVAILABLE_MEM_SIZE);
- 
- 	/* IEMI + DEMI */
- 	for (i = ENTRY_DIRECTLY_TO_CHIP; i < prFwHead->u4NumOfEntries; i++) {
-@@ -1081,7 +1572,7 @@
- 
- #endif
- 
--	if (prAdapter->rAcpiState == ACPI_STATE_D0 &&
-+	if (prAdapter->rAcpiState == WLAN_ACPI_STATE_D0 &&
- 	    !wlanIsChipNoAck(prAdapter) && !kalIsCardRemoved(prAdapter->prGlueInfo)) {
- 		UINT_32 u4RegValue = 0;
- 		UINT_32 u4RegValueNew = 0;
-@@ -2699,7 +3190,10 @@
+@@ -2752,7 +3190,10 @@
  			continue;
  		}
  		/* 6.2 Send CMD Info Packet */
@@ -659,18 +572,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  			u4Status = WLAN_STATUS_FAILURE;
  			DBGLOG(INIT, ERROR, "Fail to transmit download config command\n");
  			break;
-@@ -2708,6 +3202,10 @@
- 		/* 7. Wait for INIT_EVENT_ID_CMD_RESULT */
- 		u4Status = wlanImageSectionDownloadStatus(prAdapter, ucCmdSeqNum);
- #endif
-+		pr_info("t1100-mcif: section-config dst=0x%08x len=%u reset=%u -> status=%u (0=ok)\n",
-+			u4DestAddr, u4ImgSecSize, fgReset, u4Status);
-+		if (fgReset)
-+			t1100_dump_mcr(prAdapter, "after-first-section-config");
- 		break;
- 	}
- 
-@@ -2750,6 +3248,24 @@
+@@ -2807,6 +3248,24 @@
  	}
  
  	prCmdInfo->u2InfoBufLen = sizeof(INIT_HIF_TX_HEADER_T) + (UINT_16) u4ImgSecSize;
@@ -695,7 +597,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  
  	/* 2. Setup common CMD Info Packet */
  	prInitHifTxHeader = (P_INIT_HIF_TX_HEADER_T) (prCmdInfo->pucInfoBuffer);
-@@ -2865,7 +3381,13 @@
+@@ -2922,7 +3381,13 @@
  	}
  }
  
@@ -710,7 +612,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm previously firmware download is done without error
-@@ -2985,7 +3507,8 @@
+@@ -3042,7 +3507,8 @@
  	return u4Status;
  }
  
@@ -720,61 +622,35 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
  /*----------------------------------------------------------------------------*/
  /*!
  * @brief This function is called to confirm the status of
-@@ -3119,10 +3642,14 @@
- 			continue;
- 		}
- 		/* 5.2 Send CMD Info Packet */
-+		t1100_dump_mcr(prAdapter, "before-wifi-start");
- 		if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
- 			u4Status = WLAN_STATUS_FAILURE;
- 			DBGLOG(INIT, ERROR, "Fail to transmit WIFI start command\n");
- 		}
-+		pr_info("t1100-mcif: WIFI_START override=%u addr=0x%08x seq=%u -> status=%u\n",
-+			fgEnable, u4StartAddress, ucCmdSeqNum, u4Status);
-+		t1100_dump_mcr(prAdapter, "after-wifi-start");
+diff -u -r a/include/wlan_lib.h b/include/wlan_lib.h
+--- a/include/wlan_lib.h	2026-11-11 14:39:05.471938307 +0000
++++ b/include/wlan_lib.h	2026-11-14 12:32:58.473896283 +0000
+@@ -753,11 +753,15 @@
+ wlanFwDwnloadHandler(IN P_ADAPTER_T prAdapter,
+ 		     IN UINT_32 u4FwImgLength, IN PVOID pvFwImageMapFile, OUT WLAN_STATUS *u4Status);
  
- 		break;
- 	};
-@@ -4754,8 +5281,8 @@
- *
- * @param prAdapter      Pointer of Adapter Data Structure
- *
--* @return ACPI_STATE_D0 Normal Operation Mode
--*         ACPI_STATE_D3 Suspend Mode
-+* @return WLAN_ACPI_STATE_D0 Normal Operation Mode
-+*         WLAN_ACPI_STATE_D3 Suspend Mode
- */
- /*----------------------------------------------------------------------------*/
- ENUM_ACPI_STATE_T wlanGetAcpiState(IN P_ADAPTER_T prAdapter)
-@@ -4770,8 +5297,8 @@
- * @brief This function is to update current ACPI state only
- *
- * @param prAdapter      Pointer of Adapter Data Structure
--* @param ePowerState    ACPI_STATE_D0 Normal Operation Mode
--*                       ACPI_STATE_D3 Suspend Mode
-+* @param ePowerState    WLAN_ACPI_STATE_D0 Normal Operation Mode
-+*                       WLAN_ACPI_STATE_D3 Suspend Mode
- *
- * @return none
- */
-@@ -4779,7 +5306,7 @@
- VOID wlanSetAcpiState(IN P_ADAPTER_T prAdapter, IN ENUM_ACPI_STATE_T ePowerState)
- {
- 	ASSERT(prAdapter);
--	ASSERT(ePowerState <= ACPI_STATE_D3);
-+	ASSERT(ePowerState <= WLAN_ACPI_STATE_D3);
+-#if !CFG_ENABLE_FW_DOWNLOAD_ACK
++/*
++ * T1100: the port calls wlanImageQueryStatus() unconditionally (the ROM
++ * answer is the only proof that it accepted the image, see wlan_lib.c), so
++ * both prototypes have to be visible regardless of
++ * CFG_ENABLE_FW_DOWNLOAD_ACK. Without this the build only works with an
++ * uncommitted header edit in work/ (docs/wifi-port-log.md, M81).
++ */
+ WLAN_STATUS wlanImageQueryStatus(IN P_ADAPTER_T prAdapter);
+-#else
+ WLAN_STATUS wlanImageSectionDownloadStatus(IN P_ADAPTER_T prAdapter, IN UINT_8 ucCmdSeqNum);
+-#endif
  
- 	prAdapter->rAcpiState = ePowerState;
- }
+ WLAN_STATUS wlanConfigWifiFunc(IN P_ADAPTER_T prAdapter, IN BOOLEAN fgEnable, IN UINT_32 u4StartAddress);
+ 
 diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
---- a/os/linux/gl_rst.c	2026-11-13 21:35:44.059596835 +0000
-+++ b/os/linux/gl_rst.c	2026-11-13 21:35:44.060479378 +0000
-@@ -221,10 +221,42 @@
- 	DBGLOG(INIT, INFO, "reset result %d, trigger flag 0x%x\n", fgResult, rst->rst_trigger_flag);
- }
+--- a/os/linux/gl_rst.c	2026-11-14 12:31:28.026096580 +0000
++++ b/os/linux/gl_rst.c	2026-11-14 12:31:28.049732215 +0000
+@@ -223,10 +223,33 @@
  
-+extern int t1100_no_reset;
-+
+ extern int t1100_no_reset;
+ 
 +extern int t1100_warm_reset;
 +extern void t1100_warm_reset_hw(void);
 +
@@ -802,60 +678,16 @@ diff -u -r a/os/linux/gl_rst.c b/os/linux/gl_rst.c
 +		return TRUE;
 +	}
 +
-+	if (t1100_no_reset) {
-+		DBGLOG(INIT, ERROR,
-+		       "T1100: whole-chip reset suppressed (t1100_no_reset=1), %s line %u\n",
-+		       pucFile, u4Line);
-+		return TRUE;
-+	}
-+
- 	if (fgIsResetting || fgResetTriggered) {
+ 	if (t1100_no_reset) {
  		DBGLOG(INIT, ERROR,
- 		       "Skip trigger whole-chip reset in %s line %u, during resetting! Chip[%04X E%u]\n",
+ 		       "T1100: whole-chip reset suppressed (t1100_no_reset=1), %s line %u\n",
 diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
---- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 21:35:44.068070393 +0000
-+++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-13 21:35:44.069119912 +0000
-@@ -22,6 +22,7 @@
- ********************************************************************************
- */
- #include <linux/interrupt.h>
-+#include <linux/sched/clock.h>	/* sched_clock() moved here in 4.15 */
- #include <linux/device.h>
- #include <linux/platform_device.h>
- #include <linux/mm.h>
-@@ -87,7 +88,7 @@
+--- a/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-14 12:31:28.026231125 +0000
++++ b/os/linux/hif/ahb_sdioLike/ahb.c	2026-11-14 12:31:28.050782966 +0000
+@@ -1162,16 +1162,136 @@
  
- static int HifAhbPltmProbe(IN struct platform_device *pDev);
+ extern int t1100_probe_stage;
  
--static int HifAhbPltmRemove(IN struct platform_device *pDev);
-+static void HifAhbPltmRemove(IN struct platform_device *pDev);
- 
- #ifdef CONFIG_PM
- static int HifAhbPltmSuspend(IN struct platform_device *pDev, pm_message_t message);
-@@ -1141,6 +1142,219 @@
- 
- /*----------------------------------------------------------------------------*/
- /*!
-+ * \brief T1100: power CONSYS on and bring the AHB Wi-Fi HIF up (M6 milestone).
-+ *
-+ * The vendor flow reaches HifAhbProbe() from WMT as the "wmt func on (WIFI)"
-+ * callback, after opfunc_pwr_on() has powered the chip. That path runs through
-+ * wmt_core_stp_init() and needs an STP transport (UART/SDIO/BTIF); on this
-+ * mainline port all of them are stubs, so the callback is never reached and no
-+ * netdev is created. AHB Wi-Fi itself does not use STP, so:
-+ *   1) power the chip with wmt_plat_pwr_ctrl(FUNC_ON) -- the same per-chip
-+ *      power-on opfunc_pwr_on() calls first, no STP involved;
-+ *   2) do what HifAhbProbe() does before probing, but without the
-+ *      pfWlanRemove() rollback, so a failed attempt leaves the module loaded
-+ *      (and the box alive) instead of tearing down a half-initialized glue.
-+ *
-+ * initWlan() calls this when the module is inserted with t1100_probe=1;
-+ * default (0) keeps the vendor behaviour untouched.
-+ */
-+extern int wmt_plat_pwr_ctrl(int state);	/* exported by wmt_drv (FUNC_ON = 0) */
-+
-+extern int t1100_probe_stage;
-+
 +/*
 + * T1100 (M23): when wmt_drv has already brought CONSYS up over BTIF/STP
 + * (t1100_btif_stp=1 in wmt_drv, which also downloads the ROMv4 patch), the
@@ -971,10 +803,16 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 +	       g->rHifInfo.fgDmaEnable);
 +}
 +
-+int t1100_wlan_probe(VOID)
-+{
-+	int ret;
-+
+ int t1100_wlan_probe(VOID)
+ {
+ 	int ret;
+ 
+-	DBGLOG(INIT, INFO, "t1100_wlan_probe: chip power on\n");
+-	ret = wmt_plat_pwr_ctrl(0);	/* ENUM_FUNC_STATE: FUNC_ON */
+-	DBGLOG(INIT, INFO, "t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = %d\n", ret);
+-	if (ret) {
+-		DBGLOG(INIT, ERROR, "t1100_wlan_probe: chip power on failed\n");
+-		return ret;
 +	if (t1100_pwr_on_done) {
 +		DBGLOG(INIT, INFO,
 +		       "t1100_wlan_probe: CONSYS already up (wmt_drv BTIF STP)\n");
@@ -986,14 +824,13 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 +			DBGLOG(INIT, ERROR, "t1100_wlan_probe: chip power on failed\n");
 +			return ret;
 +		}
-+	}
-+
-+	if (t1100_probe_stage < 2) {
-+		DBGLOG(INIT, INFO, "t1100_wlan_probe: stage %d, stop after power on\n",
-+		       t1100_probe_stage);
-+		return 0;
-+	}
-+
+ 	}
+ 
+ 	if (t1100_probe_stage < 2) {
+@@ -1180,10 +1300,56 @@
+ 		return 0;
+ 	}
+ 
 +	if (t1100_stp_probe_en)
 +		t1100_stp_probe();
 +
@@ -1006,10 +843,10 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 +		DBGLOG(INIT, INFO, "t1100_wlan_probe: patch set before probe = %d\n", pr);
 +	}
 +
-+	DBGLOG(INIT, INFO, "t1100_wlan_probe: paldo on + wlanProbe\n");
-+	mtk_wcn_consys_hw_wifi_paldo_ctrl(1);	/* power on WiFi TX PA 3.3V */
-+	ret = (int) pfWlanProbe((PVOID) &HifAhbPDev->dev);
-+	DBGLOG(INIT, INFO, "t1100_wlan_probe: wlanProbe returned %d\n", ret);
+ 	DBGLOG(INIT, INFO, "t1100_wlan_probe: paldo on + wlanProbe\n");
+ 	mtk_wcn_consys_hw_wifi_paldo_ctrl(1);	/* power on WiFi TX PA 3.3V */
+ 	ret = (int) pfWlanProbe((PVOID) &HifAhbPDev->dev);
+ 	DBGLOG(INIT, INFO, "t1100_wlan_probe: wlanProbe returned %d\n", ret);
 +	{
 +		int i;
 +
@@ -1044,24 +881,6 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 +			       "t1100_wlan_probe: retry %d returned %d\n", i, ret);
 +		}
 +	}
-+	return ret;
-+}
-+
-+/*----------------------------------------------------------------------------*/
-+/*!
- * \brief This function will do module remove.
- *
- * \param[in] None
-@@ -1281,10 +1495,10 @@
- * \return 0
- */
- /*----------------------------------------------------------------------------*/
--static int HifAhbPltmRemove(IN struct platform_device *pDev)
-+static void HifAhbPltmRemove(IN struct platform_device *pDev)
- {
-+	/* 6.11: platform_driver.remove() returns void */
- 	mtk_wcn_wmt_wlan_unreg();
--	return 0;
+ 	return ret;
  }
  
- #ifdef CONFIG_PM
