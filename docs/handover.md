@@ -61,12 +61,12 @@
 
 ## Текущее состояние платы (14.11)
 
-- `boot_a` = `build/boot_nonwifi_amp.img` (md5 p29
-  `61e08a8b698a0bb8e2a4601f6303808e`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
+- `boot_a` = `build/boot_nonwifi_wifi.img` (md5 p29
+  `d401cf2dc27fda719f89848cbe0aa787`): Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
   (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,
   `schedutil`) и CPU thermal zone (0064: 80/90/115 °C, throttling
-  проверен). Wi-Fi в этот образ не включён. Type-C dual-role (0066/0067):
+  проверен). Встроенный CONSYS/MT6631 Wi-Fi не включён; built-in USB Wi-Fi драйверы (MT7601U/RTL8XXXU/RT2X00/ATH9K_HTC/CARL9170/BRCMFMAC_USB) добавлены, firmware установлена, донгл не проверялся. Type-C dual-role (0066/0067):
   host с флешкой работает, VBUS 5.05 В / 2.4 А, возврат host→device через
   helper `t1100-usb-role` без перезагрузки. Батарея: ёмкость по OCV
   (0069). Гарнитура: jack работает вручную (`HPL/HPR Mux=2`,
