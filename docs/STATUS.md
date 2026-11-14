@@ -4912,7 +4912,7 @@ BTIF/STP-транспорт (включая исправленную поляр�
   - `build/boot_gauge_nocurrent.img` — вариант с
     `mediatek,no-current-compensation` (только напряжение, без чтения FG);
     md5 **226f56e380adea4da70fd4847baf2134**, страховка для первого теста.
-- **Бэкап/откат:** p29 до работы — `/tmp/opencode/boot_a_before_gauge.img`,
+- **Бэкап/откат:** p29 до работы — `build/recovery/boot_a_before_gauge.img`,
   md5 **d401cf2dc27fda719f89848cbe0aa787** (`build/boot_nonwifi_wifi.img`,
   boot_nonwifi_wifi). Откат: recovery → `dd` этого файла в p29 или
   `tools/host/flash-ssh.sh` при живом RNDIS.

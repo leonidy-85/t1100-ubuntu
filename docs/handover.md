@@ -68,7 +68,7 @@
   vendor latch-запись `FGADC_CON1`; предпочтительный для проверки —
   `build/boot_gauge_v2.img` (md5 `9d2bf057…`), страховочный без тока —
   `build/boot_gauge_nocurrent.img` (md5 `226f56e3…`). Откат —
-  `/tmp/opencode/boot_a_before_gauge.img` (md5 `d401cf2d…`,
+  `build/recovery/boot_a_before_gauge.img` (md5 `d401cf2d…`, копия
   `build/boot_nonwifi_wifi.img`). Ubuntu 26.04 + KDE 6.6.4, 8 ядер,
   панель 1600×2176@58.93 (0046+0052), рабочий тач (0051), GPU DVFS
   (0058/0059), CPU DVFS (0062/0063: `mtk-cpufreq`, 793…1989 МГц,

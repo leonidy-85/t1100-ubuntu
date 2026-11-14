@@ -66,7 +66,7 @@ PGA 0 dB, поэтому 4,4 (24 dB) действовали только до к
 (`build/boot_gauge_v2.img`, md5 `9d2bf057…`) она убрана, ток читается
 простым `regmap_read`. Страховочный вариант без чтения FG —
 `build/boot_gauge_nocurrent.img` (md5 `226f56e3…`).
-Откат: `/tmp/opencode/boot_a_before_gauge.img` (md5 `d401cf2d…`).
+Откат: `build/recovery/boot_a_before_gauge.img` (md5 `d401cf2d…`).
 
 
 ## 6.4 Гарнитура — сделано (manual)
