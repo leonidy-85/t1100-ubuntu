@@ -4868,3 +4868,62 @@ BTIF/STP-транспорт (включая исправленную поляр�
   Распакованы `mt7601u.bin`, `rt2870.bin`, `rtlwifi/*.bin`; firmware
   `ath9k_htc`/`carl9170` в пакете не найдены.
 - USB Wi-Fi донгл пока не подключался, реальный `wlan0` не проверен.
+
+## 14.11 (9): топливомер MT6358 — минимальный порт (0072), на железе не проверен
+
+- **Что в вендоре.** `mt6358_gauge.c` (90 КиБ, Hadenix 4.4.146) — часть MTK
+  battery framework: `pmic_read/write_interface()` + vendor AUXADC API +
+  `gauge_device` для userspace-демона. Регистры, которые реально нужны:
+  `FGADC_CUR_CON0` 0x0d8a (ток, знаковый 16 бит, 381.470 мкА/LSB,
+  `car_tune=1000`, `r_fg=50`), `FGADC_CAR_CON0/1` 0x0d14/0x0d16,
+  `FGADC_NCAR_CON0/1` 0x0d28/0x0d2a, `FGADC_CON1` 0x0d0a (latch),
+  `AUXADC_ADC19/27` 0x10ae/0x10be (OCV на включении/подключении).
+- **Voltage — из mainline.** `CONFIG_MEDIATEK_MT6359_AUXADC=y` (драйвер
+  `mt6359-auxadc.c` обслуживает и MT6358) даёт IIO-канал `bat_adc` (BATADC,
+  BATSNS/3, 15 бит). Проверено на auxadc-образе: raw 23280…23352, scale 5400
+  → **3836…3845 мВ**, стабильно; MT6370 в это же время показывал 3840 мВ.
+  Канал `batt_v` (IMP/FGADC) **не использовать**: его чтение один раз
+  оставило AUXADC в «stuck» (`mt6359-auxadc: Resetting stuck ADC!`) и
+  уронило USB-гаджет на ~5 минут.
+- **Патч 0072** добавляет MFD-ячейку `mediatek,mt6358-gauge`
+  (`drivers/mfd/mt6397-core.c`), драйвер
+  `drivers/power/supply/mt6358-gauge.c` и заголовок
+  `include/linux/power/mt6358-gauge.h`:
+  - напряжение — BATADC через IIO;
+  - ток — `FGADC_CUR_CON0` через parent regmap
+    (`dev_get_regmap(parent)` / parent->parent), без `pmic_pwrap_*`;
+  - OCV = VBAT − I·R(SOC), R и кривая OCV→заряд — из профиля
+    `battery0_profile_t2` (100 троек `<0.1 мА·ч 0.1 мВ 0.1 мОм>`, перенесён
+    в board DTS из `refs/stock-mt6771.dts`);
+  - `mt6370-battery` при наличии gauge берёт voltage/current/capacity из него,
+    иначе остаётся старая OCV-таблица 0069;
+  - пороги power-guard 3.72/3.60 В не менялись — guard читает MT6370 IIO
+    напрямую.
+- **Сборка (build-хост, src-nonwifi/out-nonwifi):** `Image` sha256
+  `18efb4516fc85cd3e594f8e50b5a935643c621302739822927d7f53eb15351b2`,
+  DTB `4f01d3375c540e44a771d41f1d1e716c22ac551073fec6c91e56adcb5ab09980`.
+  Фрагмент: `CONFIG_MEDIATEK_MT6359_AUXADC=y`, `CONFIG_MT6358_GAUGE=y`.
+- **Образы:**
+  - `build/boot_gauge.img` (v1) — прошит в p29, md5 **34db0025a4f683248c0fab7a4cd9195e**
+    (sha256 `bc5ef149…`), сверен на устройстве. v1 использует vendor
+    latch-последовательность FGADC_CON1 — **потенциально рискованная**;
+  - `build/boot_gauge_v2.img` — latch-запись убрана, ток читается простым
+    `regmap_read` 0x0d8a; md5 **9d2bf057aec2104573061b2568296691**, не прошит;
+  - `build/boot_gauge_nocurrent.img` — вариант с
+    `mediatek,no-current-compensation` (только напряжение, без чтения FG);
+    md5 **226f56e380adea4da70fd4847baf2134**, страховка для первого теста.
+- **Бэкап/откат:** p29 до работы — `/tmp/opencode/boot_a_before_gauge.img`,
+  md5 **d401cf2dc27fda719f89848cbe0aa787** (`build/boot_nonwifi_wifi.img`,
+  boot_nonwifi_wifi). Откат: recovery → `dd` этого файла в p29 или
+  `tools/host/flash-ssh.sh` при живом RNDIS.
+- **Факт на железе (до port):** при 3.84 В на зарядке `mt6370-battery`
+  показывал capacity 51–52 %, current 200 мА; PMIC BATADC — 3836–3845 мВ
+  (что по профилю t2 даёт ≈ 49–50 %). После прошивки gauge-образа планшет
+  был отключён от USB и поставлен на зарядку, поэтому **capacity/voltage
+  нового драйвера на железе не сняты**; в dmesg ожидается строка
+  `mt6358-gauge ... vbat ... current ... ocv ... capacity ...`.
+- **Что осталось:** подключить планшет к хосту, прошить `boot_gauge_v2.img`,
+  проверить dmesg/sysfs; снять capacity при 3.83 В, затем без кабеля
+  (профиль нагрузки) и после заряда; убедиться, что guard/зарядка/KDE/SSH
+  не регрессировали. Если 0x0d8a читается нестабильно — оставить
+  no-current вариант и вернуться к компенсации через MT6370 IBAT.

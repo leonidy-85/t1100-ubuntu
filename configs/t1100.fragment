@@ -146,6 +146,15 @@ CONFIG_TYPEC_TCPM=y
 CONFIG_TYPEC_TCPCI=y
 CONFIG_TYPEC_TCPCI_MT6370=y
 
+# --- fuel gauge: minimal MT6358 port (patches/0072) --------------------------
+# The stock MT6358 gauge is not in mainline.  The MT6359 AUXADC driver also
+# covers MT6358 and exposes BATADC (BATSNS/3) through IIO; the gauge driver
+# reads that channel and the FGADC current register through the PMIC regmap.
+# Without MEDIATEK_MT6359_AUXADC the gauge defers and mt6370-battery keeps its
+# OCV fallback.
+CONFIG_MEDIATEK_MT6359_AUXADC=y
+CONFIG_MT6358_GAUGE=y
+
 # --- input: Himax HX83102E in-cell touch controller (i2c0 0x48) --------------
 # The panel's digitizer is a Himax HX83102E (ICID 0x83102e read over the AHB
 # window at 0x900000d0), which is register-compatible with the hx83112b
