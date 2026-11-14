@@ -4684,3 +4684,125 @@ wlanProbe -5, wlan0 нет
 принимаются, но MCU всё равно остаётся в POR. Значит и «assert после патча», и этот прогон
 упираются в одно и то же: команда `WIFI_START` не переводит MCU на переданный адрес, а данные
 секций в память не попадают (M73/M76: readback = нули; M77: TX-дескрипторы не двигаются).
+
+## 82. M81: пересмотр приборов M73–M80 — «данные не легли» и «TX не идёт» измерены не тем (14.11)
+
+Рубеж **build-only**: планшет не трогали, ничего не прошивали. Разбор по коду
+вендорского стека, прошивке `WIFI_RAM_CODE_6759` и сохранённым дампам прогонов.
+
+### 82.1 Заголовок прошивки: 4 секции, две из них в EMI (а не через HIF)
+
+`WIFI_RAM_CODE_6759` (480 752 Б) — контейнер `FIRMWARE_DIVIDED_DOWNLOAD_T`
+(`include/wlan_lib.h:353-372`, MT6631-вариант: `{u4Offset, ucKIdx, ucEnc,
+u2Reserved, u4Length, u4DestAddr}`):
+
+| # | dest | len | enc | куда |
+|---|---|---|---|---|
+| 0 | `0x020a1000` | 28 032 | 1 | «directly to chip»: `wlanImageSectionConfig/Download` (MCIF) |
+| 1 | `0x000a5800` | 33 776 | 1 | то же (это `hardware-values[1..2]` из DT) |
+| 2 | `0xf0000000` | 342 320 | 0 | **EMI**, `gConEmiPhyBase + (dst & 0xfffff)` |
+| 3 | `0xf0055000` | 76 512 | 0 | **EMI** |
+
+Секции 2/3 вообще не идут через HIF: `wlanImageDividDownload()` копирует их
+`kalMemCopy` в reserved-memory CONSYS (проверено в §31.2 — байт в байт). То есть
+вопрос «легли ли данные» относится только к двум code-секциям, и он до сих пор
+**не был измерен ни разу** (см. 82.2).
+
+### 82.2 Три прибора, которыми сделаны выводы M73–M80, не измеряют то, что им приписали
+
+1. **«readback = нули» (M73, M76).** Код `t1100-rb` читал
+   `HAL_MCR_RD(prAdapter, 0x000a5800 + n, &v)`. Это `kalDevRegRead()` →
+   `sdio_cr_readl(HifRegBaseAddr, addr)` (`ahb_sdioLike/sdio_bus_driver.c:180`),
+   а адрес в слове CMD53 — **17 бит** (`sdio_gen3_cmd53_info.addr`,
+   `ahb_sdioLike/include/sdio.h:74-82`). `0x000a5800` в 17 бит не влезает и
+   обрезается до `0x25800`; читается «окно HIF + 0x25800», а не память MCU.
+   Нули — артефакт метода, а не факт о прошивке. Валидного чтения памяти MCU у
+   нас не было вообще.
+2. **«TX-дескрипторы не двигаются» (M77).** `MCR_WTMCR (0x00b4)` — это
+   *test mode control* (`WMTCR_TEST_MODE_*`, PRBS), `MCR_WSR (0x00d8)` — *WLAN
+   snapshot register* (`include/nic/mt6630_reg.h:316-321,142`). Ни то, ни другое
+   не является счётчиком TX. MTK-шные индикаторы передачи — `WHISR`
+   (`WHISR_TX_DONE_INT = BIT(0)`), `WTQCR0..7` (released TX pages — их читает
+   сам драйвер в `HAL_READ_TX_RELEASED_COUNT()`), `WASR`, `WRPLR`.
+3. **«TX в MCU не идёт» (итог 14.11).** Пакеты конфигурации секций идут по тому же
+   пути, что и данные (`nicTxInitCmd` → `kalDevPortWrite(…, MCR_WTDR1, …)` →
+   CQDMA, `DmaConf.Dst = HifRegPhyBase + 0x1000`; PIO включается только при
+   `fgDmaEnable == FALSE`). Конфиг-команды **получают настоящий ACK от ROM**:
+   `wlanImageSectionDownloadStatus()` проверяет EID, seq и `ucStatus`
+   (`common/wlan_lib.c:3001-3060`), и в M70/M80 дважды вернулся `status=0` с
+   ожидаемым seq. Плюс `wlanImageQueryStatus()` (CID 4) вернул `0` — «pending
+   error нет» (§41.2). Значит канал «AP → MCU» и «MCU → AP» живой, ROM образ
+   принял; утверждение «TX в MCU не идёт» доказано не было.
+
+Что при этом остаётся верным: `cpupcr` — это действительно PC
+(`CONSYS_CPUPCR_OFFSET 0x160`; для combo-чипов MTK читает тот же смысл из
+`SWPCDBGR`), он всё время в диапазоне ROM (`0x594…0x18000`), в `0xa5800` не
+уходит; `WCIR = 0x00100788` (POR=1, READY=0) не меняется; `wlan0` не появляется.
+
+### 82.3 Уточнённый барьер
+
+С учётом 82.2 картина такая: **ROM отвечает, образ принимает (оба code-секции
+через MCIF + EMI-секции через memcpy), но по `WIFI_START` не прыгает в RAM-код**.
+Это не «HIF не передаёт данные» и не «assert после ROMv4-патча» (M80 без патча
+дал то же).
+
+Единственная ветка протокола, которая **ни разу не проверялась**, — штатный
+vendor-вариант старта: `wlanConfigWifiFunc(prAdapter, FALSE, 0)`, т.е.
+`u4Override = 0`, `u4Address = 0` (`common/wlan_lib.c:3070-3110`; в gen4m то же
+самое, `fw_dl.c:1602`). `CFG_OVERRIDE_FW_START_ADDRESS` (наш патч 0008) —
+опциональный путь, и все прогоны M20…M80 слали `override=1` с явным адресом,
+чего рабочий вендорский стек не делает.
+
+### 82.4 Что добавлено в дерево (build-only, проверено сборкой)
+
+- `patches/wifi/0020-wlan-access-reg-and-tx-diag.patch`:
+  - `t1100_mem_read()/t1100_mem_dump()` — чтение памяти MCU **через сам ROM**
+    (`INIT_CMD_ID_ACCESS_REG`, CID 3, ответ `INIT_EVENT_ID_ACCESS_REG`, EID 2;
+    формат и семантика — gen4m `wlanAccessRegister()`, публичный GPL-2.0-код).
+    Таблица init-команд ROM'а заканчивается на CID 4 (§43.2), так что CID 3 он
+    обслуживает. Это первое валидное измерение «легла ли секция 1 в `0xa5800`».
+  - `t1100_tx_state()` — `WHISR` (TX_DONE/RX/ABNORMAL), `WTQCR0..7`, `WASR`,
+    `WRPLR` до секции, после первого и после последнего пакета каждой секции и
+    после каждого `WIFI_START`. Показывает, потребляет ли чип **data**-пакеты.
+  - `WIFI_START` теперь начинается с vendor-варианта `override=0`, затем прежние
+    адреса (`0xa5800`, `0x020a1000`, `0x91400`).
+  - в `t1100_hif_state()` добавлены `WHLPCR` (driver-own) и
+    `fgDmaEnable/DmaOps` — чтобы в логе было видно, DMA или PIO был активен.
+- `patches/wifi/0017-…` и `0018-…` **перегенерированы** (см. 82.5), в
+  `optional/` убраны поглощённые ими 0009-wlan, 0010-wlan, 0014, 0014z,
+  0015-single-reset, 0016-addr-align.
+
+### 82.5 Воспроизводимость: серия патчей не собиралась из репозитория
+
+Обнаружено при попытке собрать дерево «с нуля» по README: 0017/0018 — это
+**кумулятивные снимки** (`diff -u -r a/ b/` целых файлов), а не дельты, поэтому
+применение их поверх 0009/0010/0014/0015/0016 даёт «reversed/previously applied»
+и reject'ы. Плюс в `include/wlan_lib.h` прототип `wlanImageQueryStatus()` стоит
+под `#if !CFG_ENABLE_FW_DOWNLOAD_ACK`, а порт вызывает функцию всегда — без
+правки заголовка (её в патчах не было) `wlan_drv_gen3.ko` не собирается
+(`implicit declaration`, затем `conflicting types`). То есть прогоны M70–M80
+делались из `work/`, где эта правка жила незакоммиченной.
+
+Сделано: 0017 и 0018 пересобраны как **дельты к воспроизводимой базе**
+(0018 — к pristine+0001…0008; 0017 — к pristine+0001,0002,0004,0005,0009…0013,
+0015-trace,0016-trace), в 0018 добавлен фикс прототипа в `wlan_lib.h`.
+Проверка: чистый клон Motorola → серия → `make modules` = `wmt_drv.ko` +
+`wlan_drv_gen3.ko`, **0 errors** (build-хост, out-дерево
+`/home/l/t1100-wifi-build/out`, release `6.12.114-g675178729a-dirty`).
+
+### 82.6 Следующий прогон (нужен планшет)
+
+Один прогон с `0020` отвечает на два вопроса сразу:
+
+| наблюдение | вывод |
+|---|---|
+| `t1100-mem[after-dl] 0x000a5800 = <байты файла>` | данные секции 1 **легли**; барьер — только `WIFI_START` |
+| `t1100-mem` = нули/`rc≠0` | секция не легла; копать framing блочного режима CMD53 (2 КБ) |
+| `t1100-tx[sec1-pkt0]: txdone=1` / `WTQCR` растут | чип пакеты потребляет |
+| `txdone=0` и `WTQCR` не меняются, а у `sec*-pre`/после конфига — растут | data-пакеты не доходят → block-mode |
+
+Если данные легли, а `override=0` не поднял READY — следующий шаг уже не
+«HIF глубоко», а **сравнение со стоком**: снять на стоковой прошивке значения
+`WHISR/WTQCR/WCIR/WHLPCR` сразу после `wlanAdapterStart` (или дизассемблировать
+стоковый `wlanConfigWifiFunc`/`wlanAdapterStart` из `wlan_drv_gen3.ko` 4.14 —
+.symtab там есть, обе функции не static).
