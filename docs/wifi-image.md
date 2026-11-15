@@ -226,3 +226,30 @@ dmesg | grep -E 'Linux version|mt6358-gauge|consys|wmt|wlan' | head -30
    (в p29 было 56–59 % стабильно).
 7. **Место на build-хосте**: свободно ~1.2 ГБ; `out-wifi` (1.6 ГБ) и
    `t1100-wifi-m82` остаются, при следующей сборке это надо учитывать.
+
+## 9. Пересборка `wifi2` (15.11): поверх 0074/0075/0076
+
+Образ из §1–§2 собран **до** IT6112-фикса (0074) и panfrost-патчей (0075/0076),
+поэтому прошивать его как есть нельзя — потеряли бы «полос после сна нет».
+Пересобрано из того же `src-nonwifi` (там уже 0074/0076), out — `out-wifi`.
+
+| файл | размер | sha256 |
+|---|---|---|
+| `build/wifi-image2/boot_wifi2.img` | 33 554 432 | `d9a1f402166ec409a31c736dc802f50640ade04a518e9585ee99cf25fdf7bcc8` |
+| `build/wifi-image2/Image.gz` | 15 597 592 | `417316490a49cecc432289ad4fdf0dc96c8d6bb919bfb34af04b7bfdf83e05ac` |
+| `Image` (out-wifi) | 42 228 224 | `d7b752c073cdd0353dac14cf350456a8990659bf443a638358217422b3d5da76` |
+| `build/wifi-image2/mt6771-fplus-t1100.dtb` | 59 247 | `8362894fdc4232e4e0b2bdc30cf7f8f40e9720a72e4eccbf4d35cff17d886e63` |
+| `wmt_drv.ko` | 1 167 584 | `703a47ae59440283cd034c66eadce460321551c95ac5d0ee0f38f74f64c5aacb` |
+| `wlan_drv_gen3.ko` | 2 947 560 | `3fdda9c366b0535d30c8cb8e5f46ef3d7d024e04dd2f7e88ca02d09d0c8b2c72` |
+| `mtk_btif_drv.ko` | 187 792 | `92d4740c9dae1129b89e884a05815b8af5f616bdbdb80a696755958114bec391` |
+
+- release `6.12.114-wifi1`, vermagic всех трёх `.ko` — `6.12.114-wifi1 SMP preempt mod_unload aarch64`
+  (первая сборка дала `6.12.114-wifi1-wifi1`: `LOCALVERSION` задавался и в
+  `CONFIG_LOCALVERSION`, и в make; лечится сборкой с `LOCALVERSION=`).
+- boot перепакован с `--ref build/pf-irq/boot_pf_irq_fix.img` (0076), ramdisk
+  `0cfa596d…` из p29, cmdline не менялся; проверено обратной распаковкой:
+  kernel `41731649…`, dtb `8362894f…`, ramdisk `0cfa596d…`, баннер
+  `Linux version 6.12.114-wifi1`.
+- Откат: `build/pf-irq/boot_pf_irq_fix.img` sha256 `2ebe6f3e…357baf` (p29).
+- Установка (не выполнялась): `.ko` в `/lib/modules/6.12.114-wifi1/updates/wifi/`,
+  `depmod -a 6.12.114-wifi1`, затем прогон M81 (`docs/wifi-port-log.md` §82.6).

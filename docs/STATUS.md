@@ -5079,3 +5079,18 @@ BTIF/STP-транспорт (включая исправленную поляр�
   и 0076 пока не доказан; вероятная причина прежних клиньев — залипший
   OTG/boost порта, снимаемый перезагрузкой.
 - Откат: `build/it6112-resume/boot_resume_full.img` (`75af7b5f…`).
+
+## 15.11 (13): Wi-Fi-образ пересобран поверх 0074/0076 (wifi2)
+
+- `out-wifi` пересобран из `src-nonwifi` (в нём 0074 и 0076) с wifi-фрагментами;
+  release исправлен на `6.12.114-wifi1` (был `-wifi1-wifi1`: `LOCALVERSION`
+  задавался дважды — теперь сборка идёт с `LOCALVERSION=`).
+- Вендорские модули пересобраны против этого out: `wmt_drv.ko` `703a47ae…`,
+  `wlan_drv_gen3.ko` `3fdda9c3…`, `mtk_btif_drv.ko` `92d4740c…`;
+  vermagic у всех `6.12.114-wifi1`.
+- boot перепакован с `--ref build/pf-irq/boot_pf_irq_fix.img` (0076), ramdisk и
+  cmdline из p29: `build/wifi-image2/boot_wifi2.img` sha256 `d9a1f402…`ffbcc8,
+  kernel `41731649…`, DTB `8362894f…`. Обратная распаковка совпала.
+- Прошивка не выполнялась (ждёт согласования). Откат — `2ebe6f3e…357baf`.
+- Цель прогона: M81 (`docs/wifi-port-log.md` §82.6) — `t1100-mem[after-dl]`
+  по `0x000a5800`, `t1100-tx`/`WHISR`/`WTQCR`, vendor-`WIFI_START`.
