@@ -1,0 +1,154 @@
+From 3f8b21c4d6e0a9b7c5d3e1f0a2b4c6d8e0f1a976 Mon Sep 17 00:00:00 2001
+From: gpu-mesa <gpu-mesa@t1100.local>
+Date: Sun, 15 Nov 2026 23:10:00 +0300
+Subject: [PATCH] drm/panfrost: don't let a job interrupt that cannot be
+ cleared wedge the reset path
+
+Both loops that drain JOB_INT_RAWSTAT are unbounded:
+
+  panfrost_job_handle_irqs():
+      while (status) { ... status = job_read(JOB_INT_RAWSTAT); }
+
+  panfrost_job_handle_irq():
+      while (status) { ... job_write(JOB_INT_CLEAR, status);
+                            status = job_read(JOB_INT_RAWSTAT); }
+
+JOB_INT_CLEAR is write-one-to-clear, and the driver writes back exactly the
+bits it read, so normally the loop ends after one or two rounds.  It cannot
+end if the GPU keeps re-asserting a bit, and panfrost itself never clears the
+condition behind an exception: on a job fault panfrost_job_handle_err() only
+cancels the *next* command (JS_COMMAND_NEXT = NOP) and dequeues the failed
+job; the current job slot stays in its exception state until it is restarted
+by panfrost_reset() (SOFT_STOP + GPU soft reset).
+
+That matters because panfrost_job_irq_handler is a *threaded* IRQ:
+synchronize_irq() waits for desc->threads_active, i.e. for as long as the
+threaded handler runs.  panfrost_job_timedout() calls it before deciding to
+reset, and panfrost_reset() calls it after masking the interrupt.  So one
+stuck RAWSTAT bit keeps the threaded handler running forever, the ordered
+"panfrost-reset" workqueue never gets past synchronize_irq(), and the whole
+GPU queue stays parked even though a reset is exactly what would fix it.
+
+On the T1100 (Mali-G72 MP3, MT6771) that is one of the candidate mechanisms
+for the "picture freezes for tens of seconds after the USB cable is
+unplugged" bug: sysrq-w shows the panfrost-reset worker in D inside
+__synchronize_irq(), and the freeze ends only when the threaded handler
+finally returns (15.11.2026, kernel 6.12.114, p29).
+
+Bound the drain loop: after JOB_IRQ_MAX_ROUNDS rounds (normal operation needs
+one or two), print the offending RAWSTAT/JS_STATE, mask the job interrupt and
+queue panfrost_reset() through the existing
+panfrost_device_schedule_reset().  The reset path soft-stops the slots,
+resets the GPU and re-enables the interrupt, so the interrupted job is
+resubmitted instead of parking the queue forever.
+
+Two supporting bits keep the hand-over consistent:
+
+  - panfrost_job_handle_irqs() stops as soon as reset.pending is set: the job
+    slots belong to panfrost_reset() then, and re-entering
+    panfrost_job_handle_irq() on a status bit that never clears would only
+    dequeue the same slot twice (WARN_ON in panfrost_dequeue_job()).
+  - the threaded handler does not re-arm JOB_INT_MASK while a reset is
+    pending; panfrost_reset() re-enables interrupts itself when the slots
+    have been restarted.  Without this the handler would mask, re-arm, and be
+    woken again immediately for the same bit.
+
+The healthy path is untouched: a normal interrupt still drains in one pass
+and re-arms the mask as before.
+
+This patch applies after 0075 (which adds the round/lock-waist
+instrumentation and JOB_IRQ_SLOW_MS in the same functions).
+
+Signed-off-by: gpu-mesa <gpu-mesa@t1100.local>
+---
+ drivers/gpu/drm/panfrost/panfrost_job.c | 51 ++++++++++++++++++++++++++++++-
+ 1 file changed, 49 insertions(+), 2 deletions(-)
+
+--- a/drivers/gpu/drm/panfrost/panfrost_job.c
++++ b/drivers/gpu/drm/panfrost/panfrost_job.c
+@@ -27,6 +27,15 @@
+ /* Anything above this is worth a line in dmesg, see the commit message. */
+ #define JOB_IRQ_SLOW_MS 100
+ 
++/*
++ * A job interrupt that the GPU keeps re-asserting after it has been cleared
++ * must not keep the threaded handler busy forever: the timeout/reset path
++ * synchronizes with that handler, so an endless loop here wedges the reset
++ * worker and the GPU never recovers.  Normal operation needs one or two
++ * rounds per handler invocation.
++ */
++#define JOB_IRQ_MAX_ROUNDS 32
++
+ #define job_write(dev, reg, data) writel(data, dev->iomem + (reg))
+ #define job_read(dev, reg) readl(dev->iomem + (reg))
+ 
+@@ -500,6 +509,7 @@
+ 	struct panfrost_job *failed[NUM_JOB_SLOTS] = {};
+ 	u32 js_state = 0, js_events = 0;
+ 	unsigned int i, j;
++	unsigned int rounds = 0;
+ 
+ 	/* First we collect all failed/done jobs. */
+ 	while (status) {
+@@ -543,6 +553,27 @@
+ 		js_state |= job_read(pfdev, JOB_INT_JS_STATE) & js_state_mask;
+ 		js_events |= status;
+ 		status = job_read(pfdev, JOB_INT_RAWSTAT);
++
++		/*
++		 * A job slot that stays in an exception state (DATA_INVALID /
++		 * JOB_CONFIG faults are not recovered by the driver: only the
++		 * *next* command is cancelled) keeps its RAWSTAT bit asserted,
++		 * so writing JOB_INT_CLEAR has no visible effect and the loop
++		 * above would never end.  The threaded handler has to return:
++		 * panfrost_job_timedout() and panfrost_reset() wait for it in
++		 * synchronize_irq(), and while it runs no reset can happen, so
++		 * one stuck slot parks the whole GPU queue.  Mask the job
++		 * interrupt and hand over to the reset path, which soft-stops
++		 * the slots, resets the GPU and re-enables the interrupt.
++		 */
++		if (status && ++rounds >= JOB_IRQ_MAX_ROUNDS) {
++			dev_err(pfdev->dev,
++				"job irq status does not clear (rawstat=0x%08x, js_state=0x%08x), scheduling a GPU reset\n",
++				status, job_read(pfdev, JOB_INT_JS_STATE));
++			job_write(pfdev, JOB_INT_MASK, 0);
++			panfrost_device_schedule_reset(pfdev);
++			break;
++		}
+ 	}
+ 
+ 	/* Then we handle the dequeued jobs. */
+@@ -615,6 +646,16 @@
+ 		spin_unlock(&pfdev->js->job_lock);
+ 		status = job_read(pfdev, JOB_INT_RAWSTAT);
+ 		rounds++;
++
++		/*
++		 * A reset is pending (a stuck job slot above, a bus fault that
++		 * needs one, or the timeout handler): the job slots are owned
++		 * by panfrost_reset() now, do not touch them from here.  The
++		 * reset path itself calls this function once, after masking the
++		 * interrupt, which is what the single pass is for.
++		 */
++		if (atomic_read(&pfdev->reset.pending))
++			break;
+ 	}
+ 
+ 	if (rounds > 8 || lock_wait_ms > JOB_IRQ_SLOW_MS)
+@@ -834,8 +875,14 @@
+ 
+ 	panfrost_job_handle_irqs(pfdev);
+ 
+-	/* Enable interrupts only if we're not about to get suspended */
+-	if (!test_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended))
++	/*
++	 * Enable interrupts only if we're not about to get suspended, and not
++	 * while a reset is pending: panfrost_reset() re-enables them once the
++	 * job slots have been restarted, re-arming them here would only
++	 * re-enter this handler for a status bit that cannot be cleared.
++	 */
++	if (!test_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended) &&
++	    !atomic_read(&pfdev->reset.pending))
+ 		job_write(pfdev, JOB_INT_MASK,
+ 			  GENMASK(16 + NUM_JOB_SLOTS - 1, 16) |
+ 			  GENMASK(NUM_JOB_SLOTS - 1, 0));

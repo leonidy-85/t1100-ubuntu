@@ -160,3 +160,89 @@ out — `out-nonwifi`, инкрементально (`CC drivers/gpu/drm/panfros
 - `sugov:0/4` в D в момент клина — сильный намёк на общий ресурс
   (PMIC/pwrap/regulator или SPM/EMI). Если §6.1 п.6 подтвердит, это уже не
   panfrost, а DVFS-стек MT6771.
+
+## 8. 15.11, вечер: клин 94 с и патч 0076
+
+### 8.1. Что снято на устройстве (22:24:20 → 22:25:58)
+
+| # | Факт |
+|---|---|
+| 1 | reset-воркер `kworker/u32:3` (`Workqueue: panfrost-reset drm_sched_job_timedout`) в D на `__synchronize_irq+0x84 → synchronize_irq → panfrost_job_timedout+0x58` всё время клина |
+| 2 | `sugov:4` в D: `usleep_range_state → … → mtk_cpufreq_voltage_tracking → mtk_cpufreq_set_target` (CPU DVFS в переключении напряжения) |
+| 3 | `sysrq-l`: CPU0 исполнял `irq/394-1120100` (mtu3) в `irq_finalize_oneshot → irq_thread_fn → irq_thread`, остальные CPU idle |
+| 4 | IRQ: `irq/392-panfros` (job), `irq/393-panfros` (mmu), `irq/394-1120100` (mtu3); SPI 278/279/280 |
+| 5 | KWin не в `dma_fence_default_wait` (вероятно `drm_syncobj` wait) |
+| 6 | `gpu sched timeout` = 0 за загрузку; `unexpectedly high interrupt latency` инкрементился при размораживании; `js fault` ~1–3/мин |
+| 7 | в простое: genpd `mfg` off, GPU suspended, `mfgpll` 698 МГц enabled |
+
+### 8.2. Что это значит для гипотезы «цикл не выходит»
+
+Гипотеза остаётся правдоподобной по коду, но **sysrq-l её не подтверждает**:
+поток `irq/392` — SCHED_FIFO (`sched_set_fifo()` в `irq_thread`), и если бы он
+крутился в `while (status)`, он занимал бы CPU и был бы виден в NMI-дампе; в
+дампе его нет. Значит поток либо спал внутри `thread_fn` (тогда нужен его стек
+и `utime/stime`), либо дамп его не поймал.
+
+Отдельно: «залипание» **слотового** бита (DONE/ERR, биты 0–2 и 16–18) не может
+крутить цикл долго — на втором круге `panfrost_dequeue_job()` получит пустой
+слот (`WARN_ON(!job)` и разыменование NULL). Долгий цикл требует бита **вне**
+маски слотов (`MK_JS_MASK(j) = 0x10001 << j`) либо постоянного пере-взвода
+слота, в котором ещё стоит второй job. Именно поэтому в 0076 при срабатывании
+предела печатается фактический `rawstat`.
+
+### 8.3. Патч 0076 (лечащий)
+
+`patches/0076-drm-panfrost-bound-the-job-irq-drain-loop.patch`, применяется
+**после 0075** (тот же файл/функции).
+
+- внутренний цикл `panfrost_job_handle_irq()` ограничен `JOB_IRQ_MAX_ROUNDS`
+  (32; норма — 1–2): при недоочистке печатается `job irq status does not clear
+  (rawstat=…, js_state=…)`, маскируется `JOB_INT_MASK` и вызывается
+  `panfrost_device_schedule_reset()` — дальше работает существующий
+  `panfrost_reset()` (SOFT_STOP слотов, soft reset GPU, переармирование IRQ);
+- внешний цикл `panfrost_job_handle_irqs()` выходит, как только выставлен
+  `reset.pending` (слоты принадлежат reset-пути; иначе повторный вход
+  `panfrost_job_handle_irq()` дважды декьюил бы один слот);
+- threaded-обработчик **не** переармирует `JOB_INT_MASK`, пока висит
+  `reset.pending` (иначе mask→re-arm→немедленный повторный вход по тому же
+  биту); `panfrost_reset()` включает прерывания сам.
+
+Нормальный путь не меняется: обычный IRQ дренится за один проход и
+переармируется как раньше.
+
+### 8.4. Артефакты (собрано, не прошивалось)
+
+| | |
+|---|---|
+| база p29 | `Image` `de04b7ab…`, boot `75af7b5f…` |
+| `Image` 0075 | `6711450f…` (boot `40f0cce2…`) |
+| **`Image` 0075+0076** | **`fc65b82c110048f98446aad8a273d7e7fde8c25d4a0071dad42e571ab0ce83b8`** |
+| **boot-кандидат** | `build/pf-irq/boot_pf_irq_fix.img`, sha256 `2ebe6f3e…357baf`, md5 `367974de…` |
+| DTB/ramdisk/cmdline | из p29 байт в байт (`4f01d337…`, `0cfa596d…`) |
+
+Круговая проверка: kernel внутри образа = `fc65b82c…`, DTB = `4f01d337…`.
+Откат — `build/it6112-resume/boot_resume_full.img` (`75af7b5f…`).
+
+### 8.5. Что снять при следующем клине
+
+1. `sysrq-t` целиком (не `l`): нужен стек **`irq/392-panfros`** — если он в
+   `panfrost_job_handle_irq`, гипотеза подтверждена; если в `devfreq`/
+   `regulator`/`clk` — причина внешняя для panfrost.
+2. `cat /proc/<pid irq/392>/stat` (поля 14/15, utime/stime) дважды с
+   интервалом 10 с + `cat /proc/<pid>/wchan`: растёт `stime` → spinning;
+   стоит → спит.
+3. `/proc/interrupts` по строке SPI 280 до/во время/после: счётчик растёт
+   (IRQ доставляются) или стоит.
+4. Полный `sysrq-l` (все CPU), а не только «idle»: важно увидеть, есть ли CPU
+   в `panfrost_job_handle_irq` / `queued_spin_lock_slowpath` / `readl`.
+5. `sysrq-w` целиком (все D-задачи), чтобы не пропустить `irq/392` в D.
+
+### 8.6. Про связь с USB — честно
+
+Доказанной цепочки «отключение кабеля → залипание бита» нет. В кадре клина
+видны системные вещи: поток `mtu3` крутится в `irq_finalize_oneshot` (CPU0),
+`sugov` спит в переключении напряжения PMIC. Правдоподобно, что отключение
+кабеля запускает переход питания/состояния (charger 1→0, DVFS/regulator/SPM),
+который на десятки секунд занимает общий ресурс, а зависание GPU — следствие
+(в том числе через `synchronize_irq`). Проверяется это A/B по governor'ам
+(§6.1 п.5–6) и стеком `irq/392` (§8.5).
