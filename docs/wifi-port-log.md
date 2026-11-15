@@ -4909,3 +4909,99 @@ ROM ждёт STP-транспорт, а в портированном `wlan_drv_
 
 Дальше: либо STP-транспорт init-cmd в wlan (большая работа), либо способ
 вернуть MCIF после патча (в WMT API режима AHB нет).
+
+## 84. M83: STP-транспорт init-cmd — собран, но гипотеза не подтверждается (16.11)
+
+Задача M83: сделать так, чтобы init-cmd (`INIT_HIF_TX_HEADER_T` + payload) и
+`WIFI_START` шли по BTIF/STP, а не по AHB/MCIF. Сделано build-only: код,
+патчи, сборка. На железе не прогонялось.
+
+### 84.1 Главное: у стока STP-транспорта для WLAN нет вообще
+
+Проверено по бинарю, который работает на этой плате вендорским стеком
+`vendor/aurora-5.2.1.200/modules-4.14.186/wlan_drv_gen3.ko`
+(sha256 `249ebea1…cc42b`, см. `refs/m43-stock-romv4-sequence.md`):
+
+```
+$ aarch64-linux-gnu-readelf -sW wlan_drv_gen3.ko | awk '$7=="UND" {print $8}' | grep -i "stp"
+(пусто)
+```
+
+Неразрешённые символы стокового WLAN-модуля из WMT-стека — только
+`mtk_wcn_wmt_assert_timeout`, `mtk_wcn_wmt_do_reset`, `mtk_wcn_wmt_ic_info_get`,
+`mtk_wcn_wmt_msgcb_reg/unreg`, `mtk_wcn_wmt_wlan_reg/unreg`,
+`wmt_plat_read_cpupcr`. Ни одного `mtk_wcn_stp_*`. Функции STP вызывают
+`wmt_drv` (patch/ROM) и `wmt_chrdev_wifi.ko` (это `mtk_wcn_wmt_func_on/off`,
+мост к `/dev/wmtWifi`), но не WLAN-драйвер.
+
+В самом `common`-дереве канал 3 объявлен (`stp_exp.h: WIFI_TASK_INDX = 3`), но
+**ни одного вызова** `mtk_wcn_stp_send_data(…, WIFI_TASK_INDX)` нет: канал
+нужен для WMT-сообщений, а не для data/init-cmd.
+
+Архитектурно это ожидаемо: init-cmd — регистровый протокол (MCR_WTDR1 →
+WTQCR/WHISR, ответ через WRPLR/WRDR0), «ready» — бит `WCIR_WLAN_READY`, а
+data-путь — кольца WFDMA. У STP (4-байтовый заголовок + payload в задачу
+прошивки) эквивалента для этого нет. Поэтому вывод M82 «пропатченный MCU ждёт
+STP-транспорт» **не подтверждается**: даже если бы MCU принял init-cmd по
+каналу 3, `wlan0` из этого не получится — data-путь остаётся в MCIF.
+
+### 84.2 Что всё-таки собрано (проверка гипотезы одним прогоном)
+
+| патч | что |
+|---|---|
+| `patches/wifi/0029-wlan-stp-init-cmd-transport.patch` | `include/t1100_stp_hif.h`, `os/linux/t1100_stp_hif.c` — опциональный транспорт канала 3 (`mtk_wcn_stp_send_data`/`receive_data`, RX через `register_event_cb`), плюс три обёртки в `wlan_lib.c` (`t1100_tx_init_cmd`, `t1100_rx_wait_response`, `t1100_tx_acquire`), которые в режиме `t1100_hif=1` заменяют `nicTxInitCmd`/`nicRxWaitResponse`/`nicTxAcquireResource` **только** для download-config, scatter-download, query-pending-error, cmd-result, `WIFI_START` (+ диагностический ACCESS_REG из 0020) |
+| `patches/wifi/0030-common-consys-state-probe.patch` | `t1100_consys_state()` (`platform/mt6771.c`, экспорт): SPM-биты домена (`0x1000632c`), conn-ack (`0x10006180`), CPUPCR и независимо замапленное окно WLAN-HIF `0x180f0000` (CCIR/CHLPCR/CHCR/CHISR/CTFSR). Вызовы: до/после переключения BTIF full-mode, после последнего патча, после `set_mcuclk_table_4`, в конце power-on и из `t1100_hif_state()` |
+
+Параметры (по умолчанию — вендорский путь, поведение не меняется):
+`t1100_hif=0` (MCIF) / `1` (STP), `t1100_stp_timeout_ms=1000`.
+
+Сборка 16.11 (build-хост, `KERNEL_OUT=/home/l/t1100-ubuntu-build/out-wifi`,
+`LOCALVERSION=` → release `6.12.114-wifi1`), 0 errors:
+
+```
+8607efc9f9489ea5e9fd19b9f76b63ec42d5bf8abcee020b4d268e17e6c7f19d  1173600  common/wmt_drv.ko
+6a0baef03706a3cf82b36b2c85545d1baa2b29c0dc8a1a377c9153c8cf66e3b7  2955504  wlan/wlan_drv_gen3.ko
+```
+
+`wmt_drv.ko` экспортирует `t1100_consys_state` (KSYMTAB_FUNC) и весь STP-API
+(`mtk_wcn_stp_send_data/receive_data/is_ready/is_rxqueue_empty/
+register_event_cb/…`); `wlan_drv_gen3.ko` тянет 5 из них — **грузить только
+парой из этой сборки** (со старым `wmt_drv` insmod упадёт на Unknown symbol).
+
+### 84.3 План проверки на железе
+
+1. Оба `.ko` из `build/wifi/{common,wlan}` → `/lib/modules/6.12.114-wifi1/updates/wifi/`.
+2. `modprobe wmt_drv t1100_btif_stp=1 t1100_quiet_ms=100 \
+   t1100_rom_patch="ROMv4_be_patch_1_1_hdr.bin ROMv4_be_patch_1_0_hdr.bin"`.
+   Ожидаемо: `patch dwn:0 frag(315,92) ok` … `reset ack after patch 1: yes`,
+   и новые строки
+   `t1100-consys[before-stp-full] …`, `[after-stp-full]`, `[after-patches]`,
+   `[after-mcuclk4]`, `[power-on-end]`.
+3. `modprobe wlan_drv_gen3 t1100_probe=1 t1100_probe_stage=2 t1100_pwr_on_done=1`
+   (без `t1100_hif` — контроль, как сейчас; ожидаемо `t1100-mcif:
+   section-config … status=3221225473` и `t1100-consys[after-download]`).
+4. Затем то же с `t1100_hif=1`: ожидаемо
+   `t1100-stp: register ch3 cb -> 0, link ready=1`, затем
+   `t1100-stp: tx len=… cid=0x04 seq=…` (download-config) и, если MCU
+   отвечает, `t1100-stp: rx len=… eid=1 seq=…`; иначе
+   `t1100-stp: rx timeout after 1000 ms` и `t1100-stp: section-config …
+   status=3221225473`.
+
+**Что читать в результате.** Строки `t1100-consys[...]` отвечают на настоящий
+вопрос M82: если `spm` теряет `pwr_on`/`rst_b` или `cpupcr` уходит из диапазона
+ROM (0x594…0x18000), домен выключен/сброшен; если `spm` в порядке, а
+`wlan-hif@180f0000` читается нулями — HIF-блок MCU не сконфигурирован, и
+виноват конкретный шаг между двумя метками (переключение full-mode, ROMv4-патч +
+`WMT_RESET`, `set_mcuclk_table_4`). Это и есть данные для альтернативы из §83.3
+(вернуть MCIF после патча), а не STP-транспорт.
+
+### 84.4 Если STP-проба провалится (ожидаемый исход)
+
+Тогда единственный путь — MCIF после патча. Порядок действий определяется
+метками §84.3: если окно умирает на `WMT_RESET` после патча, пробовать
+`t1100_op_between_reset`/`t1100_spm_partial` (частичный сброс без power-gating)
+и смотреть, сохраняется ли окно; если на `set_mcuclk_table_4` — вести
+`mtk_wcn_soc_sw_init()` в обход этого шага (в стоке он есть, но у стока MCIF
+после него жив, значит важен не он сам, а состояние, в котором MCU его
+исполняет). Оба варианта дешевле, чем STP-транспорт, у которого нет второй
+стороны.
