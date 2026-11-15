@@ -5043,3 +5043,22 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Детали, diff конфига, команды прошивки через recovery и риски —
   `docs/wifi-image.md`. Откат: `build/gauge/boot_gauge_v5.img` (sha256
   `2d1177c6…` = текущий p29).
+
+## 15.11 (11): IT6112 resume fix (0074) прошит и проверен — полос после сна нет
+
+- Патч `patches/0074-drm-panel-it6112-recover-the-bridge-after-the-dsi-st.patch`
+  (в `series` после 0073). Режим по умолчанию `t1100.it6112_resume=full`:
+  reset pulse + `it6112_bridge_init()` в `->prepare()` при `enabled_once`,
+  плюс вендорный TX-импульс (TX 0x05 = 0xfe → 0x00) перед DCS.
+  `pulse` — только импульс, `none` — выключено. Boot-путь не меняется
+  (`t1100.it6112_skip_init=1`).
+- Образы: `build/it6112-resume/boot_resume_full.img` sha256 `75af7b5f…`
+  (прошит в p29), `boot_resume_pulse.img` sha256 `ed3a3094…` (не прошивался).
+- Проверка 15.11: пять циклов s2idle, в каждом dmesg `it6112_bridge 3-0056:
+  bridge re-initialised for resume`; после resume картинка чистая
+  (подтверждено визуально), полос нет.
+- **Ограничение теста:** сон держится ~1 с и обрывается:
+  `panfrost 13040000.gpu: PM: failed to suspend: error -16` и повторяющиеся
+  `panfrost ... js fault ... DATA_INVALID_FAULT`. Длинный (10 мин) s2idle
+  с фиксом ещё не проверен — блокирует panfrost, не панель.
+- Откат: `build/gauge/boot_gauge_v5.img` (`2d1177c6…`, без фикса).
