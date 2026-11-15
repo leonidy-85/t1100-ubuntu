@@ -1,0 +1,55 @@
+wlan: verify the EMI firmware sections after the download
+
+The image has four sections: two go through MCIF, two are copied by the
+host into the reserved EMI (0xf0000000 and 0xf0055000 as seen by the
+MCU).  If that copy is wrong the firmware boots and dies, which is what
+the cpupcr trace suggests.
+
+After the download, read the first words of both EMI sections through the
+MCU (ACCESS_REG at 0xf0000000/0xf0055000) and through the host mapping
+(gConEmiPhyBase).  New module parameter t1100_emi_check (default 1).
+
+Signed-off-by: t1100-ubuntu <t1100@local>
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -935,6 +935,9 @@
+ static int t1100_stp_write;
+ module_param(t1100_stp_write, int, 0444);
+ MODULE_PARM_DESC(t1100_stp_write, "T1100: write the first 4 KB of section 1 over STP/BTIF");
++static int t1100_emi_check = 1;
++module_param(t1100_emi_check, int, 0444);
++MODULE_PARM_DESC(t1100_emi_check, "T1100: dump the EMI FW sections after the download");
+ static int t1100_readback = 1;
+ module_param(t1100_readback, int, 0444);
+ MODULE_PARM_DESC(t1100_readback, "T1100: read back the RAM image words after the download");
+@@ -1266,6 +1269,29 @@
+ 			/* T1100: did the ROMv4 patch land in the MCU memory? */
+ 			t1100_mem_dump(prAdapter, 0xf0078000, 8, "patch-area");
+ 			t1100_mem_dump(prAdapter, 0xf0078020, 4, "patch-area+20");
++			if (t1100_emi_check) {
++				void __iomem *emi;
++				UINT_32 u4Off;
++
++				/* M87: the MCU view of the two EMI sections. */
++				t1100_mem_dump(prAdapter, 0xf0000000, 4, "emi-sec2");
++				t1100_mem_dump(prAdapter, 0xf0055000, 4, "emi-sec3");
++
++				/* and the host view, which is what we copied. */
++				emi = ioremap(gConEmiPhyBase, 0x80000);
++				if (emi) {
++					for (u4Off = 0; u4Off < 4; u4Off++)
++						pr_info("t1100-host-emi[sec2+%02x] = 0x%08x\n",
++							u4Off * 4, readl(emi + u4Off * 4));
++					for (u4Off = 0; u4Off < 4; u4Off++)
++						pr_info("t1100-host-emi[sec3+%02x] = 0x%08x\n",
++							u4Off * 4,
++							readl(emi + 0x55000 + u4Off * 4));
++					iounmap(emi);
++				} else {
++					pr_info("t1100-host-emi: ioremap failed\n");
++				}
++			}
+ 		}
+ 
+ 		/*
