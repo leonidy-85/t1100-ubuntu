@@ -57,6 +57,7 @@ wlan_drv_gen3-y += \
 	os/linux/gl_cfg80211.o \
 	os/linux/gl_vendor.o \
 	os/linux/platform.o \
+	os/linux/t1100_stp_hif.o \
 	os/linux/gl_p2p.o \
 	os/linux/gl_p2p_cfg80211.o \
 	os/linux/gl_p2p_init.o \

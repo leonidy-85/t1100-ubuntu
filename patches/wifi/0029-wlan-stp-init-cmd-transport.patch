@@ -1,0 +1,584 @@
+wlan: optional STP/BTIF transport for the ROM init-cmd command set
+
+Adds the experiment asked for in M83: send the firmware-download commands of
+the ROM init-cmd protocol over the STP link (channel 3, WIFI_TASK_INDX) that
+wmt_drv already uses for the BTIF ROMv4 patch download, instead of the
+AHB/MCIF rings the driver uses today.
+
+New files:
+
+  include/t1100_stp_hif.h        transport selection + 4-call API
+  os/linux/t1100_stp_hif.c       STP send/receive on channel 3
+
+  - t1100_hif=0 (default) keeps the vendor path byte for byte: the helpers in
+    wlan_lib.c just call nicTxInitCmd()/nicRxWaitResponse()/
+    nicTxAcquireResource().
+  - t1100_hif=1 routes only the firmware-download command set
+    (wlanImageSectionConfig, wlanImageSectionDownload, wlanImageQueryStatus,
+    wlanImageSectionDownloadStatus, wlanConfigWifiFunc, plus the diagnostic
+    ACCESS_REG read of 0020) through
+    mtk_wcn_stp_send_data()/mtk_wcn_stp_receive_data(); the frame bytes are
+    unchanged (INIT_HIF_TX_HEADER_T + payload).  The MCIF TX page accounting
+    is skipped on that path (there is no TX ring behind STP; the STP link has
+    its own window flow control).
+  - the RX side registers an event callback, which is also what makes the STP
+    core enqueue channel-3 packets at all
+    (stp_exp.c:mtk_wcn_sys_check_function_status()).
+  - the runtime command path is untouched, and so is the MCIF patch
+    experiment: t1100_rom_patch_mcif is skipped when STP is selected (there
+    the patch set is wmt_drv's job).
+
+Why this is only a probe: the data path (TX/RX rings, WFDMA, WHISR/WHDR
+interrupts) and the "ready" bit (WCIR_WLAN_READY) exist only in the MCIF
+block, and the stock 4.14 wlan_drv_gen3.ko imports no STP symbol at all.  If
+the MCU answers at all on channel 3 that is the interesting result; a working
+netdev cannot come out of it.  See docs/wifi-port-log.md M83.
+
+diff -u -N -r a/common/wlan_lib.c b/common/wlan_lib.c
+--- a/common/wlan_lib.c	2026-11-16 00:07:46.335152731 +0300
++++ b/common/wlan_lib.c	2026-11-16 00:35:22.392475068 +0300
+@@ -32,6 +32,7 @@
+ #include "precomp.h"
+ #include <linux/fs.h>
+ #include <linux/file.h>
++#include "t1100_stp_hif.h"	/* T1100: optional STP init-cmd transport */
+ /*******************************************************************************
+  *                              C O N S T A N T S
+  ********************************************************************************
+@@ -215,6 +216,70 @@
+ #define T1100_ROM_PATCH_FILE "/lib/firmware/ROMv4_be_patch_1_0_hdr.bin"
+ 
+ /* Generic single init command with a payload; returns the MCU CMD_RESULT. */
++/*
++ * T1100 M83: the two HIF primitives of the firmware-download command set,
++ * behind a transport switch.
++ *
++ * The vendor code sends every init-cmd by handing the finished
++ * INIT_HIF_TX_HEADER_T frame to nicTxInitCmd() (-> MCR_WTDR1 / WFDMA) and
++ * reads the reply with nicRxWaitResponse() (-> MCR_WRPLR / MCR_WRDR0).  With
++ * t1100_hif=T1100_HIF_STP both are replaced by the STP channel-3 calls of
++ * os/linux/t1100_stp_hif.c; with the default (T1100_HIF_MCIF) they are exactly
++ * the vendor functions, so nothing changes unless the module parameter is
++ * passed to insmod.
++ *
++ * Only the firmware-download commands (download-config, scatter download,
++ * query-pending-error, cmd-result, WIFI_START) use these helpers.  The
++ * runtime command path keeps using nicTxInitCmd()/nicRxWaitResponse()
++ * directly: STP has no equivalent for the TX/RX descriptor rings.
++ */
++static WLAN_STATUS
++t1100_tx_init_cmd(P_ADAPTER_T prAdapter, P_CMD_INFO_T prCmdInfo)
++{
++	if (t1100_hif == T1100_HIF_STP && t1100_stp_ready()) {
++		int i4Ret = t1100_stp_send_frame(prCmdInfo->pucInfoBuffer,
++						 prCmdInfo->u2InfoBufLen);
++
++		return i4Ret == (int)prCmdInfo->u2InfoBufLen ?
++		       WLAN_STATUS_SUCCESS : WLAN_STATUS_FAILURE;
++	}
++	return nicTxInitCmd(prAdapter, prCmdInfo);
++}
++
++static WLAN_STATUS
++t1100_rx_wait_response(P_ADAPTER_T prAdapter, UINT_8 ucPortIdx,
++		       PUINT_8 pucRspBuffer, UINT_32 u4MaxRespBufferLen,
++		       PUINT_32 pu4Length)
++{
++	if (t1100_hif == T1100_HIF_STP && t1100_stp_ready()) {
++		int i4Ret = t1100_stp_wait_frame(pucRspBuffer, u4MaxRespBufferLen,
++						t1100_stp_timeout_ms);
++
++		if (i4Ret <= 0)
++			return WLAN_STATUS_FAILURE;
++		*pu4Length = (UINT_32)i4Ret;
++		return WLAN_STATUS_SUCCESS;
++	}
++	return nicRxWaitResponse(prAdapter, ucPortIdx, pucRspBuffer,
++				 u4MaxRespBufferLen, pu4Length);
++}
++
++/*
++ * T1100 M83: the same for the MCIF TX page accounting.  nicTxAcquireResource()
++ * asks the MCU-side TX ring (MCR_WTQCR / WHISR) how many pages are free; over
++ * STP there is no ring at all and, with the MCIF block dead, the poll would
++ * only burn its timeout.  The STP branch therefore reports "resource
++ * available" unconditionally - the STP link does its own flow control
++ * (window space, mtk_wcn_stp_send_data() returns 0 and we retry).
++ */
++static WLAN_STATUS
++t1100_tx_acquire(P_ADAPTER_T prAdapter, UINT_8 ucTC, UINT_16 u2PageCount)
++{
++	if (t1100_hif == T1100_HIF_STP && t1100_stp_ready())
++		return WLAN_STATUS_SUCCESS;
++	return nicTxAcquireResource(prAdapter, ucTC, u2PageCount);
++}
++
+ static WLAN_STATUS t1100_init_cmd(P_ADAPTER_T prAdapter, UINT_8 ucCID,
+ 				  PVOID pvPayload, UINT_32 u4PayloadLen,
+ 				  const char *tag, UINT_32 *pu4Result)
+@@ -245,8 +310,8 @@
+ 		kalMemCopy(prHdr->rInitWifiCmd.aucBuffer, pvPayload, u4PayloadLen);
+ 
+ 	while (1) {
+-		if (nicTxAcquireResource(prAdapter, ucTC,
+-					 nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) ==
++		if (t1100_tx_acquire(prAdapter, ucTC,
++				     nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) ==
+ 		    WLAN_STATUS_RESOURCES) {
+ 			if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
+ 				pr_info("t1100-patch[%s]: no TX resource\n", tag);
+@@ -257,7 +322,7 @@
+ 		}
+ 		break;
+ 	}
+-	if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++	if (t1100_tx_init_cmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 		pr_info("t1100-patch[%s]: nicTxInitCmd failed\n", tag);
+ 		u4Status = WLAN_STATUS_FAILURE;
+ 		goto out;
+@@ -390,8 +455,11 @@
+ static void t1100_hif_state(P_ADAPTER_T prAdapter, const char *tag)
+ {
+ 	UINT_32 u4Wcir = 0, u4Wasr = 0, u4Mbox0 = 0, u4Cpupcr = 0;
++	/* T1100 M83: domain/MCU view from the WMT side (platform/mt6771.c) */
++	extern void t1100_consys_state(const char *tag);
+ 
+ 	t1100_stp_probe();	/* one-shot: is the STP function reachable? */
++	t1100_consys_state(tag);
+ 
+ 	HAL_MCR_RD(prAdapter, MCR_WCIR, &u4Wcir);
+ 	HAL_MCR_RD(prAdapter, MCR_WASR, &u4Wasr);
+@@ -502,8 +570,8 @@
+ 	prReq->u4Data = 0;
+ 
+ 	while (1) {
+-		if (nicTxAcquireResource(prAdapter, TC0_INDEX,
+-					 nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) ==
++		if (t1100_tx_acquire(prAdapter, TC0_INDEX,
++				     nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) ==
+ 		    WLAN_STATUS_RESOURCES) {
+ 			if (nicTxPollingResource(prAdapter, TC0_INDEX) != WLAN_STATUS_SUCCESS) {
+ 				pr_info("t1100-mem[0x%08x]: no TX resource\n", u4Addr);
+@@ -514,13 +582,14 @@
+ 		}
+ 		break;
+ 	}
+-	if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++	if (t1100_tx_init_cmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 		cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+ 		return WLAN_STATUS_FAILURE;
+ 	}
+ 	cmdBufFreeCmdInfo(prAdapter, prCmdInfo);
+ 
+-	u4Status = nicRxWaitResponse(prAdapter, 0, aucBuf, sizeof(aucBuf), &u4Len);
++	u4Status = t1100_rx_wait_response(prAdapter, 0, aucBuf, sizeof(aucBuf),
++					  &u4Len);
+ 	if (u4Status != WLAN_STATUS_SUCCESS)
+ 		return u4Status;
+ 
+@@ -1120,7 +1189,15 @@
+ 		 * MCU *before* the firmware sections. After the sections the ROM
+ 		 * no longer answers the patch CIDs (M81: timeout 0xC0000001).
+ 		 */
+-		if (t1100_rom_patch_mcif) {
++		/*
++		 * T1100 M83: with the STP transport selected the ROMv4 patch is
++		 * wmt_drv's job (it delivers the whole set over BTIF before the
++		 * probe), and the MCIF patch CIDs cannot be reached at all, so
++		 * this MCIF-only experiment is skipped instead of timing out on
++		 * every CID.
++		 */
++		if (t1100_rom_patch_mcif &&
++		    !(t1100_hif == T1100_HIF_STP && t1100_stp_ready())) {
+ 			t1100_rom_patch_send(prAdapter);
+ 			t1100_hif_state(prAdapter, "after-rompatch");
+ 		}
+@@ -1245,6 +1322,23 @@
+ 				snprintf(acTagStart, sizeof(acTagStart), "start%u", u4Try);
+ 				t1100_tx_state(prAdapter, acTagStart);
+ 
++				/*
++				 * T1100 M83: over STP there is no WCIR to poll, so ask
++				 * the channel directly whether the MCU said anything
++				 * about the start command.  A default MCIF run does not
++				 * take this branch.  Even if a reply arrived, the
++				 * "ready" state below is still read from WCIR, which
++				 * lives in the MCIF block - STP has no equivalent.
++				 */
++				if (t1100_hif == T1100_HIF_STP && t1100_stp_ready()) {
++					UINT_8 aucStartRsp[128];
++					int i4Rsp = t1100_stp_wait_frame(aucStartRsp,
++									sizeof(aucStartRsp),
++									t1100_stp_timeout_ms);
++
++					pr_info("t1100-stp: WIFI_START rsp -> %d\n", i4Rsp);
++				}
++
+ 				DBGLOG(INIT, TRACE, "Waiting for Ready bit..\n");
+ 				/* 4 <5> check Wi-Fi FW asserts ready bit */
+ 				i = 0;
+@@ -3418,7 +3512,7 @@
+ 	/* 6. Send Download config command */
+ 	while (1) {
+ 		/* 6.1 Acquire TX Resource */
+-		if (nicTxAcquireResource
++		if (t1100_tx_acquire
+ 		    (prAdapter, ucTC, nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) == WLAN_STATUS_RESOURCES) {
+ 			if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
+ 				u4Status = WLAN_STATUS_FAILURE;
+@@ -3431,7 +3525,7 @@
+ 		pr_info("t1100-sec: dst=0x%08x len=%u ucEnc=%u ucKIdx=%u dataMode=0x%08x\n",
+ 		u4DestAddr, u4ImgSecSize, ucEnc, ucKIdx,
+ 		prInitCmdDownloadConfig->u4DataMode);	/* M76 */
+-	if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++	if (t1100_tx_init_cmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			DBGLOG(INIT, ERROR, "Fail to transmit download config command\n");
+ 			break;
+@@ -3440,7 +3534,8 @@
+ 		/* 7. Wait for INIT_EVENT_ID_CMD_RESULT */
+ 		u4Status = wlanImageSectionDownloadStatus(prAdapter, ucCmdSeqNum);
+ #endif
+-		pr_info("t1100-mcif: section-config dst=0x%08x len=%u reset=%u -> status=%u (0=ok)\n",
++		pr_info("t1100-%s: section-config dst=0x%08x len=%u reset=%u -> status=%u (0=ok)\n",
++			t1100_hif == T1100_HIF_STP ? "stp" : "mcif",
+ 			u4DestAddr, u4ImgSecSize, fgReset, u4Status);
+ 		if (fgReset)
+ 			t1100_dump_mcr(prAdapter, "after-first-section-config");
+@@ -3518,7 +3613,7 @@
+ 	kalMemCopy(prInitHifTxHeader->rInitWifiCmd.aucBuffer, pucImgSecBuf, u4ImgSecSize);
+ 
+ 	/* 4. Send FW image scatter section */
+-	if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++	if (t1100_tx_init_cmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 		u4Status = WLAN_STATUS_FAILURE;
+ 		DBGLOG(INIT, ERROR, "Fail to transmit FW image scatter section\n");
+ 	}
+@@ -3680,7 +3775,7 @@
+ 	/* 5. Send Query pending error command */
+ 	while (1) {
+ 		/* 5.1 Acquire TX Resource */
+-		if (nicTxAcquireResource
++		if (t1100_tx_acquire
+ 		    (prAdapter, ucTC, nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) == WLAN_STATUS_RESOURCES) {
+ 			if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
+ 				u4Status = WLAN_STATUS_FAILURE;
+@@ -3690,7 +3785,7 @@
+ 			continue;
+ 		}
+ 		/* 5.2 Send CMD Info Packet */
+-		if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++		if (t1100_tx_init_cmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			DBGLOG(INIT, ERROR, "Fail to transmit query pending error command\n");
+ 		}
+@@ -3702,7 +3797,7 @@
+ 	do {
+ 		if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE || fgIsBusAccessFailed == TRUE) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+-		} else if (nicRxWaitResponse(prAdapter,
++		} else if (t1100_rx_wait_response(prAdapter,
+ 					     0,
+ 					     aucBuffer,
+ 					     sizeof(INIT_HIF_RX_HEADER_T) +
+@@ -3772,7 +3867,7 @@
+ 	do {
+ 		if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE || fgIsBusAccessFailed == TRUE) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+-		} else if (nicRxWaitResponse(prAdapter,
++		} else if (t1100_rx_wait_response(prAdapter,
+ 					     0,
+ 					     aucBuffer,
+ 					     sizeof(INIT_HIF_RX_HEADER_T) +
+@@ -3870,7 +3965,7 @@
+ 	/* 5. Send WIFI start command */
+ 	while (1) {
+ 		/* 5.1 Acquire TX Resource */
+-		if (nicTxAcquireResource
++		if (t1100_tx_acquire
+ 		    (prAdapter, ucTC, nicTxGetPageCount(prCmdInfo->u2InfoBufLen, TRUE)) == WLAN_STATUS_RESOURCES) {
+ 			if (nicTxPollingResource(prAdapter, ucTC) != WLAN_STATUS_SUCCESS) {
+ 				u4Status = WLAN_STATUS_FAILURE;
+@@ -3881,7 +3976,7 @@
+ 		}
+ 		/* 5.2 Send CMD Info Packet */
+ 		t1100_dump_mcr(prAdapter, "before-wifi-start");
+-		if (nicTxInitCmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
++		if (t1100_tx_init_cmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			DBGLOG(INIT, ERROR, "Fail to transmit WIFI start command\n");
+ 		}
+diff -u -N -r a/include/t1100_stp_hif.h b/include/t1100_stp_hif.h
+--- a/include/t1100_stp_hif.h	1970-01-01 03:00:00.000000000 +0300
++++ b/include/t1100_stp_hif.h	2026-11-16 00:23:55.225871378 +0300
+@@ -0,0 +1,63 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * t1100_stp_hif.h - optional STP/BTIF transport for the WLAN ROM init-cmd
++ *                   protocol (MT6771 / MT6631, Fplus T1100).
++ *
++ * Background (docs/wifi-port-log.md, M82/M83):
++ *
++ *   The ROMv4 patch set for chip id 0x0788 is delivered by wmt_drv over
++ *   BTIF/STP, and after that delivery the AHB/MCIF window at 0x180f0000 reads
++ *   all-zero from the WLAN driver, so the vendor init-cmd path
++ *   (nicTxInitCmd() -> MCR_WTDR1 + nicRxWaitResponse() -> MCR_WRPLR) times out
++ *   on the very first section-config.
++ *
++ *   The hypothesis "the patched MCU wants the init-cmd protocol over STP" is
++ *   what this transport tests.  It is *off by default*: with
++ *   t1100_hif=T1100_HIF_MCIF (0) the driver behaves exactly like the vendor
++ *   one.  With t1100_hif=T1100_HIF_STP (1) the four firmware-download commands
++ *   plus WIFI_START are framed byte for byte as before (INIT_HIF_TX_HEADER_T +
++ *   payload) and pushed through wmt_drv's STP API on channel
++ *   WIFI_TASK_INDX (3) instead of the MCIF rings; replies are taken from the
++ *   same STP channel.
++ *
++ *   Note that this can only ever be a probe, not a fix: the WLAN data path
++ *   (TX/RX descriptor rings, WFDMA, interrupts) and the "ready" indication
++ *   (WCIR_WLAN_READY) live in the MCIF block and have no STP equivalent, and
++ *   the stock 4.14 wlan_drv_gen3.ko imports no STP symbol at all.
++ */
++#ifndef _T1100_STP_HIF_H_
++#define _T1100_STP_HIF_H_
++
++#define T1100_HIF_MCIF	0	/* vendor AHB/MCIF path (default) */
++#define T1100_HIF_STP	1	/* STP/BTIF channel 3 (experiment) */
++
++/* t1100_hif module parameter, defined in os/linux/t1100_stp_hif.c */
++extern int t1100_hif;
++
++/* Per-frame reply timeout, ms (t1100_stp_timeout_ms module parameter). */
++extern int t1100_stp_timeout_ms;
++
++/*
++ * TRUE when the STP transport is selected *and* the STP link is up
++ * (mtk_wcn_stp_is_ready()).  Cheap enough to call per command.
++ */
++int t1100_stp_ready(void);
++
++/*
++ * Send one complete init-cmd frame (INIT_HIF_TX_HEADER_T + payload) on STP
++ * channel 3.  Returns the number of bytes accepted or a negative errno.
++ */
++int t1100_stp_send_frame(const unsigned char *pucFrame, unsigned int u4Len);
++
++/*
++ * Wait for one init-cmd frame on STP channel 3.  Returns the frame length
++ * (> 0) or a negative errno on timeout.
++ */
++int t1100_stp_wait_frame(unsigned char *pucBuf, unsigned int u4Len,
++			 unsigned int u4TimeoutMs);
++
++/* One-line + hex dump of a frame (tag is a short literal). */
++void t1100_stp_dump(const char *pcTag, const unsigned char *pucBuf,
++		    unsigned int u4Len);
++
++#endif /* _T1100_STP_HIF_H_ */
+diff -u -N -r a/os/linux/t1100_stp_hif.c b/os/linux/t1100_stp_hif.c
+--- a/os/linux/t1100_stp_hif.c	1970-01-01 03:00:00.000000000 +0300
++++ b/os/linux/t1100_stp_hif.c	2026-11-16 00:31:46.516796052 +0300
+@@ -0,0 +1,203 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * t1100_stp_hif.c - optional STP/BTIF transport for the WLAN ROM init-cmd
++ *                   protocol (MT6771 / MT6631, Fplus T1100).
++ *
++ * Part of the MT6771 port, phase 5 (docs/wifi-port-log.md, M82/M83).
++ *
++ * Why this file exists
++ * --------------------
++ * wmt_drv brings CONSYS up over BTIF/STP and delivers both stock ROMv4 patches
++ * (ROMv4_be_patch_1_1_hdr.bin, then ROMv4_be_patch_1_0_hdr.bin) on that link.
++ * After that the AHB/MCIF register window of the WLAN HIF (0x180f0000) reads
++ * back all-zero from wlan_drv_gen3, so the vendor init-cmd path
++ * (nicTxInitCmd() -> MCR_WTDR1, nicRxWaitResponse() -> MCR_WRPLR) times out on
++ * the first download-config and the probe fails.
++ *
++ * This transport is the *experiment* that answers "does the MCU accept the
++ * init-cmd frames on the STP WIFI channel instead": the frames are built
++ * exactly as before and handed to wmt_drv's exported STP API
++ * (mtk_wcn_stp_send_data(..., WIFI_TASK_INDX)), replies are taken from the
++ * same channel through mtk_wcn_stp_register_event_cb() +
++ * mtk_wcn_stp_receive_data().
++ *
++ * It is not enabled by default and must not become the default: the WLAN data
++ * path (TX/RX rings, WFDMA, MHISR/WHISR interrupts) and the firmware "ready"
++ * bit (WCIR_WLAN_READY) live in the MCIF block.  Even if the MCU answered
++ * every init-cmd on STP there is no STP equivalent for the rest, and the stock
++ * 4.14 wlan_drv_gen3.ko imports no STP symbol at all (only the WMT reset /
++ * registration helpers), i.e. the shipped driver never uses this path.
++ *
++ * Does not replace anything unless t1100_hif=1 is passed to insmod; see
++ * include/t1100_stp_hif.h for the API and wlan_lib.c for the call sites.
++ */
++#include "precomp.h"
++
++#include <linux/moduleparam.h>
++#include <linux/wait.h>
++#include <linux/jiffies.h>
++#include <linux/atomic.h>
++#include <linux/delay.h>
++#include <linux/errno.h>
++#include <linux/printk.h>
++
++#include "t1100_stp_hif.h"
++
++/*
++ * Channel numbers of the STP protocol.  WIFI_TASK_INDX is 3 in the vendor
++ * header (common_main/include/stp_exp.h: BT=0, FM=1, GPS=2, WIFI=3, WMT=4).
++ * The value is repeated here because the wlan module does not compile against
++ * the common tree's headers (only its exported symbols).
++ */
++#define T1100_STP_WIFI_TASK	3
++
++/*
++ * STP API of wmt_drv (common_main/core/stp_core.c).  Declared locally for the
++ * same reason: stp_exp.h lives in the wmt_drv source tree.  All four are in
++ * wmt_drv's KSYMTAB_FUNC list, i.e. exported to modules.
++ *
++ *   The vendor prototypes use the WMT types (INT32/PUINT8/UINT8); this module
++ *   is compiled against the WLAN type set (INT_32/PUINT_8/UINT_8), and the two
++ *   are the same underlying C types on arm64, so the declarations below are
++ *   ABI-identical.  MTK_WCN_BOOL is an int-sized enum (FALSE == 0).
++ */
++extern INT_32 mtk_wcn_stp_send_data(const PUINT_8 buffer, const UINT_32 length,
++				    const UINT_8 type);
++extern INT_32 mtk_wcn_stp_receive_data(PUINT_8 buffer, UINT_32 length,
++				       UINT_8 type);
++extern INT_32 mtk_wcn_stp_is_ready(VOID);
++extern INT_32 mtk_wcn_stp_is_rxqueue_empty(UINT_8 type);
++extern INT_32 mtk_wcn_stp_register_event_cb(INT_32 type, void (*func)(void));
++
++/* 0 = vendor MCIF/AHB path, 1 = STP experiment.  See the file comment. */
++int t1100_hif = T1100_HIF_MCIF;
++module_param(t1100_hif, int, 0444);
++MODULE_PARM_DESC(t1100_hif,
++		 "T1100: init-cmd transport, 0 = MCIF/AHB (vendor, default), 1 = STP/BTIF channel 3");
++
++int t1100_stp_timeout_ms = 1000;
++module_param(t1100_stp_timeout_ms, int, 0444);
++MODULE_PARM_DESC(t1100_stp_timeout_ms,
++		 "T1100: reply timeout for one init-cmd frame on the STP channel (ms)");
++
++static DECLARE_WAIT_QUEUE_HEAD(t1100_stp_wq);
++static atomic_t t1100_stp_rx_events = ATOMIC_INIT(0);
++static unsigned int t1100_stp_tx_logs;	/* first few frames only, dmesg */
++static unsigned int t1100_stp_rx_logs;
++
++/*
++ * Called by the STP core (stp_exp.c:mtk_wcn_sys_event_set()) from the BTIF RX
++ * thread when a packet of channel 3 has been enqueued.  Only wake the waiter;
++ * the data is pulled with mtk_wcn_stp_receive_data().
++ */
++static void t1100_stp_rx_event(void)
++{
++	atomic_inc(&t1100_stp_rx_events);
++	wake_up_interruptible(&t1100_stp_wq);
++}
++
++void t1100_stp_dump(const char *pcTag, const unsigned char *pucBuf,
++		    unsigned int u4Len)
++{
++	if (!pucBuf || !u4Len)
++		return;
++	print_hex_dump(KERN_INFO, pcTag, DUMP_PREFIX_OFFSET, 16, 1, pucBuf,
++		       u4Len > 64 ? 64 : u4Len, true);
++}
++
++int t1100_stp_ready(void)
++{
++	static int t1100_stp_ready_logged;
++
++	if (t1100_hif != T1100_HIF_STP)
++		return 0;
++	if (mtk_wcn_stp_is_ready() == 0) {
++		if (!t1100_stp_ready_logged) {
++			t1100_stp_ready_logged = 1;
++			pr_warn("t1100-stp: transport selected but the STP link is not ready\n");
++		}
++		return 0;
++	}
++	return 1;
++}
++
++int t1100_stp_send_frame(const unsigned char *pucFrame, unsigned int u4Len)
++{
++	unsigned int u4Tries;
++	INT_32 i4Ret = 0;
++
++	static int t1100_stp_registered;
++
++	if (!t1100_stp_registered) {
++		/*
++		 * Register before the first TX: the STP core only enqueues RX
++		 * packets of a channel whose event callback is installed
++		 * (stp_exp.c:mtk_wcn_sys_check_function_status()), and the
++		 * registration also flushes the channel's stale RX ring.
++		 */
++		t1100_stp_registered = 1;
++		i4Ret = mtk_wcn_stp_register_event_cb(T1100_STP_WIFI_TASK,
++						     t1100_stp_rx_event);
++		pr_info("t1100-stp: register ch%u cb -> %d, link ready=%d\n",
++			T1100_STP_WIFI_TASK, i4Ret, mtk_wcn_stp_is_ready());
++	}
++
++	/*
++	 * mtk_wcn_stp_send_data() returns the accepted length, 0 when there is
++	 * no window space / no TX queue (the caller is expected to retry), or
++	 * the length when the link is closed / a coredump is in progress
++	 * (packet dropped).  Only a full-length return means "handed over".
++	 */
++	for (u4Tries = 0; u4Tries < 3; u4Tries++) {
++		i4Ret = mtk_wcn_stp_send_data((PUINT_8)pucFrame, u4Len,
++					      T1100_STP_WIFI_TASK);
++		if (i4Ret == (INT_32)u4Len)
++			break;
++		msleep(3);
++	}
++
++	if (t1100_stp_tx_logs++ < 4) {
++		pr_info("t1100-stp: tx len=%u -> %d (try %u) cid=0x%02x seq=%u\n",
++			u4Len, i4Ret, u4Tries + 1,
++			u4Len > 6 ? pucFrame[4] : 0, u4Len > 7 ? pucFrame[7] : 0);
++		t1100_stp_dump("t1100-stp-tx: ", pucFrame, u4Len);
++	}
++
++	return i4Ret == (INT_32)u4Len ? (int)u4Len : -EIO;
++}
++
++int t1100_stp_wait_frame(unsigned char *pucBuf, unsigned int u4Len,
++			 unsigned int u4TimeoutMs)
++{
++	unsigned int u4Elapsed = 0;
++	INT_32 i4Ret;
++
++	if (!pucBuf || !u4Len)
++		return -EINVAL;
++
++	while (u4Elapsed <= u4TimeoutMs) {
++		if (mtk_wcn_stp_is_rxqueue_empty(T1100_STP_WIFI_TASK) == 0) {
++			i4Ret = mtk_wcn_stp_receive_data(pucBuf, u4Len,
++							T1100_STP_WIFI_TASK);
++			if (i4Ret > 0) {
++				if (t1100_stp_rx_logs++ < 4) {
++					pr_info("t1100-stp: rx len=%d eid=%u seq=%u\n",
++						i4Ret, u4Len > 4 ? pucBuf[4] : 0,
++						i4Ret > 7 ? pucBuf[7] : 0);
++					t1100_stp_dump("t1100-stp-rx: ", pucBuf,
++						       i4Ret);
++				}
++				return i4Ret;
++			}
++		}
++		/* the callback wakes us early; the poll keeps it simple */
++		wait_event_interruptible_timeout(t1100_stp_wq,
++						 atomic_read(&t1100_stp_rx_events),
++						 msecs_to_jiffies(20));
++		atomic_set(&t1100_stp_rx_events, 0);
++		u4Elapsed += 20;
++	}
++
++	pr_info("t1100-stp: rx timeout after %u ms\n", u4TimeoutMs);
++	return -ETIMEDOUT;
++}

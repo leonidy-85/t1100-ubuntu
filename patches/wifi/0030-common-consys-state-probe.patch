@@ -1,0 +1,157 @@
+common: dump the CONNSYS domain and WLAN HIF state at each power-on step
+
+After wmt_drv has delivered the ROMv4 patch set over BTIF/STP, wlan_drv_gen3
+reads the AHB/MCIF window at 0x180f0000 as all-zero, WCIR included (its POR
+value is 0x00100788).  Two very different faults produce that:
+
+  a) the CONN power domain / MCU clock is off, or
+  b) the domain is on and the MCU-side WLAN HIF block is left unclocked /
+     unprogrammed by the patch flow.
+
+The new t1100_consys_state() (platform/mt6771.c, exported) prints both sides:
+the SPM TOP1_PWR_CTRL bits and the conn power ack of 0x1000632c/0x10006180,
+the MCU's CPUPCR, and an independently mapped read of the WLAN HIF window
+(CCIR/CHLPCR/CHCR/CHISR/CTFSR).  It is called at four points of
+mtk_wcn_soc_sw_init() - before/after the BTIF full-mode switch, after the last
+patch, after set_mcuclk_table_4, and at the end of power-on - plus once from
+the WLAN driver's t1100_hif_state(), so every existing t1100-hif[...] line now
+has the WMT-side view next to it.
+
+Read-only: no register write, no new module parameter, no behaviour change.
+
+diff -u -N -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
+--- a/common_main/core/wmt_ic_soc.c	2026-11-16 00:07:46.193788380 +0300
++++ b/common_main/core/wmt_ic_soc.c	2026-11-16 00:33:53.052450522 +0300
+@@ -41,6 +41,8 @@
+ #include <linux/firmware.h>
+ 
+ extern int t1100_patch_active;
++/* T1100 M83: domain/HIF state dump, implemented in platform/mt6771.c */
++extern void t1100_consys_state(const char *pcTag);
+ /* T1100 M49: stock-exact mode - every fragment waits for its EVT, the reset is
+  * one fatal attempt, nothing happens between patches (as in the vendor .ko). */
+ extern int t1100_rx_trace;
+@@ -1416,9 +1418,13 @@
+ 		}
+ 		/* non-PDA mode, enable full mode before patch download */
+ 		if (!emiInfo->pda_dl_patch_flag) {
++			t1100_consys_state("before-stp-full");
+ 			iRet = _wmt_soc_mode_ctrl(MTKSTP_BTIF_FULL_MODE);
+ 			if (iRet)
+ 				return iRet;
++			/* M83: this is the first command that changes the MCU's
++			 * own link configuration - watch the HIF window across it */
++			t1100_consys_state("after-stp-full");
+ 		}
+ 	}
+ 
+@@ -1553,6 +1559,9 @@
+ 		}
+ 	}
+ 
++	/* M83: state right after the last ROMv4 patch and its WMT_RESET */
++	t1100_consys_state("after-patches");
++
+ #if CFG_WMT_PATCH_DL_OPTM
+ 	if (wmt_ic_ops_soc.icId != 0x6765 &&
+ 	    wmt_ic_ops_soc.icId != 0x3967 &&
+@@ -1571,6 +1580,9 @@
+ 				WMT_ERR_FUNC("set_mcuclk_table_2 fail(%d)\n", iRet);
+ 		}
+ 	}
++	/* M83: set_mcuclk_table_4 is the last step that touches the MCU
++	 * clocks; if the HIF window dies here, that is where it dies */
++	t1100_consys_state("after-mcuclk4");
+ #endif
+ 
+ #else
+@@ -2021,6 +2033,9 @@
+ 
+ 	WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_END);
+ 
++	/* M83: what the WLAN driver will find when its probe runs */
++	t1100_consys_state("power-on-end");
++
+ 	return 0;
+ }
+ 
+diff -u -N -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
+--- a/common_main/platform/mt6771.c	2026-11-16 00:07:46.194543821 +0300
++++ b/common_main/platform/mt6771.c	2026-11-16 00:31:19.096913875 +0300
+@@ -1409,6 +1409,76 @@
+ 	return PLATFORM_SOC_CHIP;
+ }
+ 
++/*
++ * T1100 M83: report where the CONSYS domain and the WLAN HIF actually stand.
++ *
++ * Why: after wmt_drv has brought CONSYS up and delivered the ROMv4 patch set
++ * over BTIF/STP, wlan_drv_gen3 reads the AHB/MCIF window at 0x180f0000 as
++ * all-zero (WCIR included, whose POR value is 0x00100788).  Two very different
++ * faults produce that:
++ *
++ *   a) the CONN power domain / MCU clock is off (the SPM sequence did not run,
++ *      or ran in the "off" direction after the patch), so nothing answers; or
++ *   b) the domain is on but the MCU-side WLAN HIF block was left unclocked /
++ *      unprogrammed by whatever the patch flow did.
++ *
++ * The SPM register and the (independently mapped) HIF window tell them apart:
++ * with the domain on, TOP1_PWR_CTRL reads pwr_on=1/pwr_on_s=1/iso=0/clk_dis=0
++ * and the MCU runs in ROM (cpupcr inside 0x594..0x18000); the HIF window then
++ * returns the ROM's POR values even before the WLAN driver has programmed it.
++ *
++ * Read-only; called from the WMT power-on/patch steps (wmt_ic_soc.c) and from
++ * the WLAN side through the export below.  The register offsets are the
++ * mt6771.h constants that consys_hw_power_ctrl_spm() itself uses, and the HIF
++ * window offsets are the STP/WLAN "function 0/1" block layout (CCIR 0x00,
++ * CHLPCR 0x04, CHCR 0x0c, CHISR 0x10, CTFSR 0x20).
++ */
++VOID t1100_consys_state(const char *pcTag)
++{
++	static UINT8 __iomem *wlan_hif;
++	UINT32 u4Spm = 0, u4Ack = 0, u4Cpupcr = 0;
++	UINT32 u4Ccir = 0, u4Chlpcr = 0, u4Chcr = 0, u4Chisr = 0;
++	UINT32 u4Ctf = 0;
++
++	if (!wlan_hif)
++		wlan_hif = ioremap(0x180f0000, 0x2000);
++
++	if (conn_reg.spm_base) {
++		u4Spm = CONSYS_REG_READ(conn_reg.spm_base +
++					CONSYS_TOP1_PWR_CTRL_OFFSET);
++		u4Ack = CONSYS_REG_READ(conn_reg.spm_base +
++					CONSYS_PWR_CONN_ACK_OFFSET);
++	}
++	if (conn_reg.mcu_base)
++		u4Cpupcr = CONSYS_REG_READ(conn_reg.mcu_base +
++					   CONSYS_CPUPCR_OFFSET);
++	if (wlan_hif) {
++		u4Ccir = readl(wlan_hif + 0x00);
++		u4Chlpcr = readl(wlan_hif + 0x04);
++		u4Chcr = readl(wlan_hif + 0x0c);
++		u4Chisr = readl(wlan_hif + 0x10);
++		u4Ctf = readl(wlan_hif + 0x20);
++	}
++
++	WMT_PLAT_PR_INFO("t1100-consys[%s]: spm=0x%08x (pwr_on=%u/%u iso=%u clk_dis=%u rst_b=%u) ack=0x%08x(top1=%u top2=%u) cpupcr=0x%08x\n",
++			 pcTag ? pcTag : "?",
++			 u4Spm,
++			 !!(u4Spm & CONSYS_SPM_PWR_ON_BIT),
++			 !!(u4Spm & CONSYS_SPM_PWR_ON_S_BIT),
++			 !!(u4Spm & CONSYS_SPM_PWR_ISO_S_BIT),
++			 !!(u4Spm & CONSYS_CLK_CTRL_BIT),
++			 !!(u4Spm & CONSYS_SPM_PWR_RST_BIT),
++			 u4Ack,
++			 !!(u4Ack & (0x1 << 1)),
++			 !!(u4Ack & CONSYS_TOP2_PWR_ON_ACK_BIT),
++			 u4Cpupcr);
++	WMT_PLAT_PR_INFO("t1100-consys[%s]: wlan-hif@180f0000 CCIR=0x%08x CHLPCR=0x%08x CHCR=0x%08x CHISR=0x%08x CTFSR=0x%08x (%s)\n",
++			 pcTag ? pcTag : "?",
++			 u4Ccir, u4Chlpcr, u4Chcr, u4Chisr, u4Ctf,
++			 wlan_hif ? "mapped" : "ioremap failed");
++}
++EXPORT_SYMBOL(t1100_consys_state);
++
+ static P_CONSYS_EMI_ADDR_INFO consys_soc_get_emi_phy_add(VOID)
+ {
+ 	return &mtk_wcn_emi_addr_info;
