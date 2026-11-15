@@ -1,0 +1,35 @@
+common: do not turn a slow PSM sleep event into a firmware assert (T1100)
+
+The freshly started WLAN firmware does not answer the PSM sleep event while it
+is still initialising.  opfunc_pwr_sv() treated that as a fatal error and asked
+STP to put the firmware into assert mode, so the firmware was shot in the back
+a few seconds after WIFI_START, dumped its core and reset the whole chip - long
+before it could raise WCIR_WLAN_READY.
+
+Add a module parameter (default on) that only logs the timeout.  With the host
+assert out of the way the firmware gets its full boot window.
+
+--- a/common_main/core/wmt_core.c
++++ b/common_main/core/wmt_core.c
+@@ -91,6 +91,13 @@
+ /* #define CFG_WMT_BT_PORT2 (1) *//* BT Port 2 Feature. */
+ #define CFG_CHECK_WMT_RESULT (1)
+ 
++/* T1100: the host used to turn a slow PSM sleep event into a firmware assert,
++ * which shot the freshly started WLAN firmware before it could raise READY. */
++static int t1100_no_host_assert = 1;
++module_param(t1100_no_host_assert, int, 0444);
++MODULE_PARM_DESC(t1100_no_host_assert,
++		 "T1100: do not trigger a firmware assert when the PSM sleep event times out");
++
+ /*******************************************************************************
+ *                             D A T A   T Y P E S
+ ********************************************************************************
+@@ -1454,6 +1461,7 @@
+ 				("wmt_core: read SLEEP_EVT fail(%d) len(%d, %d), host trigger firmware assert\n",
+ 				 ret, u4_result, evt_len);
+ 
++			if (!t1100_no_host_assert)
+ 			wmt_lib_trigger_assert(WMTDRV_TYPE_WMT, 33);
+ 			goto pwr_sv_done;
+ 		}

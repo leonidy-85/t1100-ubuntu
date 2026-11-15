@@ -1,0 +1,42 @@
+wlan: allow a single, explicitly pinned WIFI_START address
+
+M85: the default sequence tries four addresses, two seconds each, and
+every next WIFI_START re-initialises the MCU.  With the vendor request
+(override=0) the PC stays in the ROM window, while the 0x020a1000 attempt
+was seen running at 0xae0b0.  Pin one address and let the READY poll run
+its full window with t1100_start_addr=<addr>.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -950,6 +950,11 @@
+ /* T1100 M56: a reset must not hit while the RAM image is being downloaded */
+ int t1100_dl_active;
+ /* T1100 M58: warm reset right after the download and before the first WIFI_START */
++/* T1100: start the firmware at one explicit address and wait there */
++static unsigned int t1100_start_addr;
++module_param(t1100_start_addr, uint, 0444);
++MODULE_PARM_DESC(t1100_start_addr,
++		 "T1100: start the firmware at this address only (0 = default sequence)");
+ static int t1100_ready_trace = 1;
+ module_param(t1100_ready_trace, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_trace,
+@@ -1318,6 +1323,8 @@
+ 			char acTagStart[16];
+ 
+ 			for (u4Try = 0; u4Try < 4 && fgReady == FALSE; u4Try++) {
++				if (t1100_start_addr && u4Try > 0)
++					break;
+ 				UINT_32 u4Cpupcr = 0;
+ 
+ 				wlanGetCpupcr(&u4Cpupcr);
+@@ -1327,6 +1334,10 @@
+ 					u4Cpupcr);
+ 
+ 				if (u4Try) kalMsleep(300);	/* M73: pause between start addresses */
++				if (t1100_start_addr) {
++					pr_info("t1100-start[%u]: pinned addr=0x%08x\n", u4Try, t1100_start_addr);
++					wlanConfigWifiFunc(prAdapter, TRUE, t1100_start_addr);
++				} else if (au4Start[u4Try] == 0xffffffff)
+ 				if (au4Start[u4Try] == 0xffffffff)
+ 					wlanConfigWifiFunc(prAdapter, FALSE, 0);
+ 				else

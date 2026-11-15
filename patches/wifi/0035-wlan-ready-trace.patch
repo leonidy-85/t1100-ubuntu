@@ -1,0 +1,33 @@
+wlan: sample cpupcr while waiting for the WLAN READY bit
+
+M85: with the host assert suppressed the MCU is seen running in RAM
+(cpupcr 0x000aecb4) yet WCIR bit 21 never comes up.  Print the PC every
+500 polls so the stuck loop can be identified.  Off with
+t1100_ready_trace=0.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -950,6 +950,10 @@
+ /* T1100 M56: a reset must not hit while the RAM image is being downloaded */
+ int t1100_dl_active;
+ /* T1100 M58: warm reset right after the download and before the first WIFI_START */
++static int t1100_ready_trace = 1;
++module_param(t1100_ready_trace, int, 0444);
++MODULE_PARM_DESC(t1100_ready_trace,
++		 "T1100: print cpupcr while waiting for the WLAN READY bit");
+ static int t1100_ready_polls;
+ module_param(t1100_ready_polls, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_polls, "T1100: poll count for the WLAN READY bit (10 ms each, 0 = default)");
+@@ -1372,6 +1376,12 @@
+ 
+ 					i++;
+ 					kalMsleep(10);
++			if (t1100_ready_trace && (i % 500) == 0) {
++				UINT_32 u4TracePc = 0;
++				wlanGetCpupcr(&u4TracePc);
++				pr_info("t1100-ready[%u]: cpupcr 0x%08x wcir 0x%08x\n",
++					i, u4TracePc, u4Value);
++			}
+ 				}
+ 
+ 				wlanGetCpupcr(&u4Cpupcr);

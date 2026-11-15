@@ -1,0 +1,42 @@
+T1100: do not let the WMT worker timeout assert the firmware
+
+When WLAN_PROBE (our t1100_wlan_probe) runs longer than the WMT worker
+timer, wmt_lib_wmtd_worker_thread_work_handler() calls
+wmt_lib_trigger_assert_keyword(WIFI, 0, "DrvWMT turn on wifi fail"), which
+walks wmt_ctrl_trg_assert -> mtk_wcn_stp_wmt_trg_assert -> STP BTM assert ->
+firmware coredump and a whole-chip reset.
+
+On this port the probe legitimately needs more time than the timer allows
+(it polls WCIR for the READY bit and can try several start addresses), so
+the host kills the firmware before it can finish booting.  Add
+t1100_no_wifi_fail_assert (default on) that logs the message instead of
+triggering the assert.
+
+--- a/common_main/core/wmt_lib.c
++++ b/common_main/core/wmt_lib.c
+@@ -1250,6 +1250,14 @@
+ 	schedule_work(&gDevWmt.wmtd_worker_thread_work);
+ }
+ 
++/* T1100: WMT asserts the firmware when WLAN_PROBE runs longer than its
++ * worker timeout.  Suppress that so the driver can finish its own polling.
++ */
++static int t1100_no_wifi_fail_assert = 1;
++module_param(t1100_no_wifi_fail_assert, int, 0444);
++MODULE_PARM_DESC(t1100_no_wifi_fail_assert,
++		 "T1100: do not assert the firmware when WLAN_PROBE takes too long");
++
+ static VOID wmt_lib_wmtd_worker_thread_work_handler(struct work_struct *work)
+ {
+ 	PUINT8 pbuf = NULL;
+@@ -1272,6 +1280,10 @@
+ 			len = osal_strlen(pbuf);
+ 		break;
+ 		}
++		if (t1100_no_wifi_fail_assert) {
++			WMT_WARN_FUNC("t1100: %s (assert suppressed)\n", pbuf);
++			return;
++		}
+ 		wmt_lib_trigger_assert_keyword(WMTDRV_TYPE_WIFI, 0, pbuf);
+ 	}
+ }

@@ -1,0 +1,31 @@
+wlan: make the WLAN READY polling window configurable (t1100_ready_polls)
+
+The probe gives the firmware only CFG_RESPONSE_POLLING_TIMEOUT * 10 ms
+(1050 ms) to raise WCIR_WLAN_READY after WIFI_START. The MCU is executing
+(the cpupcr moves on every attempt) but a calibration-heavy first start can
+legitimately take longer, and the host then retries the start and finally
+asserts the chip.
+
+Add t1100_ready_polls so the window can be stretched without a rebuild.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -950,6 +950,9 @@
+ /* T1100 M56: a reset must not hit while the RAM image is being downloaded */
+ int t1100_dl_active;
+ /* T1100 M58: warm reset right after the download and before the first WIFI_START */
++static int t1100_ready_polls;
++module_param(t1100_ready_polls, int, 0444);
++MODULE_PARM_DESC(t1100_ready_polls, "T1100: poll count for the WLAN READY bit (10 ms each, 0 = default)");
+ static int t1100_reset_before_start;
+ static int t1100_wmt_func_on = 1;
+ module_param(t1100_wmt_func_on, int, 0444);
+@@ -1357,7 +1360,7 @@
+ 					} else if (kalIsCardRemoved(prAdapter->prGlueInfo) == TRUE ||
+ 						   fgIsBusAccessFailed == TRUE) {
+ 						break;
+-					} else if (i >= CFG_RESPONSE_POLLING_TIMEOUT) {
++					} else if (i >= (t1100_ready_polls > 0 ? (UINT_32)t1100_ready_polls : (UINT_32)CFG_RESPONSE_POLLING_TIMEOUT)) {
+ 						UINT_32 u4MailBox0;
+ 
+ 						nicGetMailbox(prAdapter, 0, &u4MailBox0);
