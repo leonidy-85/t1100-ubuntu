@@ -5109,3 +5109,30 @@ BTIF/STP-транспорт (включая исправленную поляр�
   Дальше: `WHLPCR`/`CHLPCR` перед стартом, mailbox-handshake, область второго
   патча `0x00098020`.
 - Подробности — `docs/wifi-port-log.md` §85.
+
+## 16.11 (2): Wi-Fi — прошивка стартует и падает в assert ROMv4-патча
+
+- `WIFI_START` всё-таки работает: в dmesg есть
+  `page_trace: <3>EMI Wakup Success (i=0)++<4>Chip num:0 Host num:0
+  ++{asser_type=5}<5>exp_main: jump from cos_assert++<6>EXP_MAIN_ENTRY_CNT =1` —
+  MCU перешёл в RAM-код (секции `0x020a1000`/`0x000a5800` приняты, `status=0`,
+  `after-dl` дамп совпадает с образом), но упал в assert.
+- Строка assert: `<ASSERT> patch/sys_patch_bin_t.c #3303 - H, 0x0, 0x0, 0x0,
+  Dump=98, rc=*, id=0x7..., isr=0x0, irq=0xB, lr=0x99772, sp=0x20A07BC`.
+  `lr=0x99772` — внутри второго ROMv4-патча (`1_0`, база `0x98000`), т.е.
+  assert срабатывает в коде ROMv4-патча, а не в обычном FW.
+- Проверено, что патч `1_1` лежит байт в байт: тело
+  `ROMv4_be_patch_1_1_hdr.bin` (смещение 28) = `00000000 00000000 bca86f3a
+  ff008054 ff7f0450 60500096 f05c0880 f24e4e00 1f466703 1058a700 08801886
+  00a09038`, и дамп MCU по `0xf0078000` совпал слово в слово. Загрузка патчей
+  корректна, дело не в адресе/смещении.
+- Дальше: MCU-assert → coredump (`0x98000` 520 Б, `0x98208` 49656 Б,
+  `0xB0400` 130048 Б, `0x2090000` 278528 Б) → `whole chip reset`; READY так и
+  не выставляется.
+- Рабочие параметры: `wmt_drv t1100_quiet_ms=100` +
+  `t1100_rom_patch="ROMv4_be_patch_1_1_hdr.bin ROMv4_be_patch_1_0_hdr.bin"`,
+  `wlan_drv_gen3 t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=1`,
+  затем ioctl `0x4004A006`/`0xBEEF0003` на `/dev/stpwmt`.
+- Следующие кандидаты: несовпадение версии FW и ROMv4-патча (assert внутри
+  патча), отсутствие NVRAM (`glLoadNvram: Nvram not available`), нерабочая
+  EMI MPU (`kalSetEmiMpuProtection: EMI MPU function is not defined`).
