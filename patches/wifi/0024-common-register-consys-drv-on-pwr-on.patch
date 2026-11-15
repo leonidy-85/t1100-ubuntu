@@ -1,0 +1,51 @@
+common: register the consys platform driver on first power-on (T1100)
+
+On this port the vendor WMT core init chain (wmt_lib_init -> wmt_plat_init
+-> mtk_wcn_consys_hw_init) is never reached, because STP/HIF is not used:
+our t1100_wlan_probe() calls wmt_plat_pwr_ctrl(FUNC_ON) directly. As a
+result mtk_wmt_dev_drv is never registered, mtk_wmt_probe() never runs,
+and both conn_reg (MCU base) and the EMI window stay empty:
+
+  [WMT-CONSYS-HW][E]mtk_wcn_consys_hw_pwr_on(562):EMI base address is invalid, CONNSYS can not be powered on!
+  [wlan]t1100_wlan_probe:(INIT INFO) t1100_wlan_probe: wmt_plat_pwr_ctrl(FUNC_ON) = -1
+
+Register the platform driver from mtk_wcn_consys_hw_pwr_on() the first
+time it is called. platform_driver_register() probes the already present
+consys@18070000 node synchronously, so conn_reg and the reserved-memory
+EMI window are filled before the power-on sequence continues. The flag
+keeps the call idempotent in case wmt_plat_init() is ever reached later.
+
+--- a/common_main/platform/mtk_wcn_consys_hw.c
++++ b/common_main/platform/mtk_wcn_consys_hw.c
+@@ -73,7 +73,10 @@
+ struct platform_device *g_pdev;
+ 
+ UINT32 gps_lna_pin_num = 0xffffffff;
++
++/* T1100 port: the consys platform driver is registered on first power-on. */
++static bool t1100_consys_drv_registered;
+ 
+ #ifdef CONFIG_OF
+ const struct of_device_id apwmt_of_ids[] = {
+ 	{.compatible = "mediatek,mt3967-consys",},
+@@ -555,10 +555,20 @@
+ INT32 mtk_wcn_consys_hw_pwr_on(UINT32 co_clock_type)
+ {
+ 	INT32 iRet = 0;
+ 
+ 	WMT_PLAT_PR_INFO("CONSYS-HW-PWR-ON, start\n");
+ 	WMT_STEP_DO_ACTIONS_FUNC(STEP_TRIGGER_POINT_POWER_ON_START);
++
++	/* T1100 port: on this port the WMT core init (wmt_lib_init ->
++	 * wmt_plat_init) is never reached (STP is not used), so the consys
++	 * platform driver is not registered and conn_reg/EMI stay empty.
++	 * Register it on the first power-on; its probe fills both.
++	 */
++	if (!gConEmiPhyBase && !t1100_consys_drv_registered) {
++		t1100_consys_drv_registered = true;
++		mtk_wcn_consys_hw_init();
++	}
+ 	if (!gConEmiPhyBase) {
+ 		WMT_PLAT_PR_ERR("EMI base address is invalid, CONNSYS can not be powered on!");
+ 		return -1;
+ 	}

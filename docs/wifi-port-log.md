@@ -4832,3 +4832,34 @@ vendor-вариант старта: `wlanConfigWifiFunc(prAdapter, FALSE, 0)`, �
   против **этого** out-дерева, (3) перепаковать boot тем же DTB, (4) прошить с
   бэкапом p29, (5) положить `.ko` в `/lib/modules/<release>/updates/wifi/`,
   `modprobe wmt_drv` → `modprobe wlan_drv_gen3 t1100_probe=1 …`, снять dmesg.
+
+### 82.8 Прогон M81 на образе wifi2: CONSYS включается, ROM-patch отвергнут
+
+Образ `build/wifi-image2/boot_wifi2.img` (`d9a1f402…`, release
+`6.12.114-wifi1`), модули собраны против `out-wifi` с `LOCALVERSION=`.
+Чтобы probe дошёл до включения CONSYS, понадобились четыре guard-патча
+(`patches/wifi/0021…0024`):
+
+| патч | что чинит |
+|---|---|
+| 0021 | `pinctrl_select_state()` в `wmt_plat_alps.c`/`wmt_gpio.c` без проверки `pinctrl_info` → oops |
+| 0022 | `*_paldo_ctrl()` в `mtk_wcn_consys_hw.c` разыменовывают `wmt_consys_ic_ops` до ленивой инициализации → oops |
+| 0023 | `wmt_detect_get_chip_type()` под `#ifdef MT6631` инертен (`MT6631` не определён) → chip type INVALID, шёл CMB-путь без `conn_reg` |
+| 0024 | `mtk_wmt_probe()` не регистрируется (нет `wmt_lib_init`) → `gConEmiPhyBase == 0` → «EMI base address is invalid» |
+
+После 0024 (boot 23:11, `modprobe wlan_drv_gen3 t1100_probe=1`):
+
+- `mtk_wmt_consys_emi_from_dt: phys 0xbfc00000 size 0x200000`, clear + remap OK;
+- `polling_consys_chipid: consys chipId(0x00000788)` — MT6631 живой;
+- `FW download end`, и `t1100-mem[after-dl] 0x000a5800 = 0xad000046 (rc 0)`
+  (плюс `0x000a5804…0x000a581c` непустые) — **секции легли в EMI,
+  ACCESS_REG после download работает**;
+- `t1100-tx[sec1-pkt0]: WHISR=0x41 txdone=1 abnorm=1 WASR=0x10000`,
+  `t1100-tx[sec1-pkt16]: txdone=1 abnorm=0` — чип потребляет data-пакеты.
+
+Блокер: ROM-patch. `t1100-patch: PATCH_SEMAPHORE_CONTROL(get) -> result=3221225473`
+(`0xC0000001`), затем `PATCH_START addr=0x00098022 len=229348 -> 0xC0000001`,
+`ROM rejected PATCH_START, stop`. После отказа hif сбрасывается
+(`WCIR=0, chipid=0, POR=0`), поэтому `WIFI_START` не поднимает READY:
+`Waiting for Ready bit timeout, … MailBox 0x0`. Патч 0009 и протокол
+`wlanImageSectionDownloadStatus` — следующий предмет разбора.
