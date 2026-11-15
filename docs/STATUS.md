@@ -5062,3 +5062,20 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `panfrost ... js fault ... DATA_INVALID_FAULT`. Длинный (10 мин) s2idle
   с фиксом ещё не проверен — блокирует panfrost, не панель.
 - Откат: `build/gauge/boot_gauge_v5.img` (`2d1177c6…`, без фикса).
+
+## 15.11 (12): panfrost 0076 прошит; клин при отключении кабеля не воспроизвёлся
+
+- `patches/0076-drm-panfrost-bound-the-job-irq-drain-loop.patch` (после 0075):
+  дренаж `JOB_INT_RAWSTAT` ограничен 32 кругами; при залипании печатается
+  `job irq status does not clear (rawstat=…, js_state=…)`, IRQ маскируется и
+  через `panfrost_device_schedule_reset()` уходит reset GPU; внешний цикл
+  выходит по `reset.pending`.
+- Образ `build/pf-irq/boot_pf_irq_fix.img` sha256 `2ebe6f3e…357baf`
+  (kernel `fc65b82c…`, DTB/ramdisk/cmdline из p29) прошит в p29 вместо
+  `75af7b5f…`; чтение раздела обратно совпало, планшет поднялся.
+- Тест 22:43:56–22:44:07: кабель вынут на 11 с — картинка не замерла,
+  `kwin_wayland` в `do_sys_poll`, `panfrost-job` IRQ растут, новых
+  `js fault`/`gpu sched timeout`/`latency` нет. То есть залипания не было,
+  и 0076 пока не доказан; вероятная причина прежних клиньев — залипший
+  OTG/boost порта, снимаемый перезагрузкой.
+- Откат: `build/it6112-resume/boot_resume_full.img` (`75af7b5f…`).
