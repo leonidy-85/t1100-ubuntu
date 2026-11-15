@@ -4863,3 +4863,49 @@ vendor-вариант старта: `wlanConfigWifiFunc(prAdapter, FALSE, 0)`, �
 (`WCIR=0, chipid=0, POR=0`), поэтому `WIFI_START` не поднимает READY:
 `Waiting for Ready bit timeout, … MailBox 0x0`. Патч 0009 и протокол
 `wlanImageSectionDownloadStatus` — следующий предмет разбора.
+
+## 83. M82: ROMv4-патчи по BTIF/STP залиты, но MCIF после патча мёртв (15–16.11)
+
+Продолжение §82. Вендор грузит **два** ROMv4-патча (`1_1` seq 1, 315
+фрагментов, адрес `0xf0078000`; `1_0` seq 2, 230 фрагментов, `0x00098000`),
+поэтому MCIF-путь `t1100_rom_patch_send()` (патч 0018) не мог сработать: ROM
+ждёт сначала seq 1 по транспорту WMT.
+
+### 83.1 Патчи 0025–0028
+
+| патч | что делает | итог |
+|---|---|---|
+| 0025 | `t1100_rom_patch_send()` перенесён до скачивания секций | не помогло: patch-CID по MCIF не отвечают (таймаут 1 с → `WLAN_STATUS_FAILURE` = `0xC0000001`) |
+| 0026 | `wmt_detect_driver_init()` вызывает `mtk_wcn_common_drv_init()` при `t1100_btif_stp=1` (в вендоре это делает userspace `wmt_launcher` через ioctl) | **STP-путь заработал** |
+| 0027 | при `t1100_pwr_on_done=1` не валить probe на `nicpmSetDriverOwn` | probe идёт дальше, но `section-config` таймаутит |
+| 0028 | вызвать `mtk_wcn_wmt_func_on(WMTDRV_TYPE_WIFI)` перед LP-OWN | вызов не возвращается: whole-chip reset + зависание → watchdog reboot |
+
+### 83.2 Что подтвердилось
+
+С `t1100_btif_stp=1`, `t1100_rom_patch="ROMv4_be_patch_1_1_hdr.bin
+ROMv4_be_patch_1_0_hdr.bin"` и **`t1100_quiet_ms=100`** (этот параметр
+отключает M46 STP-reinit между патчами, который рвал канал: `stp reinit …
+hwcode 0x00000000 (ret -3)`) wmt_drv проходит весь путь:
+
+- `get hwcode (chip id) (0x788)`, `SOC_CONSYS.E1 (0x8a00/0x8a00)`;
+- seq 1: 315 фрагментов, `quiet end`, `after quiet hwcode 0x00000788 (ret 0)`,
+  `reset ack after patch 0: yes`;
+- seq 2: 230 фрагментов, то же, `reset ack after patch 1: yes`;
+- `t1100: WMT_OPID_PWR_ON (BTIF STP, ROM patch) -> 1`.
+
+То есть CONSYS включается и патчится по BTIF/STP, chipId читается.
+
+### 83.3 Блокер
+
+После STP-патча MCU перестаёт обслуживать AHB/MCIF init-cmd канал:
+`section-config dst=0x020a1000 len=28032 -> status=3221225473` (таймаут),
+`t1100-mcr[...]` — все нули. При этом по STP чип живой. Вывод: пропатченный
+ROM ждёт STP-транспорт, а в портированном `wlan_drv_gen3` есть только
+`ahb_sdioLike`/`ehpi`/`sdio` — STP-HIF для wlan не реализован.
+
+`mtk_wcn_wmt_func_on(WIFI)` из wlan_drv — тупик: вызов блокируется, WMT
+запускает whole-chip reset (`_stp_btm_handler: whole chip reset start!`),
+плата зависает и уходит в перезагрузку по watchdog.
+
+Дальше: либо STP-транспорт init-cmd в wlan (большая работа), либо способ
+вернуть MCIF после патча (в WMT API режима AHB нет).

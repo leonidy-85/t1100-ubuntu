@@ -1,0 +1,42 @@
+T1100 M82: send the ROMv4 patch before the firmware sections.
+
+The gen4m vendor flow hands the ROMv4 patch to the MCU ROM *before* it
+downloads the WLAN RAM-code sections. Our M22 path sent it afterwards,
+and on this ROM the patch CIDs are then not answered at all: the M81 log
+shows PATCH_SEMAPHORE_CONTROL(get) and PATCH_START both timing out
+(wlanImageSectionDownloadStatus returns WLAN_STATUS_FAILURE = 0xC0000001)
+and the MCU resets (WCIR=0), so the following WIFI_START goes into a dead
+MCU and READY never rises.
+
+Move t1100_rom_patch_send() to just before the download; keep it behind
+t1100_rom_patch_mcif so both orders can still be compared.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -1097,6 +1097,16 @@
+ 		/* 3. FW download here */
+ 		DBGLOG(INIT, TRACE, "FW download start...\n");
+ 
++		/*
++		 * T1100 M82: the vendor gen4m flow hands the ROMv4 patch to the
++		 * MCU *before* the firmware sections. After the sections the ROM
++		 * no longer answers the patch CIDs (M81: timeout 0xC0000001).
++		 */
++		if (t1100_rom_patch_mcif) {
++			t1100_rom_patch_send(prAdapter);
++			t1100_hif_state(prAdapter, "after-rompatch");
++		}
++
+ #if CFG_ENABLE_FW_DIVIDED_DOWNLOAD
+ 		/* 3a. parse file header for decision of divided firmware download or not */
+ 		prFwHead = (P_FIRMWARE_DIVIDED_DOWNLOAD_T)prFwBuffer;
+@@ -1155,8 +1165,7 @@
+ 		 * T1100 M22: hand the ROMv4 patch to the MCU ROM before asking it
+ 		 * to jump into the WLAN RAM code (see t1100_rom_patch_send()).
+ 		 */
+-		t1100_rom_patch_send(prAdapter);
+-		t1100_hif_state(prAdapter, "after-rompatch");
++		/* T1100 M82: the ROM patch is sent before the download now. */
+ #endif
+ 
+ 		if (t1100_reset_before_start) {

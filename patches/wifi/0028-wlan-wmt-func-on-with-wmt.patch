@@ -1,0 +1,42 @@
+wlan: ask wmt_drv for the WIFI function before the LP-OWN handshake
+
+When wmt_drv brings CONSYS up over BTIF/STP and delivers the ROMv4 patch,
+the AHB/MCIF mailbox of the WLAN subsystem is not served any more: the
+driver-own poll times out ("LP fail, Timeout(516ms)") and every later
+init-cmd (section-config) fails, even though the chip is patched.
+
+In the stock stack the WLAN driver asks WMT for the WIFI function
+(mtk_wcn_wmt_func_on(WMTDRV_TYPE_WIFI)) after the WMT power-on, which
+turns the WLAN subsystem on.  Do the same when the port relies on
+wmt_drv (t1100_pwr_on_done=1), gated by a new parameter so the old
+MCIF-only path is unchanged.
+
+Applied on top of 0025 and 0027.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -882,6 +882,9 @@
+ int t1100_dl_active;
+ /* T1100 M58: warm reset right after the download and before the first WIFI_START */
+ static int t1100_reset_before_start;
++static int t1100_wmt_func_on = 1;
++module_param(t1100_wmt_func_on, int, 0444);
++MODULE_PARM_DESC(t1100_wmt_func_on, "T1100: switch the WIFI function on through wmt_drv before LP-OWN");
+ extern int t1100_pwr_on_done;	/* set by ahb.c: CONSYS already up (wmt_drv STP) */
+ module_param(t1100_reset_before_start, int, 0444);
+ MODULE_PARM_DESC(t1100_reset_before_start, "T1100: warm reset after download, before WIFI_START");
+@@ -981,6 +984,14 @@
+ 		prAdapter->u4OsPacketFilter = PARAM_PACKET_FILTER_SUPPORTED;
+ 
+ 		DBGLOG(INIT, TRACE, "wlanAdapterStart(): Acquiring LP-OWN\n");
++		/* T1100: with the ROMv4 patch delivered by wmt_drv over BTIF/STP,
++		 * the WIFI function has to be switched on through WMT before the
++		 * AHB/MCIF mailbox answers again. */
++		if (t1100_pwr_on_done && t1100_wmt_func_on) {
++			extern int mtk_wcn_wmt_func_on(int);
++			int wmtRet = mtk_wcn_wmt_func_on(3 /* WMTDRV_TYPE_WIFI */);
++			pr_info("t1100: wmt func on (WIFI) -> %d\n", wmtRet);
++		}
+ 		if (t1100_pwr_on_done && prAdapter->fgIsFwOwn == TRUE)
+ 			DBGLOG(INIT, INFO, "t1100: driver-own skipped (CONSYS owned by wmt_drv)\n");
+ 		ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
