@@ -1,0 +1,43 @@
+wlan: continue the probe when wmt_drv already owns CONSYS
+
+With t1100_pwr_on_done=1 the WLAN driver no longer powers CONSYS itself:
+wmt_drv has already booted the chip and delivered both ROMv4 patches over
+BTIF/STP.  The MCIF driver-own handshake does not succeed against the
+patched ROM (LP fail, timeout 516 ms, cpupcr stays in ROM range), so the
+probe aborted before any firmware section was sent.
+
+When the flag is set, keep going: the chip is ours anyway and the section
+download / WIFI_START path may still work.  The M72 helper stays untouched.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -882,6 +882,7 @@
+ int t1100_dl_active;
+ /* T1100 M58: warm reset right after the download and before the first WIFI_START */
+ static int t1100_reset_before_start;
++extern int t1100_pwr_on_done;	/* set by ahb.c: CONSYS already up (wmt_drv STP) */
+ module_param(t1100_reset_before_start, int, 0444);
+ MODULE_PARM_DESC(t1100_reset_before_start, "T1100: warm reset after download, before WIFI_START");
+ int t1100_reset_pending;
+@@ -980,6 +981,8 @@
+ 		prAdapter->u4OsPacketFilter = PARAM_PACKET_FILTER_SUPPORTED;
+ 
+ 		DBGLOG(INIT, TRACE, "wlanAdapterStart(): Acquiring LP-OWN\n");
++		if (t1100_pwr_on_done && prAdapter->fgIsFwOwn == TRUE)
++			DBGLOG(INIT, INFO, "t1100: driver-own skipped (CONSYS owned by wmt_drv)\n");
+ 		ACQUIRE_POWER_CONTROL_FROM_PM(prAdapter);
+ 		DBGLOG(INIT, TRACE, "wlanAdapterStart(): Acquiring LP-OWN-end\n");
+ 
+@@ -987,7 +990,11 @@
+ 		nicpmSetDriverOwn(prAdapter);
+ #endif
+ 
+-		if (prAdapter->fgIsFwOwn == TRUE) {
++		/* T1100: wmt_drv already powered CONSYS on and delivered the
++		 * ROMv4 patch over BTIF/STP.  With the patched ROM the MCIF
++		 * driver-own handshake no longer succeeds, but the chip is
++		 * ours anyway -- continue with the firmware download. */
++		if (prAdapter->fgIsFwOwn == TRUE && !t1100_pwr_on_done) {
+ 			DBGLOG(INIT, ERROR, "nicpmSetDriverOwn() failed!\n");
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			eFailReason = DRIVER_OWN_FAIL;

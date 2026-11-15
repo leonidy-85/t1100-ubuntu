@@ -1,0 +1,34 @@
+T1100: start the WMT core from wmt_detect without a userspace launcher
+
+The vendor stack expects a userspace launcher to open /dev/stpwmt and issue
+COMBO_IOCTL_DO_MODULE_INIT, which is the only caller of
+mtk_wcn_common_drv_init() -> WMT_init().  This port runs no launcher, so
+WMT_init() never ran and the t1100_btif_stp bring-up (STP over BTIF,
+CONNSYS power on, ROMv4 patch download) was never scheduled.
+
+Call mtk_wcn_common_drv_init() at the end of wmt_detect_driver_init() when
+t1100_btif_stp is set.  With the parameter unset the old behaviour (wlan_drv
+powers the chip on) is preserved.
+
+--- a/common_detect/wmt_detect.c
++++ b/common_detect/wmt_detect.c
+@@ -348,6 +348,19 @@
+ 
+ 	WMT_DETECT_PR_INFO("driver(major %d) installed success\n", gWmtDetectMajor);
+ 
++	/* T1100: the port runs no userspace launcher to issue
++	 * COMBO_IOCTL_DO_MODULE_INIT, so start the WMT core right here.  With
++	 * t1100_btif_stp set it selects STP over BTIF and powers CONNSYS on,
++	 * which downloads the ROMv4 patches (see WMT_init()). */
++	{
++		extern int t1100_btif_stp;
++		extern int mtk_wcn_common_drv_init(void);
++
++		if (t1100_btif_stp)
++			WMT_DETECT_PR_INFO("t1100: mtk_wcn_common_drv_init() -> %d\n",
++					   mtk_wcn_common_drv_init());
++	}
++
+ 	return 0;
+ 
+ err2:
