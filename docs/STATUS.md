@@ -5136,3 +5136,22 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Следующие кандидаты: несовпадение версии FW и ROMv4-патча (assert внутри
   патча), отсутствие NVRAM (`glLoadNvram: Nvram not available`), нерабочая
   EMI MPU (`kalSetEmiMpuProtection: EMI MPU function is not defined`).
+
+## 16.11 (2): встроенный Wi-Fi — 0037 (вычитывание MCIF RX) не поднял READY
+
+- Патч `patches/wifi/0037-wlan-drain-mcif-rx-on-ready.patch`: в цикле
+  ожидания READY каждые 200 мс вызывается `nicProcessRxInterrupt()`, в
+  трассу (каждые 500 опросов) добавлены `IsrRxCnt` и `t1100_hif_state`
+  (`ready-wait`). Параметр `t1100_ready_rx` (по умолчанию 1).
+- Сборка/деплой: `wlan_drv_gen3.ko` `a28af21b…` (2 958 280 Б), `wmt_drv.ko`
+  без изменений `73256ebb…`.
+- Прогон (pinned start `0x020a1000`, окно 60 с): `IsrRxCnt` растёт 25/50/
+  75/100, но `WCIR` всё время `0x00100788` (`POR=1`, `READY=0`),
+  `CHISR/CTFSR=0x1e00` не меняются, `wlan0` нет.
+- `cpupcr` скачет между диапазонами: `0x9cb72`, `0xaec5a`, `0x98486`
+  (RAM/патч) и `0x17de4`, `0x19d8`, `0x5608`, `0x14ef6` (ROM) — MCU не
+  задерживается в RAM-коде, а периодически оказывается в ROM. Похоже на
+  циклический сбой/сброс MCU после прыжка, а не на медленный старт.
+- Следующие кандидаты: несовпадение FW `WIFI_RAM_CODE_6759` и ROMv4-патча
+  (`1_0` грузится на `0x98000` и перекрывается образом на `0xa5800`),
+  отсутствие NVRAM, нерабочая EMI MPU.
