@@ -69,3 +69,4 @@
 0072-power-supply-add-a-minimal-MT6358-fuel-gauge.patch
 0073-power-mt6358-gauge-fix-profile-units-and-current-read.patch
 0074-drm-panel-it6112-recover-the-bridge-after-the-dsi-st.patch
+0075-drm-panfrost-instrument-the-job-irq-stall.patch
