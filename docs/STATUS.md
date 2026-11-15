@@ -5094,3 +5094,18 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Прошивка не выполнялась (ждёт согласования). Откат — `2ebe6f3e…357baf`.
 - Цель прогона: M81 (`docs/wifi-port-log.md` §82.6) — `t1100-mem[after-dl]`
   по `0x000a5800`, `t1100-tx`/`WHISR`/`WTQCR`, vendor-`WIFI_START`.
+
+## 16.11 (1): встроенный Wi-Fi — патч в памяти MCU, READY не встаёт
+
+- Добавлен `patches/wifi/0031-wlan-dump-patch-area.patch` (диагностика):
+  дамп `0xf0078000`/`0xf0078020` через CID 3 после `after-dl`.
+- Результат прогона: тело `ROMv4_be_patch_1_1_hdr.bin` лежит в памяти MCU
+  (`0xbca86f3a …`), `section-config` обеих секций `status=0`, `FW download end`;
+  `WIFI_START` во всех вариантах (`override=0`, `0xa5800`, `0x020a1000`,
+  `0x00091400`) принимается (`status=0`), но `WCIR` остаётся `0x00100788`
+  (POR=1, READY=0), `wlanProbe failed` ×3.
+- То есть блокер — не доставка патча и не транспорт: MCU что-то исполняет
+  (`cpupcr = 0xae0b0` после старта на `0x020a1000`), но READY не выставляет.
+  Дальше: `WHLPCR`/`CHLPCR` перед стартом, mailbox-handshake, область второго
+  патча `0x00098020`.
+- Подробности — `docs/wifi-port-log.md` §85.
