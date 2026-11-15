@@ -1,0 +1,25 @@
+wlan: dump the ROMv4 patch area after the image download
+
+The MCU accepts both ROMv4 patches over BTIF/STP (315 + 230 fragments
+acked) and the WLAN image download succeeds, yet WIFI_START never sets
+WCIR.READY.  One open question is whether the patch body actually lands
+in the MCU memory: read back the patch region (0xf0078000 and
+0xf0078020) right after the image download, next to the existing
+"after-dl" dump of 0x000a5800.
+
+Diagnostic only, no behaviour change.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -1240,6 +1240,11 @@
+ 		 */
+ 		if (t1100_readback)
+ 			t1100_mem_dump(prAdapter, 0x000a5800, 8, "after-dl");
++		if (t1100_readback) {
++			/* T1100: did the ROMv4 patch land in the MCU memory? */
++			t1100_mem_dump(prAdapter, 0xf0078000, 8, "patch-area");
++			t1100_mem_dump(prAdapter, 0xf0078020, 4, "patch-area+20");
++		}
+ 
+ 		/*
+ 		 * T1100 M20: ask the MCU itself what it thinks about the image it
