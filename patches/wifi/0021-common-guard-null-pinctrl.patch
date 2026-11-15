@@ -1,0 +1,22 @@
+diff -u -r a/common_detect/wmt_gpio.h b/common_detect/wmt_gpio.h
+--- a/common_detect/wmt_gpio.h	2026-11-15 20:02:59.740704303 +0000
++++ b/common_detect/wmt_gpio.h	2026-11-15 20:02:59.749661821 +0000
+@@ -34,6 +34,18 @@
+ */
+ #define DEFAULT_PIN_ID (0xffffffff)
+ 
++/*
++ * T1100 (MT6771) port: the Wi-Fi DT nodes describe no pinctrl states, so
++ * devm_pinctrl_get() in wmt_gpio.c leaves gpio_ctrl_info.pinctrl_info NULL and
++ * the per-pin states stay NULL/ERR_PTR. The vendor callers in
++ * wmt_plat_alps.c and wmt_detect_pwr.c pass those values straight into
++ * pinctrl_select_state(), which dereferences them and oopses during probe.
++ * Treat "no pinctrl" as "nothing to mux": the pins are already configured by
++ * the bootloader, and only GPIO direction/value matters for this path.
++ */
++#define pinctrl_select_state(p, s) \
++	(IS_ERR_OR_NULL(p) || IS_ERR_OR_NULL(s) ? 0 : pinctrl_select_state((p), (s)))
++
+ /*******************************************************************************
+ *                             D A T A   T Y P E S
+ ********************************************************************************

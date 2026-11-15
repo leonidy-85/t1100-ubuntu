@@ -1,0 +1,31 @@
+common: make the "chip type defaults to SOC" fix effective in this build
+
+0022 fixed the paldo oops, but the next crash showed the SoC path never ran:
+
+  [wlan]wlanNetCreate: net_device prDev allocated
+  [wlan]sdio_open:(HAL ERROR) Enable function failed, error -62
+  nicpmSetDriverOwn:(NIC ERROR) LP fail, Timeout(516ms) ... Cnt[0]
+  pc : consys_read_cpupcr+0x8/0x18 [wmt_drv]
+  lr : mtk_wcn_consys_read_cpupcr+0x20/0x40 [wmt_drv]
+
+consys_read_cpupcr() reads conn_reg.mcu_base, which mtk_wmt_probe() fills
+from of_iomap(). That probe only exists when wmt_plat_init() takes the SoC
+branch (mtk_wcn_consys_hw_init()); with chip type INVALID it takes the SDIO
+combo branch (mtk_wcn_cmb_hw_pwr_on) and conn_reg stays NULL.
+
+0011 already forces SOC for "type not set", but guarded it with #ifdef MT6631,
+and this build selects the SoC family with -DMTK_WCN_SOC_CHIP_SUPPORT and
+never defines MT6631 (see common/Makefile: "chip / platform selection").
+Widen the guard so the intended default actually compiles in.
+
+--- a/common_detect/wmt_detect.c
++++ b/common_detect/wmt_detect.c
+@@ -275,7 +275,7 @@
+  */
+ ENUM_WMT_CHIP_TYPE wmt_detect_get_chip_type(void)
+ {
+-#ifdef MT6631
++#if defined(MT6631) || defined(MTK_WCN_SOC_CHIP_SUPPORT)
+ 	if (g_chip_type == WMT_CHIP_TYPE_INVALID) {
+ 		g_chip_type = WMT_CHIP_TYPE_SOC;
+ 		WMT_DETECT_PR_INFO("chip type not set by a loader, MT6631 is CONSYS_6771 -> SOC\n");

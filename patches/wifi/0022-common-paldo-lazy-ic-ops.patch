@@ -1,0 +1,54 @@
+common: lazily resolve wmt_consys_ic_ops in the paldo helpers (T1100)
+
+The vendor code resolves the per-SoC consys ops lazily, but only in
+mtk_wcn_consys_soc_chipid(), mtk_wcn_consys_hw_init() and
+mtk_wcn_consys_co_clock_type(). The paldo helpers dereference
+wmt_consys_ic_ops unconditionally, so the first call made before any of
+those (our t1100_wlan_probe() calls wmt_plat_soc_paldo_ctrl(WIFI_PALDO)
+right after the CMB power-on) oopses on a NULL pointer:
+
+  pc : mtk_wcn_consys_hw_wifi_paldo_ctrl+0x8/0x40 [wmt_drv]
+  lr : t1100_wlan_probe+0x74/0x330 [wlan_drv_gen3]
+  Internal error: Oops: 0000000096000005 [#1] PREEMPT SMP
+
+Resolve the ops on first use and keep a NULL check, matching the idiom
+already used in the three functions above. Same treatment for the BT and
+vcn28 helpers, which are reached from the same probe path.
+
+--- a/common_main/platform/mtk_wcn_consys_hw.c
++++ b/common_main/platform/mtk_wcn_consys_hw.c
+@@ -435,14 +435,20 @@
+ 
+ INT32 mtk_wcn_consys_hw_bt_paldo_ctrl(UINT32 enable)
+ {
+-	if (wmt_consys_ic_ops->consys_ic_hw_bt_vcn33_ctrl)
++	if (wmt_consys_ic_ops == NULL)
++		wmt_consys_ic_ops = mtk_wcn_get_consys_ic_ops();
++
++	if (wmt_consys_ic_ops && wmt_consys_ic_ops->consys_ic_hw_bt_vcn33_ctrl)
+ 		wmt_consys_ic_ops->consys_ic_hw_bt_vcn33_ctrl(enable);
+ 	return 0;
+ }
+ 
+ INT32 mtk_wcn_consys_hw_wifi_paldo_ctrl(UINT32 enable)
+ {
+-	if (wmt_consys_ic_ops->consys_ic_hw_wifi_vcn33_ctrl)
++	if (wmt_consys_ic_ops == NULL)
++		wmt_consys_ic_ops = mtk_wcn_get_consys_ic_ops();
++
++	if (wmt_consys_ic_ops && wmt_consys_ic_ops->consys_ic_hw_wifi_vcn33_ctrl)
+ 		wmt_consys_ic_ops->consys_ic_hw_wifi_vcn33_ctrl(enable);
+ 	return 0;
+ }
+@@ -464,7 +470,10 @@
+ 
+ INT32 mtk_wcn_consys_hw_vcn28_ctrl(UINT32 enable)
+ {
+-	if (wmt_consys_ic_ops->consys_ic_hw_vcn28_ctrl)
++	if (wmt_consys_ic_ops == NULL)
++		wmt_consys_ic_ops = mtk_wcn_get_consys_ic_ops();
++
++	if (wmt_consys_ic_ops && wmt_consys_ic_ops->consys_ic_hw_vcn28_ctrl)
+ 		wmt_consys_ic_ops->consys_ic_hw_vcn28_ctrl(enable);
+ 	if (enable)
+ 		WMT_PLAT_PR_INFO("turn on vcn28 for fm/gps usage in co-clock mode\n");
