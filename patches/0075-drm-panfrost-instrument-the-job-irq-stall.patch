@@ -1,0 +1,154 @@
+From 7c1f9d2a4b6e8f0a1c3d5e7f9a2b4c6d8e0f1a75 Mon Sep 17 00:00:00 2001
+From: gpu-mesa <gpu-mesa@t1100.local>
+Date: Sun, 15 Nov 2026 18:30:00 +0300
+Subject: [PATCH] drm/panfrost: measure where the job IRQ thread and the timeout
+ path spend their time
+
+On MT6771 (Fplus T1100, Mali-G72 MP3) the desktop freezes for tens of
+seconds every time the USB cable is unplugged:
+
+  - a fragment job does not complete, so drm_sched times it out after 500 ms;
+  - panfrost_job_timedout() then blocks in synchronize_irq() for ~48 s
+    (sysrq-w: panfrost-reset kworker in D inside __synchronize_irq());
+  - when the IRQ thread finally finishes, the job's fence turns out to be
+    signaled, so only "unexpectedly high interrupt latency" is logged and no
+    reset is done; KWin is released from dma_fence_default_wait().
+
+For a threaded IRQ, synchronize_irq() waits on desc->threads_active, i.e. for
+as long as panfrost_job_irq_handler_thread() runs.  The stack therefore only
+proves that the *threaded* handler was still active; it does not say whether
+the thread was
+
+  - spinning in the JOB_INT_RAWSTAT loop (a status bit that does not clear),
+  - waiting for pfdev->js->job_lock, which panfrost_job_hw_submit() holds
+    across MMIO writes to the job slot (a stalled AXI access to the GPU then
+    blocks the IRQ thread and, through it, the timeout worker), or
+  - slow for a reason outside panfrost (the same freeze is reproduced with
+    power/control=on, so it is not about the GPU being runtime-suspended).
+
+This patch only measures, it does not change any decision:
+
+  - count the rounds of the RAWSTAT loop and the time spent waiting for
+    job_lock, and warn when either is large;
+  - time the whole threaded handler and warn when it exceeds 100 ms;
+  - time synchronize_irq() in the timeout path and warn when it exceeds
+    100 ms;
+  - add INT_RAWSTAT / INT_JS_STATE / INT_MASK to the existing "gpu sched
+    timeout" line, so one dmesg capture shows which interrupt sources were
+    still pending.
+
+All extra register reads happen in paths that already read registers, and the
+new warnings fire at most once per IRQ event, so the patch cannot make a hang
+worse.  Everything above was collected on the device on 15.11.2026 (kernel
+6.12.114, p29 = build/it6112-resume/boot_resume_full.img).
+
+Signed-off-by: gpu-mesa <gpu-mesa@t1100.local>
+---
+ drivers/gpu/drm/panfrost/panfrost_job.c | 39 ++++++++++++++++++++++++++++++-
+ 1 file changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/panfrost/panfrost_job.c b/drivers/gpu/drm/panfrost/panfrost_job.c
+--- a/drivers/gpu/drm/panfrost/panfrost_job.c
++++ b/drivers/gpu/drm/panfrost/panfrost_job.c
+@@ -24,6 +24,9 @@
+ 
+ #define JOB_TIMEOUT_MS 500
+ 
++/* Anything above this is worth a line in dmesg, see the commit message. */
++#define JOB_IRQ_SLOW_MS 100
++
+ #define job_write(dev, reg, data) writel(data, dev->iomem + (reg))
+ #define job_read(dev, reg) readl(dev->iomem + (reg))
+ 
+@@ -595,15 +598,31 @@
+ static void panfrost_job_handle_irqs(struct panfrost_device *pfdev)
+ {
+ 	u32 status = job_read(pfdev, JOB_INT_RAWSTAT);
++	unsigned int rounds = 0;
++	s64 lock_wait_ms = 0;
+ 
+ 	while (status) {
++		ktime_t before = ktime_get();
++		s64 waited;
++
+ 		pm_runtime_mark_last_busy(pfdev->dev);
+ 
+ 		spin_lock(&pfdev->js->job_lock);
++		waited = ktime_ms_delta(ktime_get(), before);
++		if (waited > lock_wait_ms)
++			lock_wait_ms = waited;
+ 		panfrost_job_handle_irq(pfdev, status);
+ 		spin_unlock(&pfdev->js->job_lock);
+ 		status = job_read(pfdev, JOB_INT_RAWSTAT);
++		rounds++;
+ 	}
++
++	if (rounds > 8 || lock_wait_ms > JOB_IRQ_SLOW_MS)
++		dev_warn(pfdev->dev,
++			 "job irq: %u round(s), job_lock waited %lld ms, rawstat=0x%08x, js_state=0x%08x\n",
++			 rounds, lock_wait_ms,
++			 job_read(pfdev, JOB_INT_RAWSTAT),
++			 job_read(pfdev, JOB_INT_JS_STATE));
+ }
+ 
+ static u32 panfrost_active_slots(struct panfrost_device *pfdev,
+@@ -742,6 +761,8 @@
+ {
+ 	struct panfrost_job *job = to_panfrost_job(sched_job);
+ 	struct panfrost_device *pfdev = job->pfdev;
++	ktime_t sync_before;
++	s64 sync_ms;
+ 	int js = panfrost_job_get_slot(job);
+ 
+ 	/*
+@@ -760,19 +781,27 @@
+ 	 * job timeouts, synchronize the IRQ handler and re-check the fence
+ 	 * status.
+ 	 */
++	sync_before = ktime_get();
+ 	synchronize_irq(pfdev->js->irq);
++	sync_ms = ktime_ms_delta(ktime_get(), sync_before);
++	if (sync_ms > JOB_IRQ_SLOW_MS)
++		dev_warn(pfdev->dev, "synchronize_irq(job) took %lld ms\n",
++			 sync_ms);
+ 
+ 	if (dma_fence_is_signaled(job->done_fence)) {
+ 		dev_warn(pfdev->dev, "unexpectedly high interrupt latency\n");
+ 		return DRM_GPU_SCHED_STAT_NOMINAL;
+ 	}
+ 
+-	dev_err(pfdev->dev, "gpu sched timeout, js=%d, config=0x%x, status=0x%x, head=0x%x, tail=0x%x, sched_job=%p",
++	dev_err(pfdev->dev, "gpu sched timeout, js=%d, config=0x%x, status=0x%x, head=0x%x, tail=0x%x, rawstat=0x%x, js_state=0x%x, int_mask=0x%x, sched_job=%p",
+ 		js,
+ 		job_read(pfdev, JS_CONFIG(js)),
+ 		job_read(pfdev, JS_STATUS(js)),
+ 		job_read(pfdev, JS_HEAD_LO(js)),
+ 		job_read(pfdev, JS_TAIL_LO(js)),
++		job_read(pfdev, JOB_INT_RAWSTAT),
++		job_read(pfdev, JOB_INT_JS_STATE),
++		job_read(pfdev, JOB_INT_MASK),
+ 		sched_job);
+ 
+ 	panfrost_core_dump(job);
+@@ -800,6 +829,8 @@
+ static irqreturn_t panfrost_job_irq_handler_thread(int irq, void *data)
+ {
+ 	struct panfrost_device *pfdev = data;
++	ktime_t before = ktime_get();
++	s64 elapsed;
+ 
+ 	panfrost_job_handle_irqs(pfdev);
+ 
+@@ -809,6 +840,12 @@
+ 			  GENMASK(16 + NUM_JOB_SLOTS - 1, 16) |
+ 			  GENMASK(NUM_JOB_SLOTS - 1, 0));
+ 
++	elapsed = ktime_ms_delta(ktime_get(), before);
++	if (elapsed > JOB_IRQ_SLOW_MS)
++		dev_warn(pfdev->dev, "job irq thread took %lld ms, suspended=%d\n",
++			 elapsed,
++			 test_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended));
++
+ 	return IRQ_HANDLED;
+ }
+ 
