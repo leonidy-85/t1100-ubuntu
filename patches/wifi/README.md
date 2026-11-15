@@ -35,6 +35,18 @@ wlan:   0001-wlan-port-6.12
         0008-wlan-override-fw-start-address
         0018-wlan-warm-reset-and-redownload         <- снимок, дельта к базе выше
         0020-wlan-access-reg-and-tx-diag
+        0025-wlan-rom-patch-before-download
+        0027-wlan-skip-driver-own-with-wmt
+        0028-wlan-wmt-func-on-with-wmt
+        0029-wlan-stp-init-cmd-transport
+
+common (дополнительно к списку выше):
+        0021-common-guard-null-pinctrl
+        0022-common-paldo-lazy-ic-ops
+        0023-common-soc-chip-type-guard
+        0024-common-register-consys-drv-on-pwr-on
+        0026-common-drv-init-without-launcher
+        0030-common-consys-state-probe
 ```
 
 Результат: `wmt_drv.ko` (1 167 544 Б) + `wlan_drv_gen3.ko` (2 947 328 Б), 0
@@ -79,6 +91,7 @@ errors, против out-дерева `6.12.114-g675178729a-dirty`
 | `0015-common-stp-transport-trace.patch` | трассировка STP-транспорта (`t1100_*`), диагностика M23–M30 |
 | `0016-common-stp-rx-trace.patch` | трассировка RX-пути STP |
 | `0017-common-warm-reset-and-mt6771-platform.patch` | **снимок**: `mtk_wcn_consys_warm_reset()` (AP_RGU + STP-reinit + polling `hwcode`), `consys_hw_spm_partial_reset()` (iso/rst без power-gating, M59), ROMv4-delivery (`t1100_patch_scan`, quiet window, `t1100_mem_write`/STP-запись, `addressByte[0]=0`), MT6771 platform-фиксы |
+| `0030-common-consys-state-probe.patch` | **M83, build-only**: `t1100_consys_state()` — SPM-биты домена (`0x1000632c`), conn ack (`0x10006180`), CPUPCR и независимо замапленное окно WLAN-HIF `0x180f0000`; вызовы на четырёх шагах power-on и из `t1100_hif_state()`. Отвечает на вопрос «домен выключен или HIF не сконфигурирован». Только чтение |
 
 ## wlan (wlan_drv_gen3.ko)
 
@@ -92,6 +105,7 @@ errors, против out-дерева `6.12.114-g675178729a-dirty`
 | `0008-wlan-override-fw-start-address.patch` | адрес старта FW из DT (`hardware-values`) |
 | `0018-wlan-warm-reset-and-redownload.patch` | **снимок**: `t1100_hif_state`, `t1100_rom_patch_send` (MCIF-путь ROMv4), два/три `WIFI_START`, warm-reset + re-download (M55–M62), `t1100_spm_partial`, диагностика MCR/MCIF (M43–M79), `t1100_mem_write`/`t1100_stp_write`, а также **фикс прототипа `wlanImageQueryStatus()`** в `include/wlan_lib.h` (без него сборка не проходит) |
 | `0020-wlan-access-reg-and-tx-diag.patch` | **M81, не прогнан**: чтение памяти MCU через ROM (`INIT_CMD_ID_ACCESS_REG`, CID 3 → `INIT_EVENT_ID_ACCESS_REG`), `t1100_tx_state()` (`WHISR`/`WTQCR`/`WASR`/`WRPLR`) вокруг data-пакетов и стартов, vendor-вариант `WIFI_START` с `override=0`. См. `docs/wifi-port-log.md` §82 |
+| `0029-wlan-stp-init-cmd-transport.patch` | **M83, build-only**: опциональный STP-транспорт (`t1100_hif=1`) для init-cmd: новые `include/t1100_stp_hif.h`, `os/linux/t1100_stp_hif.c` (канал `WIFI_TASK_INDX`, `mtk_wcn_stp_send_data`/`receive_data`, RX через `register_event_cb`) и три обёртки в `wlan_lib.c` (`t1100_tx_init_cmd`/`t1100_rx_wait_response`/`t1100_tx_acquire`). По умолчанию (`0`) — ровно вендорский MCIF-путь. Эксперимент, а не фикс: см. §84 |
 
 ## BTIF-драйвер (отдельный модуль)
 
