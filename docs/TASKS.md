@@ -1,6 +1,6 @@
 # Задачи T1100
 
-Обновлено: 14.11.2026. Текущий фокус — пункт 6 (мелочи).
+Обновлено: 16.11.2026. Текущий фокус — пункт 3 (встроенный Wi-Fi, `wlan0`).
 
 ## Приоритеты
 
@@ -8,12 +8,15 @@
    `t1100-charge.sh`, hub + USB host.
 2. **Thermal soak + SVS.** 30–60 минут нагрузки 8 ядер, throttling;
    SVS/efuse — отдельно.
-3. **Wi-Fi/BT (фаза 5).** M81: вывод M80 «TX из MCU не уходит» не подтверждён
-   (приборы не те; ROM образ принимает — `docs/wifi-port-log.md` §82).
-   Диагностика `patches/wifi/0020-…` собрана, образ под неё тоже:
-   `build/wifi-image/boot_wifi.img` (`6.12.114-wifi1`, DTB с CONSYS/Wi-Fi,
-   `docs/wifi-image.md`). Нужен один прогон на планшете (с согласованием) и,
-   если данные легли, сравнение со стоком, а не «HIF глубоко».
+3. **Wi-Fi/BT (фаза 5).** Встроенный CONSYS/MT6631 — идёт bring-up
+   (`docs/wifi-port-log.md` §82–§85, патчи `patches/wifi/0021…0036`).
+   Текущий статус: CONSYS включается, оба ROMv4-патча заливаются по
+   BTIF/STP и подтверждаются, MCIF жив, прошивка скачивается
+   (`section-config … status=0`), `WIFI_START` поднимает MCU в RAM-код
+   (PC в `0x000a5800…0x000adbf0` ~15 с), но бит `READY` (`WCIR` bit21)
+   не встаёт и `wlan0` не появляется. Следующий шаг — патч `0037`:
+   вычитывать накопленные MCIF RX-события (`nicProcessRxInterrupt`,
+   `CHISR/CTFSR=0x1e00`) во время ожидания READY.
 4. **Panfrost.** Редкие `js fault` при старте KDE и shader-таймауты.
 5. **Воспроизводимая сборка.** Clean mainline + вся `patches/series`,
    а не `merge3-src` + отдельные патчи.
