@@ -2,16 +2,16 @@
 
 Проект порта **mainline-ядра** (или близкого к нему) на планшет **Fplus T1100**
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
-**Ubuntu + Wayland/GNOME с аппаратным GPU-ускорением**.
+**Ubuntu + Wayland-десктоп (сейчас KDE Plasma) с аппаратным GPU-ускорением**.
 
-> **Статус (16.11.2026): фазы 1–3 закрыты; Ubuntu 26.04 + KDE Plasma 6.6.4.**
+> **Статус (16.11.2026): фазы 1–3 закрыты, десктоп (фаза 4) работает; фаза 5 (Wi-Fi/BT) в работе. Ubuntu 26.04 + KDE Plasma 6.6.4.**
 > mainline 6.12.114 + патчи 0001–0076 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
-> eMMC HS400 (57.6 ГБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
+> eMMC HS400 (57.6 ГиБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
 > заряжается** (`mt6370-charger`; ёмкость считает топливомер MT6358 из 0072/0073,
-> OCV-таблица 0069 — запасной путь), **`poweroff` снимает питание** через RTC MT6358 (0034; при
+> OCV-таблица 0069 — запасной путь), **`poweroff` снимает питание** через RTC MT6358 (0033/0034; при
 > подключённом кабеле плата стартует снова — штатный «boot on charger»).
-> Дисплей: `card0-DSI-1` `connected/enabled`, режим `1600x2176@58.93`; сдвиг
+> Дисплей: `card1-DSI-1` `connected/enabled`, режим `1600x2176@58.93`; сдвиг
 > кадра убран окончательно (0046 + 0052: `vbp 284`, `vfp 8`).
 > GPU: panfrost (0039) — **Mesa 26.0.3**; **DVFS включён** (0058/0059:
 > coupler MT6771/MT8788, OPP 698/743/800 МГц, VGPU/VSRAM spread 100 мВ);
@@ -37,13 +37,16 @@
 > **Thermal (0064):** CPU-зона 80/90/115 °C, throttling проверен; efuse-
 > калибровка MT6771 пока не декодируется, драйвер использует дефолты MT8183.
 > SVS пока выключен.
-> **Suspend:** `systemctl suspend` работает через s2idle (`SuspendState=freeze`);
-> USB-гаджет на время сна отключается хуком и восстанавливается после пробуждения.
-> Глубокий `mem` (PSCI deep) не восстанавливается — после него нужен power-cycle;
-> поэтому используется s2idle.
+> **Suspend:** выбран s2idle (`SuspendState=freeze`, `t1100-suspend-default`); глубокий
+> `mem` (PSCI deep) не восстанавливается — после него нужен power-cycle. Панель после
+> resume чинит фикс IT6112 (0074: `t1100.it6112_resume=full|pulse|none`). Хук
+> `t1100-usb-gadget.sh` отвязывает UDC на время сна и возвращает после; тем не менее
+> зависшая GPU-задача panfrost может отклонить suspend (`PM: Some devices failed to
+> suspend`, `error -16`) — отдельная известная проблема.
 > **UI:** «Аудиовыход» переключает динамик/наушники, «USB режим» — USB
 > host/device (KDialog; пакет `kdialog`).
-> Дальше: SVS/soak-тест, PD/зарядка через hub, panfrost, 6.3 suspend/разряд,
+> Дальше: устойчивость panfrost (`js fault`/`gpu sched timeout`, 0075/0076),
+> SVS/soak-тест, PD/зарядка через hub, 6.3 suspend/разряд,
 > Wi-Fi/BT (фаза 5), воспроизводимая clean-сборка. Состояние и план — `docs/STATUS.md`,
 > `docs/handover.md`.
 >
@@ -65,9 +68,9 @@
 
 ## Зачем
 
-Сейчас планшет работает на Aurora OS 5.1.6.110 поверх **downstream MTK/hybris
+Штатно планшет работал на Aurora OS 5.1.6.110 поверх **downstream MTK/hybris
 ядра 4.14** с `mtkfb` (framebuffer, **без DRM/KMS**) и проприетарным
-`mali_kbase`. Полноценный KMS (Wayland/GNOME) требует:
+`mali_kbase`. Полноценный KMS (Wayland-десктоп) требует:
 
 - **DRM/KMS-драйвер дисплея для MT6771** — в mainline его нет, нужно портировать
   downstream `dispsys` (OVL/RDMA/DSI/MMSYS/CMDQ) в `mediatek-drm`;
@@ -81,7 +84,8 @@
 
 ## Не-цели v1
 
-- модем/LTE, камера, звук — только если заведутся «сами» через mainline;
+- модем/LTE и камера — вне скоупа; звук изначально был не-целью, но заработал
+  (динамик, микрофон, jack — 0068/0070/0071);
 - Android-приложения / hybris — не нужны;
 - Ubuntu Touch / UBports — отдельный проект.
 
@@ -106,6 +110,8 @@ t1100-ubuntu/
 ├── opencode.json              # MCP (aurora-docs)
 ├── docs/
 │   ├── STATUS.md              # состояние, решения, следующий шаг
+│   ├── TASKS.md               # текущий список задач
+│   ├── handover.md            # передача: доступ, recovery, состояние платы
 │   ├── hardware.md            # железо планшета (из разведки)
 │   ├── research.md            # публичные источники и оценка
 │   ├── porting-plan.md        # пошаговый план порта
@@ -114,6 +120,9 @@ t1100-ubuntu/
 │   ├── device-probe.md        # что снято с платы
 │   ├── cross-build.md         # кросс-сборка: build-хост, sysroot, статические утилиты
 │   ├── bringup-log.md         # журнал bring-up
+│   ├── wifi-port-log.md       # журнал порта встроенного Wi-Fi (M1…M85)
+│   ├── wifi-image.md          # Wi-Fi-образ: рецепт, артефакты, откат
+│   ├── panfrost-irq-stall.md  # клин panfrost/job IRQ (0075/0076)
 │   └── provenance.md          # версии/хеши сборки
 ├── patches/                   # изменения ядра (series + *.patch)
 ├── configs/t1100.fragment     # Kconfig-фрагмент (pstore, watchdog…)
@@ -126,28 +135,31 @@ t1100-ubuntu/
     │   ├── kernel-drm.md      # senior Linux DRM/KMS
     │   ├── bringup.md         # platform bring-up (DTS/clock/power)
     │   ├── gpu-mesa.md        # panfrost / Mesa
-    │   ├── distro-userspace.md# Ubuntu / GNOME / systemd
+    │   ├── distro-userspace.md# Ubuntu / KDE / systemd
     │   └── reverse-engineer.md# опционально: дизассемблер
     └── skills/
         └── mt6771-port/
             └── SKILL.md       # рабочий флоу порта
 ```
 
-Ядро живёт отдельно: локальное дерево `../linux-t1100` (если есть) или
-`/home/l/t1100-ubuntu-build/src` на build-хосте (rsync из
-`scripts/build-kernel-remote.sh`, 6.12.114 + `git am patches/series`); сборка —
-out-of-tree, артефакты забираются в `build/remote/` (в `.gitignore`).
+Ядро живёт отдельно, на build-хосте: текущая база —
+`/home/l/t1100-ubuntu-build/src-nonwifi` (6.12.114 + `patches/series`), рабочие
+out-деревья — `out-nonwifi` (ядро без WEXT) и `out-wifi` (Wi-Fi, release
+`6.12.114-wifi1`); старое `src`/`out` — предыдущая база. Локально дерево
+`../linux-t1100` создаётся из tarball (см. «Сборка с нуля»). Артефакты
+забираются в `build/` (в `.gitignore`).
 
 ## Инструменты и соседние проекты
 
-- `../t1100` — текущий проект планшета: SSH/root, recovery, `boot_patch.py`,
-  бэкапы `boot_a`/`vbmeta`/`seccfg`.
+- `../t1100` — проект планшета (SSH/root, recovery, `boot_patch.py`,
+  бэкапы `boot_a`/`vbmeta`/`seccfg`), если он есть локально; на части машин
+  отсутствует — тогда recovery-скрипты берутся из `scripts/`.
 - `../t1100/.opencode/skills/t1100-ssh/SKILL.md` — доступ к планшету.
 - `../t1100/.opencode/skills/aurora-mediatek-security-off/` — перепаковка boot
   (`scripts/boot_patch.py`), recovery/прошивка.
 - `../linux-t1100` — дерево ядра (создаётся из tarball 6.12.114 + патчи).
-- `../toolchains/arm-gnu-toolchain-14.2…` — кросс-компилятор aarch64
-  (альтернатива — системный `gcc-aarch64-linux-gnu`).
+- `../toolchains/arm-gnu-toolchain-14.2…` — кросс-компилятор aarch64, если
+  установлен (альтернатива — системный `gcc-aarch64-linux-gnu`).
 
 ## Сборка с нуля
 
@@ -156,16 +168,17 @@ out-of-tree, артефакты забираются в `build/remote/` (в `.gi
 curl -LO https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.114.tar.xz
 tar -xf linux-6.12.114.tar.xz && mv linux-6.12.114 ../linux-t1100
 cd ../linux-t1100 && git init && git add -A && git commit -m base
-git am ../t1100-ubuntu/patches/$(sed -n '/\.patch$/p' ../t1100-ubuntu/patches/series)
+git am $(awk '/\.patch$/{print "../t1100-ubuntu/patches/"$0}' ../t1100-ubuntu/patches/series)
 # 2) сборка — НА BUILD-ХОСТЕ (12 ядер): локальная машина делит CPU с другими
 #    проектами, полная сборка там занимала часы
-cd ../t1100-ubuntu && scripts/build-kernel-remote.sh
-#    (локальный вариант остаётся: scripts/build_kernel.sh -> build/t1100)
-# 3) регресс DTB
-sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
+cd ../t1100-ubuntu
+KERNEL_SRC=$(realpath ../linux-t1100) scripts/build-kernel-remote.sh
+#    (локальный вариант: scripts/build_kernel.sh -> build/t1100)
+# 3) регресс DTB (после remote-сборки)
+sha256sum build/remote/dtbs/mt6771-fplus-t1100.dtb
 ```
 
-## Где проект сейчас (13.11.2026)
+## Где проект сейчас (16.11.2026)
 
 | Блок | Состояние |
 |---|---|
@@ -174,13 +187,13 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | Память/PSCI/GIC | ✅ |
 | PMIC MT6358 / питание | ✅ регуляторы (rails) MT6358 и power-домены SCPSYS регистрируются (0012); зарядка MT6370 (`mt6370-charger` `online=1`/`Charging`, 0031/0032; PD 0066, dual-role 0067); свой топливомер MT6358 (0072/0073) отдаёт `capacity`/`voltage_now`/`current_now`/`status` (под нагрузкой — `Discharging`), OCV-таблица (0053/0069) осталась запасным путём; `poweroff` снимает питание через RTC MT6358 (0033/0034; при подключённом кабеле плата стартует снова — «boot on charger») |
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
-| Логи без UART/экрана | ✅ своя зона `ramoops@70000000` + чтение из рекавери (`/proc/last_kmsg`) |
+| Логи без UART/экрана | ✅ окно LK из cmdline (`ramoops.mem_address=0x54410000`, `mem_size=0xe0000`, 0042) + чтение из рекавери (`/proc/last_kmsg`) |
 | USB (mtu3/UDC + host) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH; host — флешка `sda` 7.4 GB, VBUS 5.05 В (0060/0061/0067), helper `t1100-usb-role`; возврат host→device без reboot |
 | Ubuntu rootfs | ✅ Ubuntu 26.04 LTS arm64 + KDE Plasma 6.6.4 на `p54` (ext4, метка `ubuntu`), 8 ядер |
-| DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ панель 1600×2176@58.93 (0038/0046/0052), сдвиг кадра убран |
-| GPU panfrost (Mali-G72) | ✅ Mesa 26.0.3, GLES 3.1; DVFS 698/743/800 МГц (0058/0059), `glmark2` Score 1409/1583 |
+| DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ `card1-DSI-1` 1600×2176@58.93; сдвиг кадра убран (0046/0052), resume после s2idle восстанавливает мост (0074) |
+| GPU panfrost (Mali-G72) | ✅ Mesa 26.0.3, GLES 3.1; DVFS 698/743/800 МГц (0058/0059), `glmark2` Score 1409/1583; в отдельных shader-сценах — `js fault`/`gpu sched timeout` (0075/0076, известный баг) |
 | CPU DVFS | ✅ `mtk-cpufreq` (0062/0063), 793…1989 МГц, 650/700…1050 мВ, `schedutil`; thermal CPU-зона 80/90/115 °C (0064), throttling проверен; SVS пока выключен |
-| Wayland / KDE | ✅ KDE Plasma 6.6.4 + SDDM autologin root; тач (0051) и клавиатура работают |
+| Wayland / KDE | ✅ KDE Plasma 6.6.4 + SDDM autologin root; тач HX83102E (0040/0043/0047/0048/0050/0051) и клавиатура работают |
 | Звук | ✅ динамик и микрофон; маршрут `UL1_CH1/CH2 ADDA_UL`, PipeWire source `alsa_mic` |
 | Wi-Fi / BT | ⚠️ встроенный CONSYS_6771/MT6631 в работе (ROMv4-патчи и загрузка прошивки идут, `READY`/`wlan0` пока нет); ✅ USB Wi-Fi донгл AC650 (`rtl8xxxu`, built-in) проверен — `192.168.2.81/24`, SSH по Wi-Fi; BT не поддержан |
 
@@ -190,13 +203,13 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 `docs/STATUS.md`. Дальше он делегирует `bringup` (фаза 1), затем
 `kernel-drm`/`gpu-mesa`, затем `distro-userspace`.
 
-## Быстрый старт (когда начнём)
+## Исторический чек-лист bring-up (пункты 1–6 выполнены)
 
-1. Прочитать `docs/hardware.md`, `docs/research.md`, `docs/porting-plan.md`.
-2. ~~Выбрать базовое дерево~~ — выбрано: mainline 6.12.y + поддержка MT6771
-   по шаблону MT8183 (`docs/STATUS.md`).
-3. Собрать ядро, загрузить до serial/ramdisk (без дисплея).
-4. Портировать `mediatek-drm` под MT6771, поднять `kmscube`.
-5. Включить panfrost, проверить GLES.
-6. Собрать Ubuntu rootfs + Wayland/GNOME.
-7. Прошивать только с бэкапом и через recovery (см. `t1100-ssh`).
+1. ~~Прочитать `docs/hardware.md`, `docs/research.md`, `docs/porting-plan.md`.~~
+2. ~~Выбрать базовое дерево~~ — mainline 6.12.y + поддержка MT6771 по шаблону
+   MT8183 (`docs/STATUS.md`).
+3. ~~Собрать ядро, загрузить до serial/ramdisk (без дисплея).~~
+4. ~~Портировать `mediatek-drm` под MT6771, поднять `kmscube`.~~
+5. ~~Включить panfrost, проверить GLES.~~
+6. ~~Собрать Ubuntu rootfs + Wayland-десктоп (KDE).~~
+7. **Правило:** прошивать только с бэкапом и через recovery (см. `t1100-ssh`).
