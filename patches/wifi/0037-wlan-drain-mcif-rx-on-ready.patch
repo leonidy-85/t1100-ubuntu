@@ -1,0 +1,47 @@
+wlan: drain MCIF RX and trace the HIF while waiting for the WLAN READY bit
+
+M86: after WIFI_START the firmware boots and pushes MCIF events at the
+host, but the ahb_sdioLike HIF never requests the WLAN IRQ, so nothing
+services them.  The HIF block keeps CHISR/CTFSR=0x1e00 and the MCU drops
+back into the ROM about 15 s after the jump.
+
+Run nicProcessRxInterrupt() from the READY polling loop every 200 ms so
+the RX ring is drained, and print the HIF state plus the RX counter from
+the existing 500-poll trace.  New module parameter t1100_ready_rx
+(default 1) keeps the old behaviour available.
+
+Signed-off-by: t1100-ubuntu <t1100@local>
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -959,6 +959,14 @@
+ module_param(t1100_ready_trace, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_trace,
+ 		 "T1100: print cpupcr while waiting for the WLAN READY bit");
++/* T1100 M86: the firmware pushes MCIF events while it boots.  Nothing
++ * services them in the AHB path, so drain the RX ring from the READY loop.
++ */
++static int t1100_ready_rx = 1;
++module_param(t1100_ready_rx, int, 0444);
++MODULE_PARM_DESC(t1100_ready_rx,
++		 "T1100: run the MCIF RX handler while waiting for the WLAN READY bit");
++
+ static int t1100_ready_polls;
+ module_param(t1100_ready_polls, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_polls, "T1100: poll count for the WLAN READY bit (10 ms each, 0 = default)");
+@@ -1387,8 +1395,15 @@
+ 
+ 					i++;
+ 					kalMsleep(10);
++					if (t1100_ready_rx && i && (i % 20) == 0)
++						nicProcessRxInterrupt(prAdapter);
+ 			if (t1100_ready_trace && (i % 500) == 0) {
+ 				UINT_32 u4TracePc = 0;
++
++				if (t1100_ready_rx)
++					pr_info("t1100-ready-rx[%u]: isr rx=%u\n", i,
++						prAdapter->prGlueInfo->IsrRxCnt);
++				t1100_hif_state(prAdapter, "ready-wait");
+ 				wlanGetCpupcr(&u4TracePc);
+ 				pr_info("t1100-ready[%u]: cpupcr 0x%08x wcir 0x%08x\n",
+ 					i, u4TracePc, u4Value);
