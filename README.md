@@ -22,8 +22,11 @@
 > применяет `t1100-audio-mixer.service`, PipeWire source `alsa_mic` — по
 > умолчанию; `arecord`/`parecord` дают ненулевой сигнал. `PGA Volume` (4,4)
 > теперь сохраняется после закрытия capture (патч 0068); ёмкость батареи
-> оценивается по OCV вендорской таблицей MT6358 (патч 0069). Встроенный Wi-Fi/BT (CONSYS) не поддержан; USB Wi-Fi драйверы
-> добавлены built-in, сеть — RNDIS или USB Wi-Fi. 3.5 мм jack работает вручную:
+> оценивается по OCV вендорской таблицей MT6358 (патч 0069). Встроенный Wi-Fi/BT
+> (CONSYS/MT6631) ещё в работе — ROMv4-патчи и загрузка прошивки идут, `READY`/`wlan0`
+> пока нет. **USB Wi-Fi донгл AC650 работает** (драйвер `rtl8xxxu`, built-in):
+> проверено, интерфейс `wlx…`, адрес `192.168.2.81/24`, SSH по Wi-Fi; сеть также по RNDIS.
+> 3.5 мм jack работает вручную:
 > `HPL/HPR Mux=2`, `Speaker Switch=off` (патчи 0070/0071; switch теперь глушит усилитель динамика).
 > **USB host/OTG (0060/0061/0067):** Type-C переведён в dual-role, host-режим
 > работает — флешка `Phison 13fe:5500` определяется как `sda` (7.4 GB), MT6370
@@ -179,7 +182,7 @@ sha256sum build/t1100/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dtb
 | CPU DVFS | ✅ `mtk-cpufreq` (0062/0063), 793…1989 МГц, 650/700…1050 мВ, `schedutil`; thermal CPU-зона 80/90/115 °C (0064), throttling проверен; SVS пока выключен |
 | Wayland / KDE | ✅ KDE Plasma 6.6.4 + SDDM autologin root; тач (0051) и клавиатура работают |
 | Звук | ✅ динамик и микрофон; маршрут `UL1_CH1/CH2 ADDA_UL`, PipeWire source `alsa_mic` |
-| Wi-Fi / BT | ⚠️ встроенный CONSYS_6771/MT6631 не поддержан; USB Wi-Fi драйверы built-in, донгл не проверялся; сеть RNDIS/через USB Wi-Fi |
+| Wi-Fi / BT | ⚠️ встроенный CONSYS_6771/MT6631 в работе (ROMv4-патчи и загрузка прошивки идут, `READY`/`wlan0` пока нет); ✅ USB Wi-Fi донгл AC650 (`rtl8xxxu`, built-in) проверен — `192.168.2.81/24`, SSH по Wi-Fi; BT не поддержан |
 
 ## С чего начать
 
