@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=MyBooks
+Name[ru]=Мои Книги
+Comment=FB2/EPUB reader
+Exec=/usr/bin/env QT_QPA_PLATFORM=wayland /usr/bin/ru.yurasov.MyBooks
+Path=/
+Icon=ru.yurasov.MyBooks
+Terminal=false
+Categories=Office;Viewer;
+StartupNotify=true
+StartupWMClass=ru.yurasov.MyBooks
