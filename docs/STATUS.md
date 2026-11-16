@@ -5365,3 +5365,9 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Мелочь по дереву: helper'ы `t1100-wifi-func-on`/`t1100-bt-up` лежали в
   git с режимом 644, из-за чего юнит падал `203/EXEC`; режим исправлен на
   755 и `deploy-overlay.sh` теперь ставит его явно.
+
+### 16.11 (14): GPS — разбор вендорского userspace (mnld/libmnl)
+
+- Драйвер в ядре готов (`gps_drv.ko` `eba78916…`), `/dev/stpgps`, WMT включает GPS без MCU-ассерта.
+- Данных нет: raw-PMTK (PMTK000/605/314/220/898, с CRC и без, с length-prefix) даёт 0 байт.
+- Разобрано: пишет в устройство `mnld` (Thumb, stripped), протокол/PMTK — в `libmnl.so`; HAL общается с `mnld` сокетами. Детали и план — `docs/gps-mnl-reverse.md`.
