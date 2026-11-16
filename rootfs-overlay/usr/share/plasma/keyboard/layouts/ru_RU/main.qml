@@ -1,5 +1,9 @@
 // Copyright (C) 2021 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only
+//
+// Split landscape variant for the Fplus T1100: all rows are split into a
+// left and a right half with a fixed empty strip in the middle, so both
+// thumbs can reach the middle keys.  Generated from the stock ru_RU layout.
 
 import QtQuick
 import QtQuick.Window
@@ -50,307 +54,106 @@ KeyboardLayout {
     }
     KeyboardRow {
         Layout.fillHeight: true
-        Key { Layout.minimumHeight: 0; text: "~" }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_1; text: "1"; alternativeKeys: "!1"; smallText: "!"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_2; text: "2"; alternativeKeys: "@2"; smallText: "@"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_3; text: "3"; alternativeKeys: "#3"; smallText: "#"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_4; text: "4"; alternativeKeys: "$4"; smallText: "$"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_5; text: "5"; alternativeKeys: "%5"; smallText: "%"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_6; text: "6"; alternativeKeys: "^6"; smallText: "^"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_7; text: "7"; alternativeKeys: "&7"; smallText: "&"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_8; text: "8"; alternativeKeys: "*8"; smallText: "*"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_9; text: "9"; alternativeKeys: "(9"; smallText: "("; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_0; text: "0"; alternativeKeys: ")0"; smallText: ")"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; text: "-" }
-        Key { Layout.minimumHeight: 0; text: "+"; alternativeKeys: "=+"; smallText: "="; smallTextVisible: true }
-        BackspaceKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-        }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Tab
-            displayText: "Tab"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0419
-            text: "й"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            id: normalKey
-            key: 0x0426
-            text: "ц"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0423
-            text: "у"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x041A
-            text: "к"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0415
-            text: "е"
-            alternativeKeys: "её"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x041D
-            text: "н"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0413
-            text: "г"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0428
-            text: "ш"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0429
-            text: "щ"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0417
-            text: "з"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0425
-            text: "х"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            text: "\\"
-            alternativeKeys: "|\\"
-            smallText: "|"
-            smallTextVisible: true
-        }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
-        KeyboardRow {
-            Layout.fillHeight: true
-            Layout.preferredWidth: functionKeyWidth
-            Layout.fillWidth: false
-            Key {
-                Layout.minimumHeight: 0
-                displayText: "Caps"
-                functionKey: true
-                noKeyEvent: true
-                onClicked: InputContext.priv.shiftHandler.capsLockActive = !InputContext.priv.shiftHandler.capsLockActive
-                highlighted: InputContext.priv.shiftHandler.capsLockActive
+            KeyboardColumn {
+                Layout.fillHeight: true
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        Key { Layout.minimumHeight: 0; text: "~" }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_1; text: "1"; alternativeKeys: "!1"; smallText: "!"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_2; text: "2"; alternativeKeys: "@2"; smallText: "@"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_3; text: "3"; alternativeKeys: "#3"; smallText: "#"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_4; text: "4"; alternativeKeys: "$4"; smallText: "$"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_5; text: "5"; alternativeKeys: "%5"; smallText: "%"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_6; text: "6"; alternativeKeys: "^6"; smallText: "^"; smallTextVisible: true }
+                    }
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_Tab; displayText: "Tab" }
+                        Key { Layout.minimumHeight: 0; key: 0x0419; text: "й" }
+                        Key { Layout.minimumHeight: 0; id: normalKey; key: 0x0426; text: "ц" }
+                        Key { Layout.minimumHeight: 0; key: 0x0423; text: "у" }
+                        Key { Layout.minimumHeight: 0; key: 0x041A; text: "к" }
+                        Key { Layout.minimumHeight: 0; key: 0x0415; text: "е"; alternativeKeys: "её" }
+                        Key { Layout.minimumHeight: 0; key: 0x041D; text: "н" }
+                    }
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        Key { Layout.minimumHeight: 0; displayText: "Caps"; functionKey: true; noKeyEvent: true; onClicked: InputContext.priv.shiftHandler.capsLockActive = !InputContext.priv.shiftHandler.capsLockActive; highlighted: InputContext.priv.shiftHandler.capsLockActive; Layout.fillWidth: false; weight: normalKeyWidth }
+                        Key { Layout.minimumHeight: 0; key: 0x0424; text: "ф" }
+                        Key { Layout.minimumHeight: 0; key: 0x042B; text: "ы" }
+                        Key { Layout.minimumHeight: 0; key: 0x0412; text: "в" }
+                        Key { Layout.minimumHeight: 0; key: 0x0410; text: "а" }
+                        Key { Layout.minimumHeight: 0; key: 0x041F; text: "п" }
+                    }
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        ShiftKey { Layout.minimumHeight: 0; weight: normalKeyWidth * 1.2; Layout.fillWidth: false }
+                        Key { Layout.minimumHeight: 0; key: 0x042F; text: "я" }
+                        Key { Layout.minimumHeight: 0; key: 0x0427; text: "ч" }
+                        Key { Layout.minimumHeight: 0; key: 0x0421; text: "с" }
+                        Key { Layout.minimumHeight: 0; key: 0x041C; text: "м" }
+                        Key { Layout.minimumHeight: 0; key: 0x0418; text: "и" }
+                        Key { Layout.minimumHeight: 0; key: 0x0422; text: "т" }
+                    }
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        SymbolModeKey { Layout.minimumHeight: 0; weight: normalKeyWidth; Layout.fillWidth: false }
+                        Key { Layout.minimumHeight: 0; weight: normalKeyWidth; Layout.fillWidth: false; keyType: QtVirtualKeyboard.KeyType.ChangeLanguageKey; displayText: keyboard.locale.split("_")[0]; onClicked: keyboard.changeInputLanguage(false) }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_Control; displayText: "Ctrl"; functionKey: true; weight: normalKeyWidth; Layout.fillWidth: false }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_Alt; displayText: "Alt"; functionKey: true; weight: normalKeyWidth; Layout.fillWidth: false }
+                        SpaceKey { Layout.minimumHeight: 0 }
+                    }
             }
-            Key {
-                Layout.minimumHeight: 0
-                key: 0x0424
-                text: "ф"
-                weight: normalKeyWidth
-                Layout.fillWidth: false
+        Item { Layout.preferredWidth: 150; Layout.fillHeight: true }
+            KeyboardColumn {
+                Layout.fillHeight: true
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_7; text: "7"; alternativeKeys: "&7"; smallText: "&"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_8; text: "8"; alternativeKeys: "*8"; smallText: "*"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_9; text: "9"; alternativeKeys: "(9"; smallText: "("; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_0; text: "0"; alternativeKeys: ")0"; smallText: ")"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; text: "-" }
+                        Key { Layout.minimumHeight: 0; text: "+"; alternativeKeys: "=+"; smallText: "="; smallTextVisible: true }
+                        BackspaceKey { Layout.minimumHeight: 0; weight: normalKeyWidth; Layout.fillWidth: false }
+                    }
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        Key { Layout.minimumHeight: 0; key: 0x0413; text: "г" }
+                        Key { Layout.minimumHeight: 0; key: 0x0428; text: "ш" }
+                        Key { Layout.minimumHeight: 0; key: 0x0429; text: "щ" }
+                        Key { Layout.minimumHeight: 0; key: 0x0417; text: "з" }
+                        Key { Layout.minimumHeight: 0; key: 0x0425; text: "х" }
+                        Key { Layout.minimumHeight: 0; text: "\\"; alternativeKeys: "|\\"; smallText: "|"; smallTextVisible: true }
+                    }
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        Key { Layout.minimumHeight: 0; key: 0x0420; text: "р" }
+                        Key { Layout.minimumHeight: 0; key: 0x041E; text: "о" }
+                        Key { Layout.minimumHeight: 0; key: 0x041B; text: "л" }
+                        Key { Layout.minimumHeight: 0; key: 0x0414; text: "д" }
+                        Key { Layout.minimumHeight: 0; key: 0x0416; text: "ж" }
+                        Key { Layout.minimumHeight: 0; key: 0x042D; text: "э" }
+                        EnterKey { Layout.minimumHeight: 0; weight: normalKeyWidth; Layout.fillWidth: false }
+                    }
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        Key { Layout.minimumHeight: 0; key: 0x042C; text: "ь"; alternativeKeys: "ьъ" }
+                        Key { Layout.minimumHeight: 0; key: 0x0411; text: "б" }
+                        Key { Layout.minimumHeight: 0; key: 0x042E; text: "ю" }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_Period; weight: normalKeyWidth * 0.7; Layout.fillWidth: false; text: "."; alternativeKeys: ","; smallText: ","; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; weight: normalKeyWidth * 0.7; Layout.fillWidth: false; text: "/"; alternativeKeys: "?/"; smallText: "?"; smallTextVisible: true }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_Up; displayText: "↑"; repeat: true; weight: normalKeyWidth * 0.55; Layout.fillWidth: false }
+                        ShiftKey { Layout.minimumHeight: 0; weight: normalKeyWidth * 1.3; Layout.fillWidth: false }
+                    }
+                    KeyboardRow {
+                        Layout.fillHeight: true
+                        SpaceKey { Layout.minimumHeight: 0 }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_Left; displayText: "←"; repeat: true; weight: normalKeyWidth * 0.55; Layout.fillWidth: false }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_Down; displayText: "↓"; repeat: true; weight: normalKeyWidth * 0.55; Layout.fillWidth: false }
+                        Key { Layout.minimumHeight: 0; key: Qt.Key_Right; displayText: "→"; repeat: true; weight: normalKeyWidth * 0.55; Layout.fillWidth: false }
+                        HideKeyboardKey { Layout.minimumHeight: 0; weight: normalKeyWidth * 0.7; Layout.fillWidth: false }
+                    }
             }
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x042B
-            text: "ы"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0412
-            text: "в"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0410
-            text: "а"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x041F
-            text: "п"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0420
-            text: "р"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x041E
-            text: "о"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x041B
-            text: "л"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0414
-            text: "д"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0416
-            text: "ж"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x042D
-            text: "э"
-        }
-        EnterKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-        }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
-        ShiftKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth * 1.2
-            Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x042F
-            text: "я"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0427
-            text: "ч"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0421
-            text: "с"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x041C
-            text: "м"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0418
-            text: "и"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0422
-            text: "т"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x042C
-            text: "ь"
-            alternativeKeys: "ьъ"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x0411
-            text: "б"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: 0x042E
-            text: "ю"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Period
-            weight: normalKeyWidth * 0.7
-            Layout.fillWidth: false
-            text: "."
-            alternativeKeys: ","
-            smallText: ","
-            smallTextVisible: true
-        }
-        Key {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth * 0.7
-            Layout.fillWidth: false
-            text: "/"
-            alternativeKeys: "?/"
-            smallText: "?"
-            smallTextVisible: true
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Up
-            displayText: "↑"
-            repeat: true
-            weight: normalKeyWidth * 0.55
-            Layout.fillWidth: false
-        }
-        ShiftKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth * 1.3
-            Layout.fillWidth: false
-        }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
-        SymbolModeKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-            keyType: QtVirtualKeyboard.KeyType.ChangeLanguageKey
-            displayText: keyboard.locale.split("_")[0]
-            onClicked: keyboard.changeInputLanguage(false)
-        }
-        SpaceKey {
-            Layout.minimumHeight: 0
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Left
-            displayText: "←"
-            repeat: true
-            weight: normalKeyWidth * 0.55
-            Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Down
-            displayText: "↓"
-            repeat: true
-            weight: normalKeyWidth * 0.55
-            Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Right
-            displayText: "→"
-            repeat: true
-            weight: normalKeyWidth * 0.55
-            Layout.fillWidth: false
-        }
-        HideKeyboardKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth * 0.7
-            Layout.fillWidth: false
-        }
     }
 }
