@@ -77,6 +77,25 @@
 команд они используют). Дополнительно для звука нужен ASoC-линк FM-I2S
 (в стоковом DTS — `mt_soc_pcm_fm_i2s`), в нашем `mt6358-sound` его нет.
 
+## 6b. Проверено: MCU-образ в списке патчей не помогает
+
+Эксперимент 16.11 (позже): службы `t1100-wifi`/`t1100-bt` отключены
+(`systemctl disable`; `mask` не сработал — юниты лежат в `/etc/systemd/system`),
+чистая загрузка, затем
+
+```
+modprobe wmt_drv t1100_quiet_ms=100 \
+  t1100_rom_patch="ROMv4_be_patch_1_1_hdr.bin ROMv4_be_patch_1_0_hdr.bin soc3_0_ram_mcu_e1_hdr.bin"
+modprobe fmradio_drv
+```
+
+`mtk_wcn_wmt_func_on(FM)` снова проходит (`OPID(3) type(1) ok`), и снова сразу
+assert: `patch/sys_patch_bin_t.c #4891`, `id=0x4 FM`, на этот раз `irq=0xC`,
+`lr=0x9A7A6` → paged dump → coredump → `mt6631_PowerUp: power up read top 0xc0
+failed`. Вывод: порядок загрузки и наличие `soc3_0_ram_mcu_e1_hdr.bin`
+(addr `0xf0000000`) ничего не меняют — ассертит сам MCU-патч на включении FM.
+Без вендорского FM-загрузчика/иного MCU-образа FM не поднять.
+
 ## 7. Откат
 
 FM не меняет p29; достаточно не загружать `fmradio_drv` и вернуть прежний
