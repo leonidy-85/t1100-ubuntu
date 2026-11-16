@@ -398,14 +398,14 @@ KeyboardLayout {
             Layout.fillHeight: true
             KeyboardRow {
                 Layout.fillHeight: true
+                    SpaceKey {
+                        Layout.minimumHeight: 0
+                    }
                     Key {
                         Layout.minimumHeight: 0
                         key: Qt.Key_Control
                         displayText: "Ctrl"
                         functionKey: true
-                    }
-                    SpaceKey {
-                        Layout.minimumHeight: 0
                     }
                     Key {
                         Layout.minimumHeight: 0
