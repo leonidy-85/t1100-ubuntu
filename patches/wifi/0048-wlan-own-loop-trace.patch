@@ -56,14 +56,13 @@ hanging the SoC every run.
 +				DBGLOG(NIC, ERROR, "t1100: own i=%u plain WR done\n", i);
  		}
  
- 		/* T1100: once the FW sleeps, the plain register aperture is gated,
+ 		/* Delay for LP engine to complete its operation. */
 --- a/common/wlan_lib.c
 +++ b/common/wlan_lib.c
-@@ -978,6 +978,18 @@
- int t1100_no_fw_own = 1;
+@@ -979,6 +979,18 @@
  module_param(t1100_no_fw_own, int, 0444);
  MODULE_PARM_DESC(t1100_no_fw_own, "T1100: never hand ownership back to the firmware");
-+
+ 
 +int t1100_own_dbg = 0;
 +module_param(t1100_own_dbg, int, 0644);
 +MODULE_PARM_DESC(t1100_own_dbg, "T1100: trace the driver-own polling loop");
@@ -75,6 +74,7 @@ hanging the SoC every run.
 +int t1100_own_max = 0;
 +module_param(t1100_own_max, int, 0644);
 +MODULE_PARM_DESC(t1100_own_max, "T1100: give up driver-own polling after N samples");
- module_param(t1100_ready_trace, int, 0444);
- MODULE_PARM_DESC(t1100_ready_trace,
- 		 "T1100: print cpupcr while waiting for the WLAN READY bit");
++
+ int t1100_wext_compat = 1;
+ module_param(t1100_wext_compat, int, 0444);
+ MODULE_PARM_DESC(t1100_wext_compat,
