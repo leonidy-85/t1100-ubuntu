@@ -5526,3 +5526,6 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `t1100-wifi.service` masked; в `updates/wifi/` — V6-сборка
   (`wlan_drv_gen3` `9424be8b…`, `wmt_drv` `f105716f…`-md5 / `c11d8101…`,
   `mtk_btif_drv` `a0d8f8ee…`).
+
+Подробности измерений и дампы регистров «сломанного» моста —
+`docs/it6112-resume.md`, `refs/device/it6112-regs-broken-2026-11-15.txt`.
