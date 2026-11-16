@@ -12,6 +12,8 @@ import QtQuick.VirtualKeyboard.Components
 import QtQuick.Layouts
 
 KeyboardLayout {
+    id: layout
+    readonly property real rowHeight: height / 6
     inputMode: InputEngine.InputMode.Cyrillic
     sharedLayouts: ['symbols']
     keyWeight: 160
@@ -37,7 +39,10 @@ KeyboardLayout {
         InputContext.priv.shiftHandler.capsLockActive = false
     }
     KeyboardRow {
-        Layout.fillHeight: true
+        Layout.fillHeight: false
+        Layout.preferredHeight: layout.rowHeight
+        Layout.minimumHeight: layout.rowHeight
+        Layout.maximumHeight: layout.rowHeight
         Key { Layout.minimumHeight: 0; key: Qt.Key_Escape; displayText: "Esc" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F1; displayText: "F1" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F2; displayText: "F2" }
