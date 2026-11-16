@@ -5310,3 +5310,38 @@ dmesg: `wmt_stub: sdio_detect_init() is a stub -- not supported on mainline`,
 - Если V6 даст `DRIVER OWN, status=1 count=…` — дальше `Ready bit`/MAC/`wlan0`.
 - V3 остаётся как диагностика: увеличенное тихое окно само по себе клин не
   снимает (проверить по логу, где оборвалось).
+
+## §93. M93 — V6 (без 0044): клин тот же; лог ждёт цикла питания
+
+Плата поднялась после цикла питания, первым делом прочитан `/root/v3.log`
+(§92): `quiet_ms=1000` клин не снимает — те же CMD52-запросы 0044 до `i=448`
+и обрыв в `nicpmSetDriverOwn` (последняя строка лога — `i=448` в 193.253458,
+дальше ничего), `DRIVER OWN` не печатался.
+
+Затем разложен и прогнан **V6** — «его линия» без `0044` (и без `0046`/`0047`):
+`wlan_drv_gen3.ko` `9424be8b…`, 2 966 992 Б, в `/lib/modules/6.12.114-g400cb6f-touch-rot/updates/wifi/`
+(прежний вариант 1 скопирован в `/root/wifi-backup-before-v6/`), `depmod -a`
+прошёл (только штатные warning'и про отсутствующие `modules.order`/`modules.builtin`).
+
+Прогон (`/root/v6-run.sh`, лог построчно с `sync` — `/root/v6.log`,
+статусы — `/root/v6-helper.log`):
+
+```
+modprobe wmt_drv                                   # btif_stp=1 quiet_ms=100 (modprobe.d)
+modprobe wlan_drv_gen3 t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=0
+timeout 20 /usr/local/sbin/t1100-wifi-func-on
+```
+
+**Итог: SoC встал** (ssh-сессия оборвалась без вывода, `ping`/`No route to
+host`). Это значит, что и без `0044`/`0046`/`0047` вендорский путь
+`nicpmSetDriverOwn` кладёт шину — то есть CMD52-обвязка не причина.
+Содержимое `/root/v6.log` и `/root/v6-helper.log` **не прочитано**: плата
+доступна только после цикла питания (eMMC цел, логи на диске).
+
+Следующая сессия:
+1. Прочитать `/root/v6.log` — дошло ли до `DRIVER OWN`, был ли `count`, где
+   оборвалось (метка `[wlan]nicpmSetDriverOwn` против `HAL_MCR_RD`).
+2. Если клин уже на первых чтениях `MCR_WHLPCR` — править сам
+   `nicpmSetDriverOwn`: проверять own реже (раз в N мс), не писать в WHLPCR,
+   пока MCU не ответил, и ограничить число обращений к окну `0x180f0000`
+   (гипотеза §91/§92 о отказе шины при повторных доступах к мёртвому HIF).
