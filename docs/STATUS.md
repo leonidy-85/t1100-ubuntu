@@ -5476,3 +5476,31 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `mnt-vendor-nvdata.mount` не трогались.
 - **Дальше:** после включения прочитать `/root/own-1.log` (видно, дошло ли до
   `DRIVER OWN` и с каким `count`), затем варианты 2 → 3 → 4.
+
+### 16.11 (17): V5/V2/V3 — вендорский own не приходит; сессия остановлена
+
+Продолжение перебора по §91; подробности — `docs/wifi-port-log.md` §92.
+
+- **V5** (`wlan_drv_gen3 … t1100_pwr_on_done=0`): вендорский `nicpmSetDriverOwn`
+  больше не пропускается (`driver-own skipped` исчезла), но `DRIVER OWN,
+  status=… count=…` так и не печатается — MCU не выставляет own; в цикле идут
+  CMD52-запросы 0044 до `i=448`, дальше шина встаёт. `Ready bit`/`wlan0` нет.
+- **V2** (`t1100_btif_stp=0`): `/dev/stpwmt` не создаётся (его делает boot-work),
+  helper падает `[Errno 2] No such file or directory: '/dev/stpwmt'`, `rc=2`;
+  плата **не** зависла. Путь «power-on через ioctl» на порту недоступен.
+- **V3** (`t1100_quiet_ms=1000`): клин, лог `/root/v3.log` не прочитан (нужен
+  цикл питания) — читать в следующей сессии.
+- **V6 собран, не проверен:** `wlan_drv_gen3.ko` без 0044 (и без 0046/0047) —
+  `9424be8b…`, 2 966 992 Б, лежит на build-хосте и в `build/wifi/hisline/`,
+  на плату **не** разложен.
+- **Состояние платы:** остановлены на клине (V3), доступ только после цикла
+  питания; `t1100-wifi.service` masked; в `updates/wifi/` — `wmt_drv` `c11d8101…`
+  (1 173 344 Б), `wlan_drv_gen3` `b736e185…` (2 968 144 Б, без 0046/0047),
+  `mtk_btif_drv` `a0d8f8ee…` (187 808 Б). Бэкапы `/root/wifi-backup-1611/`,
+  `/root/wifi-backup-hisline/`, `/root/wifi-backup-v2/` не тронуты; заряд и
+  `mnt-vendor-nvdata.mount` тоже. Логи прогонов: `/root/own-1.log`,
+  `/root/v5.log` (прочитаны), `/root/v2.log`, `/root/v3.log` (нет).
+- **Следующая сессия:** прочитать `/root/v3.log`, разложить V6
+  (`9424be8b…`) и прогнать его с `t1100_pwr_on_done=0`; если клин останется —
+  править сам `nicpmSetDriverOwn` (не долбить `MCR_WHLPCR`/WHLPCR, пока MCU
+  молчит).
