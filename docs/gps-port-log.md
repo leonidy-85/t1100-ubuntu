@@ -55,3 +55,28 @@
 ## Откат
 
 Не грузить `gps_drv` (или `rmmod gps_drv`); на Wi-Fi/BT это не влияет.
+
+## Протокол MNL: снят с вендорского `mnld` (AYYA T1)
+
+Формат кадра: `aa f0` + длина LE16 + payload + `aa 0f`.
+
+| id | направление | смысл |
+|---|---|---|
+| `0x08` | host → чип | config (110 Б, `08 fe 1a 00 … 4e 4f 7b 15`) |
+| `0x05` | host → чип | keepalive (`05 fe 04 00 0d 01`) |
+| `0x0c` | host → чип | assistance/EPO (1406 Б), для базового фикса не нужен |
+| `0x31` | чип → host | статус/версия (`31 fe 00 00 46 15 … 98 01`) |
+| `0x32` | чип → host | ack с seq (`32 fe <seq16> <u16>`) |
+
+Как получено: на AYYA T1 (Aurora 11, 192.168.2.113) root через `devel-su`,
+затем `setprop ctl.stop mnld` → `mv /dev/stpgps /dev/stpgps_real` →
+`mkfifo /dev/stpgps` → `cat` в файл → `setprop ctl.start mnld`. Релей на
+shell (`tee` в обе стороны) дал и запросы, и ответы чипа.
+
+На T1100: `gps_drv` + `/dev/stpgps`; при свежем включении домена
+(`t1100-gps --power-cycle`) чип **немедленно отвечает `0x31`** на config —
+значит протокол принят. Дальше идут keepalive; поток измерений в помещении
+не появляется (нужен обзор неба) — это следующий тест.
+
+Клиент: `rootfs-overlay/usr/local/sbin/t1100-gps`
+(`--power-cycle`, `--seconds`, `--keepalive`, `--raw`).
