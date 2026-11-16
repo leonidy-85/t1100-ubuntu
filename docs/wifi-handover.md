@@ -192,3 +192,27 @@ nicpmSetDriverOwn: CMD52 own readback 0x00 (i=0) … (i=384)   ← послед�
    приходит вовсе.
 5. Подробный разбор последнего рубежа — `docs/wifi-port-log.md` §91,
    `docs/STATUS.md` «16.11 (16)».
+
+## Ответ на вопрос о воспроизведении (Wi-Fi)
+
+1. **Какие `.ko` работали.** `wmt_drv 73256ebb…`, `wlan_drv_gen3 505273da…`,
+   `mtk_btif_drv 92d4740c…` — это сборка из этого же репозитория:
+   `KERNEL_OUT=/home/l/t1100-ubuntu-build/out-wifi LOCALVERSION= JOBS=12 scripts/build-wifi-remote.sh`
+   при применённых `patches/wifi/0001…0047` (включая `0039`, `0045`, `0043` с
+   дефолтом «выключено»). Отдельного `work/` не было, всё в `patches/wifi`.
+   Разница sha объясняется набором применённых патчей на момент сборки.
+2. **Параметры запуска.** `wmt_drv`: `t1100_btif_stp=1 t1100_quiet_ms=100
+   t1100_rom_patch="ROMv4_be_patch_1_1_hdr.bin ROMv4_be_patch_1_0_hdr.bin"`.
+   `wlan_drv_gen3`: `t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=1`.
+   Затем ioctl `0x4004A006` / `0xBEEF0003` (`/usr/local/sbin/t1100-wifi-func-on`).
+3. **`0027`/`0028`.** Активны, но рекурсивный `0028` отключён `0039`
+   (`t1100_wmt_func_on=0` по умолчанию); строка `driver-own skipped` в логе —
+   нормальный ход. CMD52-цикл (`0044`/`0047`) — это ветка power-save, она
+   включается только при `t1100_no_fw_own=0` (или если `0045` не применён).
+   Именно `t1100_no_fw_own=0` и даёт `CMD52 own readback 0x00` и вечный
+   `nicpmSetDriverOwn()`; для рабочего режима его передавать нельзя.
+4. **Дефолты, которые нельзя менять.** `t1100_no_fw_own=1`,
+   `t1100_post_ready=0`, `t1100_stock_start=1`.
+
+Итог: воспроизведение — та же команда сборки и `/etc/modprobe.d/99-t1100-wifi.conf`
+из `rootfs-overlay`, без ручных `t1100_no_fw_own=0`.
