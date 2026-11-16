@@ -72,3 +72,4 @@
 0075-drm-panfrost-instrument-the-job-irq-stall.patch
 0076-drm-panfrost-bound-the-job-irq-drain-loop.patch
 0077-bluetooth-l2cap-restore-the-old-getsockopt-abi.patch
+0078-arm64-dts-mediatek-add-HDMI-output.patch
