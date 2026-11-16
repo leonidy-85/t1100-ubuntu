@@ -5,7 +5,7 @@
 **Ubuntu + Wayland-десктоп (сейчас KDE Plasma) с аппаратным GPU-ускорением**.
 
 > **Статус (16.11.2026): фазы 1–3 закрыты, десктоп (фаза 4) работает; встроенные Wi-Fi и Bluetooth (фаза 5) работают. Ubuntu 26.04 + KDE Plasma 6.6.4.**
-> mainline 6.12.114 + патчи 0001–0077 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
+> mainline 6.12.114 + патчи 0001–0078 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГиБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
 > заряжается** (`mt6370-charger`; ёмкость считает топливомер MT6358 из 0072/0073,
@@ -17,6 +17,9 @@
 > coupler MT6771/MT8788, OPP 698/743/800 МГц, VGPU/VSRAM spread 100 мВ);
 > `glmark2` Score 1409/1583, но в отдельных shader-сценах есть таймауты
 > panfrost — отдельный баг, не DVFS. KDE Plasma 6.6.4 + SDDM (autologin root).
+> HDMI-выход: `card1-HDMI-A-1` (DPI0 → IT66121, патч 0078) — расширенный рабочий стол
+> 1280×720@60. Ограничение: DPI разведён 12 линиями (`bus-width=12` → TMDS ≤ 74.25 МГц),
+> поэтому 1080p/2K невозможны; на части мониторов — редкие зелёные точки (TMDS), звук HDMI не подключён.
 > Тач HX83102E работает (`boot_touch8`, native portrait; KWin сам поворачивает —
 > 0051). **Микрофон работает:** маршрут `UL1_CH1/CH2 ADDA_UL` и `PGA L/R = AIN0`
 > применяет `t1100-audio-mixer.service`, PipeWire source `alsa_mic` — по
@@ -202,6 +205,7 @@ sha256sum build/remote/dtbs/mt6771-fplus-t1100.dtb
 | USB (mtu3/UDC + host) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH; host — флешка `sda` 7.4 GB, VBUS 5.05 В (0060/0061/0067), helper `t1100-usb-role`; возврат host→device без reboot |
 | Ubuntu rootfs | ✅ Ubuntu 26.04 LTS arm64 + KDE Plasma 6.6.4 на `p54` (ext4, метка `ubuntu`), 8 ядер |
 | DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ `card1-DSI-1` 1600×2176@58.93; сдвиг кадра убран (0046/0052), resume после s2idle восстанавливает мост (0074) |
+| HDMI (DPI0 → IT66121) | ✅ `card1-HDMI-A-1`, расширенный рабочий стол 1280×720@60 (0078); ограничение — 12-битная DPI-шина (1080p/2K невозможны), на части мониторов зелёные точки по TMDS; звук HDMI не заявлен |
 | GPU panfrost (Mali-G72) | ✅ Mesa 26.0.3, GLES 3.1; DVFS 698/743/800 МГц (0058/0059), `glmark2` Score 1409/1583; в отдельных shader-сценах — `js fault`/`gpu sched timeout` (0075/0076, известный баг) |
 | CPU DVFS | ✅ `mtk-cpufreq` (0062/0063), 793…1989 МГц, 650/700…1050 мВ, `schedutil`; thermal CPU-зона 80/90/115 °C (0064), throttling проверен; SVS пока выключен |
 | Wayland / KDE | ✅ KDE Plasma 6.6.4 + SDDM autologin root; тач HX83102E (0040/0043/0047/0048/0050/0051) и клавиатура работают |
