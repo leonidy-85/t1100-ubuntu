@@ -37,9 +37,7 @@ KeyboardLayout {
         InputContext.priv.shiftHandler.capsLockActive = false
     }
     KeyboardRow {
-        Layout.fillHeight: false
-        Layout.preferredHeight: 60
-        Layout.maximumHeight: 72
+        Layout.fillHeight: true
         Key { Layout.minimumHeight: 0; key: Qt.Key_Escape; displayText: "Esc" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F1; displayText: "F1" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F2; displayText: "F2" }
