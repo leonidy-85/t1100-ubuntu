@@ -9,7 +9,7 @@ import QtQuick.Layouts
 
 KeyboardLayout {
     id: layout
-    readonly property real rowHeight: height / 6
+    readonly property real rowHeight: Math.round(Screen.height / 12)
     inputMode: InputEngine.InputMode.Cyrillic
     sharedLayouts: ['symbols']
     keyWeight: 160
@@ -27,7 +27,7 @@ KeyboardLayout {
     }
     Timer {
         id: resetShiftTimer
-        interval: 0
+        interval: 120
         onTriggered: {
             InputContext.priv.shiftHandler.shiftActive = false
             InputContext.priv.shiftHandler.capsLockActive = false
@@ -40,9 +40,7 @@ KeyboardLayout {
 
     KeyboardRow {
         Layout.fillHeight: false
-        Layout.preferredHeight: layout.rowHeight
-        Layout.minimumHeight: layout.rowHeight
-        Layout.maximumHeight: layout.rowHeight
+        Layout.preferredHeight: 84
         Key { Layout.minimumHeight: 0; key: Qt.Key_Escape; displayText: "Esc" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F1; displayText: "F1" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F2; displayText: "F2" }
@@ -215,17 +213,9 @@ KeyboardLayout {
                 SpaceKey {
                     Layout.minimumHeight: 0
                 }
-                Key {
-                    Layout.minimumHeight: 0
-                    key: Qt.Key_Left
-                    displayText: "←"
-                    repeat: true
-                    weight: normalKeyWidth * 0.55
-                    Layout.fillWidth: false
-                }
             }
         }
-        Item { Layout.preferredWidth: 150; Layout.fillHeight: true }
+        KeyboardColumn { Layout.preferredWidth: 150; Layout.fillHeight: true }
         KeyboardColumn {
             Layout.fillHeight: true
             KeyboardRow {
@@ -363,6 +353,17 @@ KeyboardLayout {
             }
             KeyboardRow {
                 Layout.fillHeight: true
+                SpaceKey {
+                    Layout.minimumHeight: 0
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Left
+                    displayText: "←"
+                    repeat: true
+                    weight: normalKeyWidth * 0.55
+                    Layout.fillWidth: false
+                }
                 Key {
                     Layout.minimumHeight: 0
                     key: Qt.Key_Down
