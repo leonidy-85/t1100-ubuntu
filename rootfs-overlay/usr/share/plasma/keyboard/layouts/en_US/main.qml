@@ -203,6 +203,12 @@ KeyboardLayout {
                     displayText: keyboard.locale.split("_")[0]
                     onClicked: keyboard.changeInputLanguage(false)
                 }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Control
+                    displayText: "Ctrl"
+                    functionKey: true
+                }
                 SpaceKey {
                     Layout.minimumHeight: 0
                 }
@@ -348,6 +354,12 @@ KeyboardLayout {
             }
             KeyboardRow {
                 Layout.fillHeight: true
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Control
+                    displayText: "Ctrl"
+                    functionKey: true
+                }
                 SpaceKey {
                     Layout.minimumHeight: 0
                 }
