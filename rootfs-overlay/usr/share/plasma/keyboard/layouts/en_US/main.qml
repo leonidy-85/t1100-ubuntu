@@ -8,6 +8,8 @@ import QtQuick.VirtualKeyboard.Components
 import QtQuick.Layouts
 
 KeyboardLayout {
+    id: layout
+    readonly property real rowHeight: height / 6
     inputMode: InputEngine.InputMode.Latin
     sharedLayouts: ['symbols']
     keyWeight: 160
@@ -18,6 +20,9 @@ KeyboardLayout {
         function onActiveChanged() {
             if (keyboard.active)
                 resetShiftTimer.restart()
+        }
+        function onLocaleChanged() {
+            resetShiftTimer.restart()
         }
     }
     Timer {
@@ -32,8 +37,12 @@ KeyboardLayout {
         InputContext.priv.shiftHandler.shiftActive = false
         InputContext.priv.shiftHandler.capsLockActive = false
     }
+
     KeyboardRow {
-        Layout.fillHeight: true
+        Layout.fillHeight: false
+        Layout.preferredHeight: layout.rowHeight
+        Layout.minimumHeight: layout.rowHeight
+        Layout.maximumHeight: layout.rowHeight
         Key { Layout.minimumHeight: 0; key: Qt.Key_Escape; displayText: "Esc" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F1; displayText: "F1" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F2; displayText: "F2" }
@@ -50,302 +59,327 @@ KeyboardLayout {
     }
     KeyboardRow {
         Layout.fillHeight: true
-        Key { Layout.minimumHeight: 0; text: "~" }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_1; text: "1"; alternativeKeys: "!1"; smallText: "!"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_2; text: "2"; alternativeKeys: "@2"; smallText: "@"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_3; text: "3"; alternativeKeys: "#3"; smallText: "#"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_4; text: "4"; alternativeKeys: "$4"; smallText: "$"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_5; text: "5"; alternativeKeys: "%5"; smallText: "%"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_6; text: "6"; alternativeKeys: "^6"; smallText: "^"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_7; text: "7"; alternativeKeys: "&7"; smallText: "&"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_8; text: "8"; alternativeKeys: "*8"; smallText: "*"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_9; text: "9"; alternativeKeys: "(9"; smallText: "("; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; key: Qt.Key_0; text: "0"; alternativeKeys: ")0"; smallText: ")"; smallTextVisible: true }
-        Key { Layout.minimumHeight: 0; text: "-" }
-        Key { Layout.minimumHeight: 0; text: "+"; alternativeKeys: "=+"; smallText: "="; smallTextVisible: true }
-        BackspaceKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-        }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Tab
-            displayText: "Tab"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Q
-            text: "q"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            id: normalKey
-            key: Qt.Key_W
-            text: "w"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_E
-            text: "e"
-            alternativeKeys: "êeëèé"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_R
-            text: "r"
-            alternativeKeys: "ŕrř"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_T
-            text: "t"
-            alternativeKeys: "ţtŧť"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Y
-            text: "y"
-            alternativeKeys: "ÿyýŷ"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_U
-            text: "u"
-            alternativeKeys: "űūũûüuùú"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_I
-            text: "i"
-            alternativeKeys: "îïīĩiìí"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_O
-            text: "o"
-            alternativeKeys: "œøõôöòóo"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_P
-            text: "p"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            text: "\\"
-            alternativeKeys: "|\\"
-            smallText: "|"
-            smallTextVisible: true
-        }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
-        KeyboardRow {
+        KeyboardColumn {
             Layout.fillHeight: true
-            Layout.preferredWidth: functionKeyWidth
-            Layout.fillWidth: false
-            Key {
-                Layout.minimumHeight: 0
-                displayText: "Caps"
-                functionKey: true
-                noKeyEvent: true
-                onClicked: InputContext.priv.shiftHandler.capsLockActive = !InputContext.priv.shiftHandler.capsLockActive
-                highlighted: InputContext.priv.shiftHandler.capsLockActive
+            KeyboardRow {
+                Layout.fillHeight: true
+                Key { Layout.minimumHeight: 0; text: "~" }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_1; text: "1"; alternativeKeys: "!1"; smallText: "!"; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_2; text: "2"; alternativeKeys: "@2"; smallText: "@"; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_3; text: "3"; alternativeKeys: "#3"; smallText: "#"; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_4; text: "4"; alternativeKeys: "$4"; smallText: "$"; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_5; text: "5"; alternativeKeys: "%5"; smallText: "%"; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_6; text: "6"; alternativeKeys: "^6"; smallText: "^"; smallTextVisible: true }
             }
-            Key {
-                Layout.minimumHeight: 0
-                key: Qt.Key_A
-                text: "a"
-                alternativeKeys: "aäåãâàá"
-                weight: normalKeyWidth
-                Layout.fillWidth: false
+            KeyboardRow {
+                Layout.fillHeight: true
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Tab
+                    displayText: "Tab"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Q
+                    text: "q"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    id: normalKey
+                    key: Qt.Key_W
+                    text: "w"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_E
+                    text: "e"
+                    alternativeKeys: "êeëèé"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_R
+                    text: "r"
+                    alternativeKeys: "ŕrř"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_T
+                    text: "t"
+                    alternativeKeys: "ţtŧť"
+                }
+            }
+            KeyboardRow {
+                Layout.fillHeight: true
+                KeyboardRow {
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: functionKeyWidth
+                    Layout.fillWidth: false
+                    Key {
+                        Layout.minimumHeight: 0
+                        displayText: "Caps"
+                        functionKey: true
+                        noKeyEvent: true
+                        onClicked: InputContext.priv.shiftHandler.capsLockActive = !InputContext.priv.shiftHandler.capsLockActive
+                        highlighted: InputContext.priv.shiftHandler.capsLockActive
+                    }
+                    Key {
+                        Layout.minimumHeight: 0
+                        key: Qt.Key_A
+                        text: "a"
+                        alternativeKeys: "aäåãâàá"
+                        weight: normalKeyWidth
+                        Layout.fillWidth: false
+                    }
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_S
+                    text: "s"
+                    alternativeKeys: "šsşś"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_D
+                    text: "d"
+                    alternativeKeys: "dđď"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_F
+                    text: "f"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_G
+                    text: "g"
+                    alternativeKeys: "ġgģĝğ"
+                }
+            }
+            KeyboardRow {
+                Layout.fillHeight: true
+                ShiftKey {
+                    Layout.minimumHeight: 0
+                    weight: normalKeyWidth * 1.2
+                    Layout.fillWidth: false
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Z
+                    text: "z"
+                    alternativeKeys: "zžż"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_X
+                    text: "x"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_C
+                    text: "c"
+                    alternativeKeys: "çcċčć"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_V
+                    text: "v"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_B
+                    text: "b"
+                }
+            }
+            KeyboardRow {
+                Layout.fillHeight: true
+                SymbolModeKey {
+                    Layout.minimumHeight: 0
+                    weight: normalKeyWidth
+                    Layout.fillWidth: false
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    weight: normalKeyWidth
+                    Layout.fillWidth: false
+                    keyType: QtVirtualKeyboard.KeyType.ChangeLanguageKey
+                    displayText: keyboard.locale.split("_")[0]
+                    onClicked: keyboard.changeInputLanguage(false)
+                }
+                SpaceKey {
+                    Layout.minimumHeight: 0
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Left
+                    displayText: "←"
+                    repeat: true
+                    weight: normalKeyWidth * 0.55
+                    Layout.fillWidth: false
+                }
             }
         }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_S
-            text: "s"
-            alternativeKeys: "šsşś"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_D
-            text: "d"
-            alternativeKeys: "dđď"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_F
-            text: "f"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_G
-            text: "g"
-            alternativeKeys: "ġgģĝğ"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_H
-            text: "h"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_J
-            text: "j"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_K
-            text: "k"
-        }
-        KeyboardRow {
+        Item { Layout.preferredWidth: 150; Layout.fillHeight: true }
+        KeyboardColumn {
             Layout.fillHeight: true
-            Layout.preferredWidth: functionKeyWidth
-            Layout.fillWidth: false
-            Key {
-                Layout.minimumHeight: 0
-                key: Qt.Key_L
-                text: "l"
-                alternativeKeys: "ĺŀłļľl"
-                weight: normalKeyWidth
-                Layout.fillWidth: true
+            KeyboardRow {
+                Layout.fillHeight: true
+                Key { Layout.minimumHeight: 0; key: Qt.Key_7; text: "7"; alternativeKeys: "&7"; smallText: "&"; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_8; text: "8"; alternativeKeys: "*8"; smallText: "*"; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_9; text: "9"; alternativeKeys: "(9"; smallText: "("; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; key: Qt.Key_0; text: "0"; alternativeKeys: ")0"; smallText: ")"; smallTextVisible: true }
+                Key { Layout.minimumHeight: 0; text: "-" }
+                Key { Layout.minimumHeight: 0; text: "+"; alternativeKeys: "=+"; smallText: "="; smallTextVisible: true }
+                BackspaceKey {
+                    Layout.minimumHeight: 0
+                    weight: normalKeyWidth
+                    Layout.fillWidth: false
+                }
             }
-            EnterKey {
-                Layout.minimumHeight: 0
-                weight: normalKeyWidth
-                Layout.fillWidth: true
+            KeyboardRow {
+                Layout.fillHeight: true
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Y
+                    text: "y"
+                    alternativeKeys: "ÿyýŷ"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_U
+                    text: "u"
+                    alternativeKeys: "űūũûüuùú"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_I
+                    text: "i"
+                    alternativeKeys: "îïīĩiìí"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_O
+                    text: "o"
+                    alternativeKeys: "œøõôöòóo"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_P
+                    text: "p"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    text: "\\"
+                    alternativeKeys: "|\\"
+                    smallText: "|"
+                    smallTextVisible: true
+                }
             }
-        }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
-        ShiftKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth * 1.2
-            Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Z
-            text: "z"
-            alternativeKeys: "zžż"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_X
-            text: "x"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_C
-            text: "c"
-            alternativeKeys: "çcċčć"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_V
-            text: "v"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_B
-            text: "b"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_N
-            text: "n"
-            alternativeKeys: "ņńnň"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_M
-            text: "m"
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Period
-            weight: normalKeyWidth * 0.7
-            Layout.fillWidth: false
-            text: "."
-            alternativeKeys: ","
-            smallText: ","
-            smallTextVisible: true
-        }
-        Key {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth * 0.7
-            Layout.fillWidth: false
-            text: "/"
-            alternativeKeys: "?/"
-            smallText: "?"
-            smallTextVisible: true
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Up
-            displayText: "↑"
-            repeat: true
-            weight: normalKeyWidth * 0.55
-            Layout.fillWidth: false
-        }
-        ShiftKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth * 1.3
-            Layout.fillWidth: false
-        }
-    }
-    KeyboardRow {
-        Layout.fillHeight: true
-        SymbolModeKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth
-            Layout.fillWidth: false
-            keyType: QtVirtualKeyboard.KeyType.ChangeLanguageKey
-            displayText: keyboard.locale.split("_")[0]
-            onClicked: keyboard.changeInputLanguage(false)
-        }
-        SpaceKey {
-            Layout.minimumHeight: 0
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Left
-            displayText: "←"
-            repeat: true
-            weight: normalKeyWidth * 0.55
-            Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Down
-            displayText: "↓"
-            repeat: true
-            weight: normalKeyWidth * 0.55
-            Layout.fillWidth: false
-        }
-        Key {
-            Layout.minimumHeight: 0
-            key: Qt.Key_Right
-            displayText: "→"
-            repeat: true
-            weight: normalKeyWidth * 0.55
-            Layout.fillWidth: false
-        }
-        HideKeyboardKey {
-            Layout.minimumHeight: 0
-            weight: normalKeyWidth * 0.7
-            Layout.fillWidth: false
+            KeyboardRow {
+                Layout.fillHeight: true
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_H
+                    text: "h"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_J
+                    text: "j"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_K
+                    text: "k"
+                }
+                KeyboardRow {
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: functionKeyWidth
+                    Layout.fillWidth: false
+                    Key {
+                        Layout.minimumHeight: 0
+                        key: Qt.Key_L
+                        text: "l"
+                        alternativeKeys: "ĺŀłļľl"
+                        weight: normalKeyWidth
+                        Layout.fillWidth: true
+                    }
+                    EnterKey {
+                        Layout.minimumHeight: 0
+                        weight: normalKeyWidth
+                        Layout.fillWidth: true
+                    }
+                }
+            }
+            KeyboardRow {
+                Layout.fillHeight: true
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_N
+                    text: "n"
+                    alternativeKeys: "ņńnň"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_M
+                    text: "m"
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Period
+                    weight: normalKeyWidth * 0.7
+                    Layout.fillWidth: false
+                    text: "."
+                    alternativeKeys: ","
+                    smallText: ","
+                    smallTextVisible: true
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    weight: normalKeyWidth * 0.7
+                    Layout.fillWidth: false
+                    text: "/"
+                    alternativeKeys: "?/"
+                    smallText: "?"
+                    smallTextVisible: true
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Up
+                    displayText: "↑"
+                    repeat: true
+                    weight: normalKeyWidth * 0.55
+                    Layout.fillWidth: false
+                }
+                ShiftKey {
+                    Layout.minimumHeight: 0
+                    weight: normalKeyWidth * 1.3
+                    Layout.fillWidth: false
+                }
+            }
+            KeyboardRow {
+                Layout.fillHeight: true
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Down
+                    displayText: "↓"
+                    repeat: true
+                    weight: normalKeyWidth * 0.55
+                    Layout.fillWidth: false
+                }
+                Key {
+                    Layout.minimumHeight: 0
+                    key: Qt.Key_Right
+                    displayText: "→"
+                    repeat: true
+                    weight: normalKeyWidth * 0.55
+                    Layout.fillWidth: false
+                }
+                HideKeyboardKey {
+                    Layout.minimumHeight: 0
+                    weight: normalKeyWidth * 0.7
+                    Layout.fillWidth: false
+                }
+            }
         }
     }
 }
