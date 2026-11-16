@@ -384,6 +384,8 @@ KeyboardLayout {
                     }
                     Key {
                         Layout.minimumHeight: 0
+                        weight: normalKeyWidth * 0.6
+                        Layout.fillWidth: false
                         key: Qt.Key_Control
                         displayText: "Ctrl"
                         functionKey: true
@@ -403,6 +405,8 @@ KeyboardLayout {
                     }
                     Key {
                         Layout.minimumHeight: 0
+                        weight: normalKeyWidth * 0.6
+                        Layout.fillWidth: false
                         key: Qt.Key_Control
                         displayText: "Ctrl"
                         functionKey: true
