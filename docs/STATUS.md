@@ -5305,3 +5305,63 @@ BTIF/STP-транспорт (включая исправленную поляр�
   драйвера команд старта GNSS нет.
 - Следующий шаг — реверс минимальной init-последовательности HAL с Aurora и
   проверка приёма (антенна есть). Подробности — `docs/gps-port-log.md`.
+
+### 16.11 (10): решение по Wi-Fi применено на v5; WLAN-проба вешает SoC
+
+Перенос решения M86/M87 на этот планшет (`19e…`, `origin/master` = `1ed541c`).
+
+- **Сборка.** Из чистого `vendor/` + всей серии `patches/wifi/0001…0047`
+  (в логе построчно: 0039, 0040, 0041, 0042, 0043, 0044, 0045, 0046, 0047)
+  против `/home/l/t1100-merge2-out` (`6.12.114-g400cb6f-touch-rot`),
+  `WIFI_DIR=/home/l/t1100-wifi-build-merge`, `LOCALVERSION=-g400cb6f-touch-rot`:
+  `wmt_drv.ko` `dd4ccd2f…` (1 177 952 Б), `wlan_drv_gen3.ko` `887ceb58…`
+  (2 969 432 Б), `mtk_btif_drv.ko` `a0d8f8ee…` (187 808 Б). 0 ошибок,
+  vermagic у всех трёх `6.12.114-g400cb6f-touch-rot SMP preempt mod_unload aarch64`.
+- **sha256 не совпадают с записанными в (4)/(5)/(7)** (`73256ebb…` 1 177 544,
+  `60d951b2…` 2 968 376, `92d4740c…`). Разбор:
+  - `mtk_btif_drv 92d4740c…` собран против `6.12.114-wifi1` и на этом ядре
+    отвергается: `version magic '6.12.114-wifi1' should be
+    '6.12.114-g400cb6f-touch-rot'`; пересобран против `-touch-rot`;
+  - `wmt_drv` теперь с `-DCONFIG_MTK_FMRADIO` (коммит `80dfe54`, FM-порт),
+    поэтому `73256ebb…` (до FM) невоспроизводим by design;
+  - `wlan_drv_gen3`: исходники и патчи идентичны (обе сборки — из чистого
+    vendor+патчей), но sha зависит от пути сборки: в `-merge` `887ceb58…`, в
+    `t1100-wifi-build` `d5e86c5b…`; объектники отличаются только абсолютным
+    путём внутри (размеры совпадают байт в байт), пересборка в пути автора
+    `60d951b2…` **не** воспроизвела (`d5e86c5b…`, 2 968 400 Б) — значит его
+    `.ko` собирались из состояния `work/`, которого нет в репозитории
+    (README предупреждает: правки в `work/` теряются).
+- **Что разложено.** Модули → `/lib/modules/6.12.114-g400cb6f-touch-rot/updates/wifi/`;
+  `tools/host/deploy-overlay.sh` (юнит `t1100-wifi.service` md5 `270b2722…`,
+  helper, `t1100-charge`/`usb-keepalive`/`audio-mixer` — active, заряд не тронут);
+  в репозиторий добавлены `rootfs-overlay/etc/modprobe.d/99-t1100-wifi.conf`
+  (`t1100_btif_stp=1`, `t1100_quiet_ms=100`, `t1100_rom_patch="…1_1… …1_0…"`
+  для `wmt_drv`; `t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=1`
+  для `wlan_drv_gen3`) и `mnt-vendor-nvdata.mount` — путь NVRAM из 0042
+  (`/mnt/vendor/nvdata/APCFG/APRDEB/WIFI`, 1026 Б = `CFG_FILE_WIFI_REC_SIZE`)
+  на этом планшете **не был примонтирован**: `/mnt/vendor` отсутствовал.
+  Бэкап прежних модулей и юнита — `/root/wifi-backup-1611/`.
+- **Факты с платы.** После `sysrq-b`: `mnt-vendor-nvdata.mount` active
+  (ext4 ro,norecovery), `wmt_drv` + `wlan_drv_gen3` загружаются, лог:
+  `t1100_patch_scan: patch ROMv4_be_patch_1_1_hdr.bin: num=2 seq=1
+  addr=218007f0 size=314120`, затем `1_0 … seq=2`, `co-clock enabled`,
+  `t1100_btif_boot_work: WMT_OPID_PWR_ON (BTIF STP, ROM patch) -> 1`.
+- **Блокер.** Запуск `/usr/local/sbin/t1100-wifi-func-on` (ioctl
+  `0x4004A006`/`0xBEEF0003` на `/dev/stpwmt`) **вешает SoC**: воспроизведено
+  2 раза, после зависания USB-gadget не отвечает на control-запросы
+  (`usb 1-1.3: can't set config #1, error -110`, на хосте
+  `NETDEV WATCHDOG: t1100usb: transmit queue 0 timed out`), ssh по `usb0`
+  мёртв, MTK WDT (`mtk-wdt 10007000.watchdog: enabled, timeout=31 sec`)
+  чип не перезагрузил — нужен физический цикл питания. До `Ready bit`,
+  MAC и `wlan0` дело не доходит: `dmesg | grep -iE "Ready bit|MAC address|wlan0"`
+  пуст. Причина пока не локализована; на диске остался синхронизированный
+  лог `/root/dmesg-wifi.log` (пишется с `sync` после каждой строки), по нему
+  и надо смотреть последние строки перед зависанием.
+- **Осторожно.** `t1100-wifi.service` включён, поэтому следующее включение
+  планшета, скорее всего, снова подвесит SoC на этом же шаге (через ~5 с
+  после multi-user). Пока не разобрано — поднимать только с готовностью
+  к recovery: смонтировать `userdata` (`/dev/disk/by-partlabel/userdata`) и
+  убрать `/etc/systemd/system/multi-user.target.wants/t1100-wifi.service`.
+- Мелочь по дереву: helper'ы `t1100-wifi-func-on`/`t1100-bt-up` лежали в
+  git с режимом 644, из-за чего юнит падал `203/EXEC`; режим исправлен на
+  755 и `deploy-overlay.sh` теперь ставит его явно.
