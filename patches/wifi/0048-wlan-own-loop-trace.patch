@@ -1,26 +1,40 @@
 From: t1100-ubuntu <dev@t1100>
-Subject: [PATCH] wlan: trace the driver-own polling loop
+Subject: [PATCH] wlan: trace and bound the driver-own polling loop
 
-Two knobs for the bring-up dead end: t1100_own_dbg prints every 8th
-WHLPCR sample plus markers around the plain-aperture write, and
-t1100_own_plain_wr=0 skips that write entirely.  The pair tells a read
-that never returns from a write to an already-dead HIF window.
+The own loop dies with the whole SoC somewhere between 448 and 512
+samples, i.e. on a plain HIF access rather than on the WHLPCR write
+(the write happens at i=0, 256, 512 and the two early ones are fine).
+t1100_own_dbg prints every 8th sample and the write markers,
+t1100_own_plain_wr=0 skips the write, and t1100_own_max=N returns a
+failure after N samples so the point of death can be bisected without
+hanging the SoC every run.
 
 --- a/nic/nic_pwr_mgt.c
 +++ b/nic/nic_pwr_mgt.c
-@@ -193,6 +193,9 @@
+@@ -193,6 +193,10 @@
  	BOOLEAN fgTimeout;
  	BOOLEAN fgHifFwOwn = TRUE;
  
 +	extern int t1100_own_dbg;
 +	extern int t1100_own_plain_wr;
++	extern int t1100_own_max;
 +
  	ASSERT(prAdapter);
  
  	HAL_MCR_RD(prAdapter, MCR_WHLPCR, &u4RegValue);
-@@ -221,6 +224,9 @@
+@@ -220,7 +224,19 @@
+ #endif
  	i = 0;
  	while (1) {
++		/* T1100: stop before the aperture stops answering; a write or
++		 * a read to a gated HIF window hangs the whole SoC here.
++		 */
++		if (t1100_own_max && i >= (UINT_32)t1100_own_max) {
++			DBGLOG(NIC, ERROR, "t1100: own give-up at i=%u dt=%u\n",
++			       i, kalGetTimeTick() - u4CurrTick);
++			fgStatus = FALSE;
++			break;
++		}
  		HAL_MCR_RD(prAdapter, MCR_WHLPCR, &u4RegValue);
 +		if (t1100_own_dbg && (i & 7) == 0)
 +			DBGLOG(NIC, ERROR, "t1100: own i=%u WHLPCR=0x%x dt=%u\n",
@@ -28,7 +42,7 @@ that never returns from a write to an already-dead HIF window.
  
  		fgTimeout = ((kalGetTimeTick() - u4CurrTick) > LP_OWN_BACK_TOTAL_DELAY_MS) ? TRUE : FALSE;
  
-@@ -265,7 +271,13 @@
+@@ -265,7 +281,13 @@
  
  		if ((i & (LP_OWN_BACK_CLR_OWN_ITERATION - 1)) == 0) {
  			/* Driver request LP ownership - per 256 iterations */
@@ -45,7 +59,7 @@ that never returns from a write to an already-dead HIF window.
  		/* T1100: once the FW sleeps, the plain register aperture is gated,
 --- a/common/wlan_lib.c
 +++ b/common/wlan_lib.c
-@@ -978,6 +978,14 @@
+@@ -978,6 +978,18 @@
  int t1100_no_fw_own = 1;
  module_param(t1100_no_fw_own, int, 0444);
  MODULE_PARM_DESC(t1100_no_fw_own, "T1100: never hand ownership back to the firmware");
@@ -57,6 +71,10 @@ that never returns from a write to an already-dead HIF window.
 +int t1100_own_plain_wr = 1;
 +module_param(t1100_own_plain_wr, int, 0644);
 +MODULE_PARM_DESC(t1100_own_plain_wr, "T1100: write WHLPCR through the plain aperture");
++
++int t1100_own_max = 0;
++module_param(t1100_own_max, int, 0644);
++MODULE_PARM_DESC(t1100_own_max, "T1100: give up driver-own polling after N samples");
  module_param(t1100_ready_trace, int, 0444);
  MODULE_PARM_DESC(t1100_ready_trace,
  		 "T1100: print cpupcr while waiting for the WLAN READY bit");
