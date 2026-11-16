@@ -1,0 +1,13 @@
+[Unit]
+Description=T1100 internal Bluetooth (MT6631 over STP)
+After=t1100-wifi.service
+Before=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/t1100-bt-up
+
+[Install]
+WantedBy=multi-user.target

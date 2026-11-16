@@ -71,3 +71,4 @@
 0074-drm-panel-it6112-recover-the-bridge-after-the-dsi-st.patch
 0075-drm-panfrost-instrument-the-job-irq-stall.patch
 0076-drm-panfrost-bound-the-job-irq-drain-loop.patch
+0077-bluetooth-l2cap-restore-the-old-getsockopt-abi.patch

@@ -1,0 +1,62 @@
+bluetooth: restore the old getsockopt ABI for L2CAP
+
+l2cap_sock_ops only fills .getsockopt_iter, while net/socket.c in this
+tree still calls .getsockopt.  As a result every getsockopt() on an
+L2CAP socket (including the SOL_L2CAP / L2CAP_OPTIONS query that BlueZ
+does in btio) fails with EOPNOTSUPP, so bluetoothd cannot create the
+GATT database and refuses to register the adapter:
+
+  src/gatt-database.c:btd_gatt_database_new() Failed to start listening:
+  getsockopt(L2CAP_OPTIONS): Operation not supported (95)
+
+Add a compatibility entry point that marshals the old optval/optlen
+pair into struct sockopt and calls the iter-based implementation.
+
+With this on the T1100 (MT6631 over STP), bluetoothctl registers hci0,
+scan finds devices and an A2DP sink can be paired and connected.
+
+--- a/net/bluetooth/l2cap_sock.c
++++ b/net/bluetooth/l2cap_sock.c
+@@ -2049,6 +2049,34 @@
+ 	return 0;
+ }
+ 
++
++/* T1100: net/socket.c in this tree still uses the old getsockopt ABI, while
++ * l2cap was converted to the iter based one.  Provide the old entry point so
++ * that BlueZ can query L2CAP_OPTIONS again.
++ */
++static int l2cap_sock_getsockopt_compat(struct socket *sock, int level,
++					int optname, char __user *optval,
++					int __user *optlen)
++{
++	struct sockopt opt = { };
++	int len, err;
++
++	if (get_user(len, optlen))
++		return -EFAULT;
++	if (len < 0)
++		return -EINVAL;
++
++	opt.optlen = len;
++	if (optval && len)
++		iov_iter_ubuf(&opt.iter_out, ITER_DEST, optval, len);
++
++	err = l2cap_sock_getsockopt(sock, level, optname, &opt);
++	if (err)
++		return err;
++
++	return put_user(opt.optlen, optlen) ? -EFAULT : 0;
++}
++
+ static const struct proto_ops l2cap_sock_ops = {
+ 	.family		= PF_BLUETOOTH,
+ 	.owner		= THIS_MODULE,
+@@ -2067,6 +2095,7 @@
+ 	.socketpair	= sock_no_socketpair,
+ 	.shutdown	= l2cap_sock_shutdown,
+ 	.setsockopt	= l2cap_sock_setsockopt,
++	.getsockopt	= l2cap_sock_getsockopt_compat,
+ 	.getsockopt_iter = l2cap_sock_getsockopt
+ };
+ 
