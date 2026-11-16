@@ -1,0 +1,64 @@
+wlan: load the WIFI NVRAM blob from the vendor partition
+
+The vendor stack gets its calibration data from userspace: wmt_chrdev_wifi
+implements register_file_buf_handler() and pushes the 1026-byte
+/mnt/vendor/nvdata/APCFG/APRDEB/WIFI blob into the driver before the WIFI
+function is switched on.  In this port register_file_buf_handler() is a
+stub, so fgNvramAvailable stayed FALSE and the firmware was started
+without any calibration data - a difference from the working stock.
+
+Read the same blob straight from the vendor partition in glLoadNvram(),
+guarded by t1100_nvram_file (default 1).  The file is already present on
+the tablet (copied from the nvdata partition).
+
+Signed-off-by: T1100 port <t1100@localhost>
+---
+--- a/os/linux/gl_init.c
++++ b/os/linux/gl_init.c
+@@ -716,6 +716,37 @@
+ * \return (none)
+ */
+ /*----------------------------------------------------------------------------*/
++/*
++ * T1100: the vendor stack gets its calibration data from userspace, which
++ * pushes the NVRAM blob into the driver through wmt_chrdev_wifi before the
++ * WIFI function is switched on.  We have no such bridge (register_file_buf_handler
++ * is a stub), so read the very same blob from the vendor partition directly.
++ */
++static int t1100_nvram_file = 1;
++module_param(t1100_nvram_file, int, 0444);
++MODULE_PARM_DESC(t1100_nvram_file, "T1100: load the WIFI NVRAM blob from /mnt/vendor/nvdata/APCFG/APRDEB/WIFI");
++
++static void t1100_load_nvram_file(void)
++{
++	struct file *fp;
++	loff_t pos = 0;
++	ssize_t n;
++
++	fp = filp_open("/mnt/vendor/nvdata/APCFG/APRDEB/WIFI", O_RDONLY, 0);
++	if (IS_ERR(fp)) {
++		DBGLOG(INIT, WARN, "t1100: nvram open failed %ld\n", PTR_ERR(fp));
++		return;
++	}
++	n = kernel_read(fp, g_aucNvram, sizeof(g_aucNvram), &pos);
++	filp_close(fp, NULL);
++	if (n != sizeof(g_aucNvram)) {
++		DBGLOG(INIT, WARN, "t1100: nvram size %zd, want %zu\n", n, sizeof(g_aucNvram));
++		return;
++	}
++	fgNvramAvailable = TRUE;
++	DBGLOG(INIT, INFO, "t1100: nvram loaded from file (%zu bytes)\n", sizeof(g_aucNvram));
++}
++
+ static void glLoadNvram(IN P_GLUE_INFO_T prGlueInfo, OUT P_REG_INFO_T prRegInfo)
+ {
+ 	UINT_32 i, j;
+@@ -728,6 +759,8 @@
+ 	if ((!prGlueInfo) || (!prRegInfo))
+ 		return;
+ 
++	if (!fgNvramAvailable && t1100_nvram_file)
++		t1100_load_nvram_file();
+ 	DBGLOG(INIT, INFO, "fgNvramAvailable = %u\n", fgNvramAvailable);
+ 	prGlueInfo->fgNvramAvailable = fgNvramAvailable;
+ 	if (!prGlueInfo->fgNvramAvailable) {

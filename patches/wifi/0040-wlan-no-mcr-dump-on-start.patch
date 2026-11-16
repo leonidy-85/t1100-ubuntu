@@ -1,0 +1,77 @@
+wlan: keep the MCIF register dumps out of the WIFI_START window (0040)
+
+The stock driver sends the WIFI_START init command and then only polls
+WCIR for the READY bit; it never reads WHISR/WASR/WHLPCR in that window.
+Our diagnostics did, and reading the status registers can acknowledge
+the state the MCU is waiting on.  Gate every MCR dump around the start
+behind t1100_mcr_dump (default 0).
+
+M87: the command frame itself is byte-identical to the stock one, so the
+next suspect is the timing/status side effects of the diagnostics.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -980,6 +980,14 @@
+ static int t1100_ready_polls;
+ module_param(t1100_ready_polls, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_polls, "T1100: poll count for the WLAN READY bit (10 ms each, 0 = default)");
++/* T1100 M87: the stock start path never touches the MCIF registers around
++ * WIFI_START.  Reading WHISR/WASR can acknowledge the very state the MCU is
++ * waiting on, so keep the register dumps off by default.
++ */
++static int t1100_mcr_dump;
++module_param(t1100_mcr_dump, int, 0444);
++MODULE_PARM_DESC(t1100_mcr_dump,
++		 "T1100: dump the MCIF registers around WIFI_START (may clear status)");
+ static int t1100_reset_before_start;
+ static int t1100_wmt_func_on = 0;
+ module_param(t1100_wmt_func_on, int, 0444);
+@@ -1384,7 +1392,8 @@
+ 				else
+ 					wlanConfigWifiFunc(prAdapter, TRUE, au4Start[u4Try]);
+ 				snprintf(acTagStart, sizeof(acTagStart), "start%u", u4Try);
+-				t1100_tx_state(prAdapter, acTagStart);
++				if (t1100_mcr_dump)
++					t1100_tx_state(prAdapter, acTagStart);
+ 
+ 				/*
+ 				 * T1100 M83: over STP there is no WCIR to poll, so ask
+@@ -1436,7 +1445,8 @@
+ 				if (t1100_ready_rx)
+ 					pr_info("t1100-ready-rx[%u]: isr rx=%u\n", i,
+ 						prAdapter->prGlueInfo->IsrRxCnt);
+-				t1100_hif_state(prAdapter, "ready-wait");
++				if (t1100_mcr_dump)
++					t1100_hif_state(prAdapter, "ready-wait");
+ 				wlanGetCpupcr(&u4TracePc);
+ 				pr_info("t1100-ready[%u]: cpupcr 0x%08x wcir 0x%08x\n",
+ 					i, u4TracePc, u4Value);
+@@ -1446,7 +1456,8 @@
+ 				wlanGetCpupcr(&u4Cpupcr);
+ 				pr_info("t1100-start[%u]: addr=0x%08x cpupcr after 0x%08x ready=%u\n",
+ 					u4Try, au4Start[u4Try], u4Cpupcr, fgReady);
+-				t1100_hif_state(prAdapter, "after-wifi-start");
++				if (t1100_mcr_dump)
++					t1100_hif_state(prAdapter, "after-wifi-start");
+ 			}
+ 
+ 			/* T1100 M81: is the ILM still what the download left there? */
+@@ -4052,14 +4063,16 @@
+ 			continue;
+ 		}
+ 		/* 5.2 Send CMD Info Packet */
+-		t1100_dump_mcr(prAdapter, "before-wifi-start");
++		if (t1100_mcr_dump)
++			t1100_dump_mcr(prAdapter, "before-wifi-start");
+ 		if (t1100_tx_init_cmd(prAdapter, prCmdInfo) != WLAN_STATUS_SUCCESS) {
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			DBGLOG(INIT, ERROR, "Fail to transmit WIFI start command\n");
+ 		}
+ 		pr_info("t1100-mcif: WIFI_START override=%u addr=0x%08x seq=%u -> status=%u\n",
+ 			fgEnable, u4StartAddress, ucCmdSeqNum, u4Status);
+-		t1100_dump_mcr(prAdapter, "after-wifi-start");
++		if (t1100_mcr_dump)
++			t1100_dump_mcr(prAdapter, "after-wifi-start");
+ 
+ 		break;
+ 	};

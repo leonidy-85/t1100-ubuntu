@@ -5177,3 +5177,23 @@ BTIF/STP-транспорт (включая исправленную поляр�
   (`WMT_OPID_FUNC_ON` для WIFI), а у нас этот путь падает на
   `opfunc_wlan_probe: not implemented yet hifType: 0x2` (WMT_HIF_SDIO),
   после чего MCIF-команды принимаются, но режим не переключён.
+
+## 16.11 (4): внутренний Wi-Fi работает — wlan0, скан, ассоциация, IP
+
+- Патчи `patches/wifi/0039…0045`: стоковый порядок старта (0039), выключенные
+  дампы MCR (0040), «тихое» окно старта (0041), NVRAM из файла (0042),
+  пост-READY диагностика (0043), попытка CMD52-wake (0044, не помогла) и
+  главное — `t1100_no_fw_own=1` (0045): драйвер не отдаёт владение FW, иначе
+  MCU гасит HIF-окно и `nicpmSetDriverOwn` больше не проходит.
+- Модули: `wmt_drv.ko` `73256ebb…` (0034), `wlan_drv_gen3.ko` `505273da…`
+  (0045), `mtk_btif_drv.ko` `92d4740c…`.
+- Результат на p29 (`build/wifi-image2/boot_wifi2.img`, `d9a1f402…`):
+  `Ready bit asserted`, MAC `08:26:ae:b1:87:39`, `wlan0` создан, `iw dev
+  wlan0 scan` видит 7 сетей; ассоциация с `home` (5 ГГц, канал 52, `-55 dBm`,
+  433 Mbit/s), DHCP `192.168.2.146/24`, `ping 1.1.1.1` 17 мс, HTTP 200,
+  SSH по Wi-Fi.
+- Профиль NM `home` был привязан к `wlx502b73100fe8` (донгл) — сняли
+  `connection.interface-name`, после чего он поднимается на `wlan0`.
+- Ограничение: power save выключен (`t1100_no_fw_own=1`); wake sleeping MCU
+  через HIF-окно на этом порте пока не найден — отдельная задача.
+- Детали и команды — `docs/wifi-port-log.md` §86 (M86).
