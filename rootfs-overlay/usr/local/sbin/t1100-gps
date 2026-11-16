@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""t1100-gps — minimal MediaTek GNSS client for the mainline gps_drv.
+
+Talks the MNL framing captured from the vendor mnld on AYYA T1:
+
+    aa f0 <len le16> <payload> aa 0f
+
+Payload[0] is the message id:
+
+    0x08  config request (110 bytes, sent on every fresh GPS power-on)
+    0x05  keepalive (4 bytes: 05 fe 04 00 0d 01)
+    0x31  chip status/version, answers 0x08
+    0x32  chip ack (seq in payload[2..3])
+    0x0c  vendor assistance data (EPO), not used here
+
+Opening /dev/stpgps powers the GNSS domain on through WMT; the chip only
+answers the config frame on a fresh power-on, so run the WMT func-off first:
+
+    /usr/local/sbin/t1100-gps --power-cycle
+"""
+
+import argparse
+import errno
+import os
+import select
+import sys
+import time
+
+DEV = "/dev/stpgps"
+WMT = "/dev/stpwmt"
+WMT_IOCTL = 0x4004A006
+WMT_GPS_ON = 0xBEEF0002
+WMT_GPS_OFF = 0xDEAD0002
+
+CONFIG = bytes.fromhex(
+    "08 fe 1a 00 00 00 00 00 c3 01 a5 02 00 00 00 00 00 78 00 80 04 80 7b 00 "
+    "31 00 00 00 00 00 05 00 c8 00 6f 3c 5a 84 e7 05 00 00 d2 00 b7 00 28 00 "
+    "58 4a 1e 00 c2 37 28 00 58 4a 8f 65 07 00 01 00 28 00 ff 00 80 00 47 00 "
+    "64 00 50 00 d8 00 50 00 bb 00 03 00 3c 00 6f 00 89 00 88 00 02 00 fb 00 "
+    "01 00 00 00 00 08 00 00 01 00 4e 4f 7b 15"
+)
+KEEPALIVE = bytes.fromhex("05 fe 04 00 0d 01")
+
+
+def frame(payload):
+    return b"\xaa\xf0" + len(payload).to_bytes(2, "little") + payload + b"\xaa\x0f"
+
+
+def wmt_func(arg):
+    import ctypes
+
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    fd = os.open(WMT, os.O_RDWR)
+    try:
+        ret = libc.ioctl(ctypes.c_int(fd), ctypes.c_ulong(WMT_IOCTL), ctypes.c_ulong(arg))
+        err = ctypes.get_errno()
+        print("wmt ioctl arg=0x%08x ret=%d errno=%d" % (arg, ret, err))
+    finally:
+        os.close(fd)
+
+
+def parse(buf):
+    """Split a byte stream into MNL frames; returns (frames, rest)."""
+    out = []
+    i = 0
+    while i + 4 <= len(buf):
+        if buf[i:i + 2] != b"\xaa\xf0":
+            i += 1
+            continue
+        ln = buf[i + 2] | (buf[i + 3] << 8)
+        end = i + 4 + ln
+        if end + 2 > len(buf):
+            break
+        if buf[end:end + 2] != b"\xaa\x0f":
+            i += 2
+            continue
+        out.append(buf[i + 4:end])
+        i = end + 2
+    return out, buf[i:]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--power-cycle", action="store_true", help="WMT func-off GPS before opening")
+    ap.add_argument("--seconds", type=int, default=120)
+    ap.add_argument("--keepalive", type=float, default=1.0)
+    ap.add_argument("--raw", action="store_true", help="hexdump every frame")
+    args = ap.parse_args()
+
+    if args.power_cycle:
+        wmt_func(WMT_GPS_OFF)
+        time.sleep(1.5)
+
+    fd = os.open(DEV, os.O_RDWR | os.O_NONBLOCK)
+    print("opened", DEV)
+    os.write(fd, frame(CONFIG))
+    print("sent config (%d bytes)" % (len(CONFIG) + 6))
+
+    start = time.time()
+    next_ka = start + args.keepalive
+    buf = b""
+    frames = 0
+
+    while time.time() - start < args.seconds:
+        now = time.time()
+        if now >= next_ka:
+            os.write(fd, frame(KEEPALIVE))
+            next_ka = now + args.keepalive
+
+        r, _, _ = select.select([fd], [], [], 0.2)
+        if not r:
+            continue
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError as e:
+            if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                continue
+            print("read error:", e)
+            break
+        if not chunk:
+            continue
+        buf += chunk
+        got, buf = parse(buf)
+        for f in got:
+            frames += 1
+            print("%8.3f frame id=0x%02x len=%d %s" %
+                  (time.time() - start, f[0] if f else -1, len(f),
+                   f.hex(" ") if args.raw else ""))
+
+    os.close(fd)
+    print("frames:", frames)
+
+
+main()

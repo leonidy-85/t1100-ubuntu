@@ -5442,3 +5442,8 @@ BTIF/STP-транспорт (включая исправленную поляр�
   skipped (CONSYS owned by wmt_drv)»), — например, прогнать с
   `t1100_btif_stp=0`, чтобы CONSYS включал сам wlan, и с увеличенным
   `t1100_quiet_ms`.
+### 16.11 (15): GPS — протокол MNL снят, чип отвечает
+
+- С AYYA T1 (Aurora 11) снят обмен `mnld` ↔ `/dev/stpgps`: кадр `aa f0` + len LE16 + payload + `aa 0f`; id 0x08 config, 0x05 keepalive, 0x0c assistance, 0x31 статус, 0x32 ack.
+- На T1100 при свежем power-on (`t1100-gps --power-cycle`) чип отвечает кадром `0x31` (`31 fe 00 00 46 15 … 98 01`) — протокол принят.
+- Клиент: `rootfs-overlay/usr/local/sbin/t1100-gps`. Поток измерений не проверен — нужен обзор неба (тест на улице).
