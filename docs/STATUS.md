@@ -5268,3 +5268,21 @@ BTIF/STP-транспорт (включая исправленную поляр�
   power save оставлен выключенным (`t1100_no_fw_own=1`), Wi-Fi работает.
 - Модули: `wlan_drv_gen3.ko` `60d951b2…` (0047), `wmt_drv.ko` `73256ebb…`,
   `bluetooth.ko` `9a527bbb…`, `t1100_bt.ko` `d4a8d045…`.
+
+### 16.11 (8): FM-драйвер портирован; MCU ассертит на включении FM
+
+- Взяты публичные исходники MTK FM (`Winkmoon/android_kernel_xinran_oppo_mt6771`,
+  `drivers/misc/mediatek/connectivity/fmradio_drv/`) → `fmradio/`; свой
+  `fmradio/Makefile`, compat-заголовки WMT/STP, фиксы 6.12 (`fm_timeval`,
+  `ioremap`, `proc_ops`, `class_create`, `remove` → void).
+- Сборка: `scripts/build-fm-remote.sh` → `build/fm/fmradio_drv.ko`
+  (sha256 `e61b9ea2…`). `wmt_drv.ko` пересобран с `-DCONFIG_MTK_FMRADIO`
+  (флаг в `scripts/remote/wifi-kbuild/common.Kbuild`) → `478adcac…`.
+- На планшете: `/dev/fm` создаётся, `fm_cust.cfg` читается,
+  `WMT func_on(FM)` проходит (`OPID(3) type(1) ok`). Но сразу после включения
+  прошивка CONSYS уходит в assert `patch/sys_patch_bin_t.c #4891` (`id=0x4 FM`)
+  → whole-chip reset; POWERUP = errno 1005, TUNE/GETRSSI = 1008.
+- Значит FM-драйвер и WMT-путь готовы, блокер — подготовка FM в MCU
+  (flash-patch/`wmt_launcher`-порядок) и, отдельно, ASoC-линк FM-I2S.
+- Wi-Fi/BT восстановлены: `wlan0 UP 192.168.2.146` (`home`), `t1100-wifi`,
+  `t1100-bt`, `bluetooth` — active. Подробности — `docs/fm-port-log.md`.
