@@ -105,3 +105,4 @@ ccflags-y += -DWMT_DBG_SUPPORT=1		# keep /proc/wmt debug nodes: they are
 						# the only way to see power-on state
 ccflags-y += -DCONFIG_MTK_FMRADIO		# register wmt_func_fm_on/off so the
 						# FM driver can power the tuner block
+ccflags-y += -DCONFIG_MTK_COMBO_GPS		# same for wmt_func_gps_on/off
