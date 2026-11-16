@@ -1,0 +1,8 @@
+# zramswap configuration for the T1100 (MT6771, 3.5 GiB RAM).
+# The kernel is built with the LZO backends only (no lz4/zstd), so keep
+# lzo-rle: it is the fastest one here and gives ~2:1 on desktop pages.
+ALGO=lzo-rle
+# SIZE=0 means "derive from PERCENT"; 50% of 3.5 GiB ≈ 1.7 GiB of swap.
+SIZE=0
+PERCENT=50
+PRIORITY=100
