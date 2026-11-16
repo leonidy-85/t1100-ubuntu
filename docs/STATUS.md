@@ -5401,6 +5401,7 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `/root/wifi-backup-hisline/`, `t1100-wifi.service` **masked**, запуск
   вручную по §86. `modprobe.d/99-t1100-wifi.conf` не конфликтует: опции
   сливаются с ручными, `t1100_quiet_ms=100` дублируется тем же значением.
+  Прогон сделан прежней версией helper'а (до `12b173c` с retry).
 - **Факты.** `wmt_drv`: `polling_consys_chipid retry(9) chipId(0x00000788)`,
   `patch ROMv4_be_patch_1_1_hdr.bin: num=2 seq=1 addr=218007f0 size=314120`,
   `…1_0 … seq=2 addr=22800900 size=229384`, `co-clock enabled`,
@@ -5413,13 +5414,31 @@ BTIF/STP-транспорт (включая исправленную поляр�
   host`, на хосте `usb 1-1.4.4: device not accepting address 31, error -71`,
   `unable to enumerate USB device`. То есть гипотеза «двойной путь старта из
   смешанных линий» **не подтверждается**: поведение идентично полной серии.
-- Лог зависания остался на диске: `/root/hisline-dmesg.log` (`dmesg -W`,
-  `sync` после каждой строки) — читать после следующего цикла питания;
-  он и должен дать точку, на которой встаёт SoC.
-- Прогон сделан версией helper'а **до** `12b173c` («retry the WMT func-on
-  until wlan0 appears»): тот коммит пришёл в master уже после запуска, на
-  плате лежит прежний `t1100-wifi-func-on` (1263 Б). Следующий прогон — уже
-  с retry-версией.
-- Следующие шаги (по логу): проверить, доходит ли дело до `DRIVER OWN` /
-  `WIFI_START`, и если встаёт в reset-storm — пробовать набор 0039–0045 без
-  диагностических 0020–0038 и/или отключать 0043/0044/0047 по умолчанию.
+- **Точка зависания (по `/root/hisline-dmesg.log`, `dmesg -W` + `sync`).**
+  Последние строки:
+  ```
+  [475.975114] [HIF-SDIO][I]WMT_open:1st call
+  [475.975398] [WMT-CORE][E]opfunc_wlan_probe:not implemented yet hifType: 0x2, unspecified wifi_hif
+  [475.975445] [wlan]wlanNetCreate: net_device allocated
+  [475.975547] t1100-clk: HIF DMA clock enabled, ret=0 rate=156000000
+  [475.976802] [wlan]t1100_load_nvram_file: nvram loaded from file (1024 bytes)
+  [475.976880] [wlan]wlanAdapterStart: t1100: driver-own skipped (CONSYS owned by wmt_drv)
+  [475.976893] [wlan]nicpmSetDriverOwn: t1100: CMD52 own readback 0x00 (i=0)
+  … то же каждые 64 итерации …
+  [476.361153] [wlan]nicpmSetDriverOwn: t1100: CMD52 own readback 0x00 (i=384)   <- последняя строка
+  ```
+  То есть SoC встаёт **внутри `nicpmSetDriverOwn()`**: `while (1)` крутит
+  `HAL_MCR_RD(MCR_WHLPCR)` + CMD52-handshake (0047), FW ни разу не отдаёт
+  владение (readback `0x00`, бит `WHLPCR_FW_OWN_REQ_SET` не встаёт), и через
+  ~0.4 с (i≈400, шаг 1 мс) повторные обращения к окну HIF вешают шину:
+  запись в лог обрывается, `/root/helper.out` пуст (ioctl не вернулся),
+  дальше ping живёт ещё десятки секунд и гаснет. У него в рабочем логе
+  `DRIVER OWN, status=1 count=14` — MCU отдавал владение за 14 мс.
+- Строк `Ready bit`/`MAC address`/`wlan0` нет; NVRAM при этом читается
+  (`nvram loaded from file (1024 bytes)`, `fgNvramAvailable = 1`).
+- Следующие шаги (по этой точке): отказаться от CMD52-readback (0047) в
+  пользу штатного пути — проверять `WHLPCR_FW_OWN_REQ_SET`, как в стоке;
+  либо разбираться, почему MCU не отдаёт own после WMT-пути (0027 «driver-own
+  skipped (CONSYS owned by wmt_drv)»), — например, прогнать с
+  `t1100_btif_stp=0`, чтобы CONSYS включал сам wlan, и с увеличенным
+  `t1100_quiet_ms`.
