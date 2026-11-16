@@ -1,0 +1,20 @@
+GNU GENERAL PUBLIC LICENSE
+Version 2, June 1991
+
+This project is distributed under the GNU General Public License, version 2
+(GPL-2.0-only).
+
+The kernel patches in `patches/` apply to the Linux kernel, which is also
+licensed under GPL-2.0-only; the full license text is available at
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt and in the `COPYING`
+file of any Linux kernel tree.
+
+Device-tree sources are additionally available under the terms used by the
+Linux kernel for DT files (GPL-2.0-only OR BSD-2-Clause).
+
+Third-party components keep their own licenses:
+
+- MediaTek connectivity sources under `vendor/` (wmt_drv, wlan_drv_gen3,
+  Bluetooth, FM, GNSS) are GPL-2.0 and come from public MediaTek GPL
+  releases; see `docs/upstream.md`.
+- Firmware blobs are not part of this repository.
