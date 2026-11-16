@@ -102,18 +102,29 @@ md5 p29 `21fee0a6803b5b305009c9ebdc350752`), cmdline = cmdline p29 v5
 ## Финальный тест (когда планшет свободен)
 
 Предусловие: планшет должен реально проспать 10 минут. Сейчас длинный s2idle
-обрывает panfrost: после `js fault ... DATA_INVALID_FAULT` он не уходит в
-suspend (`panfrost ... PM: failed to suspend: error -16`), и система
-просыпается через ~1 с. Это отдельный GPU-баг (вне этой задачи). Варианты,
-как обойти его для проверки панели:
+обрывает panfrost:
 
-1. остановить графическую сессию (`systemctl isolate multi-user.target`) —
-   KWin отпускает GPU, на панели остаётся текстовый fbcon; после пробуждения
-   консоль должна быть без полос;
-2. либо дождаться, пока panfrost-suspend починят, и повторить с KWin.
+```
+panfrost_device_suspend()            drivers/gpu/drm/panfrost/panfrost_device.c:478
+  pm_runtime_force_suspend()
+    panfrost_device_runtime_suspend()                            :416
+       if (!panfrost_job_is_idle(pfdev)) return -EBUSY;          :420
+```
 
-Перед стартом проверить, что сон не обрывается:
-`dmesg | grep "failed to suspend"` — пусто.
+То есть после `js fault ... DATA_INVALID_FAULT` зависший job никогда не
+становится idle, и системный suspend возвращает `-EBUSY` (в dmesg:
+`panfrost 13040000.gpu: PM: failed to suspend: error -16`). Это отдельный
+GPU-баг, драйвер panfrost по условию задачи не трогаем. Как обойти его для
+проверки панели, не меняя GPU-код:
+
+1. остановить графическую сессию: `systemctl isolate multi-user.target`
+   (KWin/SDDM отпускают GPU, на панели остаётся текстовый fbcon);
+2. снять panfrost с шины (тогда его PM-колбэк вообще не вызывается):
+   `echo 13040000.gpu > /sys/bus/platform/drivers/panfrost/unbind`;
+3. убедиться, что сон не обрывается: `dmesg | grep "failed to suspend"` — пусто;
+4. после теста вернуть: `echo 13040000.gpu > /sys/bus/platform/drivers/panfrost/bind`.
+
+Второй вариант — дождаться, пока panfrost-suspend починят, и повторить с KWin.
 
 Планшет — эксклюзивный ресурс: перед прошивкой согласовать окно и **снять
 бэкап текущего p29** (в нём может быть чужая сборка, 16.11 там был образ
