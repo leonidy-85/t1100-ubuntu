@@ -1,0 +1,78 @@
+IT6112 bridge register dump, live tablet, 2026-11-15 ~11:30 MSK.
+State: after a 10 minute s2idle cycle, the physical panel showed coloured
+stripes while the KWin screenshot (/tmp/opencode/after_sleep.png) was clean.
+Kernel: 6.12.114 #13 (p29 = boot_gauge_v5.img, t1100.it6112_skip_init=1).
+
+Read with tools/i2cpeek copied to /root/i2cpeek on the tablet:
+  /root/i2cpeek 3 0x56 0x00 48      # TX block, I2C address 0x56
+  /root/i2cpeek 3 0x5e 0x00 48      # RX block, I2C address 0x5e
+
+TX (0x56), 8 registers per line:
+
+0x56 00-2f: 00:54 01:49 02:12 03:61 04:b0 05:00 06:00 07:00
+08:00 09:00 0a:00 0b:00 0c:00 0d:0f 0e:7f 0f:04
+10:a0 11:63 12:00 13:24 14:ff 15:ff 16:ff 17:ff
+18:00 19:00 1a:ff 1b:ff 1c:ff 1d:ff 1e:ff 1f:0b
+20:24 21:03 22:30 23:00 24:01 25:00 26:01 27:00
+28:00 29:00 2a:40 2b:00 2c:00 2d:00 2e:00 2f:00
+
+0x56 30-4f: 30:43 31:30 32:ff 33:ff 34:ff 35:ff 36:ff 37:ff
+38:ff 39:26 3a:00 3b:12 3c:23 3d:00 3e:00 3f:30
+40:ff 41:ff 42:ff 43:ff 44:0d 45:24 46:22 47:12
+48:02 49:ff 4a:ff 4b:ff 4c:ff 4d:ff 4e:ff 4f:ff
+
+0x56 78-97: 78:00 79:ec 7a:92 7b:76 7c:bf 7d:fc 7e:33 7f:f1
+80:39 81:ec 82:87 83:ad 84:ff 85:cc 86:f8 87:fc
+88:fd 89:dd 8a:af 8b:fb 8c:f2 8d:b4 8e:fb 8f:6b
+90:2f 91:3b 92:f7 93:73 94:fb 95:fb 96:d0 97:c6
+
+0x56 98-b7: 98:00 99:00 9a:00 9b:00 9c:20 9d:00 9e:00 9f:00
+a0:00 a1:00 a2:00 a3:00 a4:4a a5:05 a6:cb a7:02
+a8:00 a9:00 aa:ff ab:ff ac:ff ad:ff ae:ff af:ff
+b0:27 b1:03 b2:00 b3:00 b4:0b b5:93 b6:3d b7:00
+
+0x56 b8-d7: b8:00 b9:00 ba:76 bb:22 bc:54 bd:46 be:ff bf:ff
+c0:ff c1:ff c2:00 c3:00 c4:ff c5:ff c6:ff c7:00
+c8:00 c9:00 ca:ff cb:22 cc:ff cd:ff ce:f0 cf:f0
+d0:00 d1:55 d2:02 d3:ff d4:ff d5:ff d6:ff d7:ff
+
+RX (0x5e):
+
+0x5e 00-2f: 00:54 01:49 02:12 03:61 04:b0 05:00 06:ff 07:02
+08:10 09:ff 0a:ff 0b:3f 0c:03 0d:71 0e:ff 0f:ff
+10:00 11:01 12:ff 13:ff 14:ff 15:ff 16:ff 17:ff
+18:43 19:03 1a:ff 1b:ff 1c:ff 1d:ff 1e:ff 1f:0f
+20:03 21:08 22:ff 23:ff 24:ff 25:ff 26:ff 27:3e
+28:3e 29:00 2a:ff 2b:ff 2c:ff 2d:ff 2e:ff 2f:ff
+
+0x5e 30-6f: 30:cc 31:cc 32:00 33:00 34:00 35:44 36:44 37:75
+38:01 39:43 3a:30 3b:ff 3c:ff 3d:ff 3e:ff 3f:ff
+40:ff 41:ff 42:ff 43:ff 44:22 45:ff 46:ff 47:ff
+48:ff 49:ff 4a:ff 4b:ff 4c:ff 4d:ff 4e:08 4f:00
+50:5c 51:00 52:21 53:00 54:21 55:00 56:40 57:06
+58:4e 59:05 5a:08 5b:00 5c:1c 5d:01 5e:08 5f:00
+60:80 61:08 62:ac 63:09 64:ff 65:ff 66:ff 67:ff
+68:ff 69:ff 6a:ff 6b:ff 6c:ff 6d:ff 6e:ff 6f:ff
+
+Comparison with the working boot state (dmesg "post-dcs" dump at t=2.2 s of
+the same boot, refs/device/journal-it6112-resume-2026-11-15.txt.gz):
+
+  - TX 0x00..0x2f, 0x30..0x4f, 0x98..0xd7: identical except two free-running
+    counters that change on every dump: TX 0x0e (0x5a, 0x5e, 0x5f, 0x7f seen)
+    and TX 0xa6 (0x04, 0x76, 0xcb seen).  TX 0x78..0x97 is a block of such
+    counters/status and differs on every read by design.
+  - RX 0x00..0x6f: byte for byte identical, including RX 0x21 = 0x08
+    (bit3: video format auto-detect done) and the measured timing block.
+  - TX 0x05 = 0x00 (HOLD_TX clear), 0x06 = 0x00.
+
+Only the dynamic counters differ, so the chip's register map is intact; the
+broken picture is the TX video state machine losing the output timing, not a
+lost configuration.
+
+Vendor TX "on" pulse, applied live on this exact state:
+
+  /root/i2cpeek -w 3 0x56 0x05 0xfe
+  /root/i2cpeek -w 3 0x56 0x05 0x00
+
+The owner confirmed the picture came back immediately ("Картинка нормальная").
+The same pulse had fixed a DPMS off/on breakage on 2026-11-12.
