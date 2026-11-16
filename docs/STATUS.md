@@ -5290,3 +5290,18 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `soc3_0_ram_mcu_e1_hdr.bin` (`0xf0000000`), assert тот же (`#4891`, `id=0x4
   FM`, `irq=0xC`) — порядок загрузки/наличие MCU-образа не лечит. См.
   `docs/fm-port-log.md` §6b.
+
+### 16.11 (9): GPS-драйвер портирован; нужен userspace-клиент MTK GNSS
+
+- Публичные исходники `gps_drv` (`Winkmoon/...`, `connectivity/gps_drv`) → `gps/`;
+  out-of-tree `gps/Makefile`, `scripts/build-gps-remote.sh`, compat-заголовки
+  (STP/WMT/osal, `GPS_TASK_INDX=2`, заглушка GPS-LNA). Вендорские EMI/FWCTL/LNA
+  для MT6771 не активны и исключены.
+- `build/gps/gps_drv.ko` 23 840 Б sha256 `eba78916…`; `modprobe` → `/dev/stpgps`
+  (191:0). `open()` → `GPS_open: WMT turn on GPS OK!`, `OPID(3) type(2) ok`,
+  MCU не ассертит (в отличие от FM).
+- Данных нет: за 8 с `rx:0 tx:0`. Драйвер только транспортирует байты, а
+  init/rate-команды шлёт Android HAL (`libgps`/`gps.default.so`); в ioctl-наборе
+  драйвера команд старта GNSS нет.
+- Следующий шаг — реверс минимальной init-последовательности HAL с Aurora и
+  проверка приёма (антенна есть). Подробности — `docs/gps-port-log.md`.
