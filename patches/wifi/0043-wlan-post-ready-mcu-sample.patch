@@ -8,14 +8,16 @@ tries one driver-own handshake, releases it again and then samples
 cpupcr/WHLPCR/WCIR five times, 200 ms apart.  That tells whether the
 firmware is still running (cpupcr moves) or has already halted.
 
-Controlled by t1100_post_ready (default 1).
+Controlled by t1100_post_ready (default 0: the extra handshake and
+register reads disturb the firmware and lead to FW_OWN_INVALID_ACCESS
+storms, so the block must stay off in normal operation).
 --- a/common/wlan_lib.c
 +++ b/common/wlan_lib.c
 @@ -966,6 +966,10 @@
  MODULE_PARM_DESC(t1100_start_addr,
  		 "T1100: start the firmware at this address only (0 = default sequence)");
  static int t1100_ready_trace = 1;
-+static int t1100_post_ready = 1;
++static int t1100_post_ready;
 +module_param(t1100_post_ready, int, 0444);
 +MODULE_PARM_DESC(t1100_post_ready,
 +		 "T1100: dump the MCU state right after the WLAN READY bit");

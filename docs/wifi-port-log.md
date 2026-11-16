@@ -5092,3 +5092,17 @@ DHCP `192.168.2.146/24`, `ping 1.1.1.1` 17 мс, `http://archive.ubuntu.com`
 wake-путь sleeping MCU на этом порте не найден; после включения PS
 HIF-окно гаснет и хост не может вернуть владение.  Это следующий шаг,
 но на работу `wlan0`/сети он не влияет.
+
+## §87 (M87): автозапуск Wi-Fi и ловушка `t1100_post_ready`
+
+Первый запуск `t1100-wifi.service` поднял `wlan0`, но probe вернул ошибку:
+сразу после `Ready bit asserted` диагностический блок `t1100_post_ready=1`
+(0043) сделал лишний `nicpmSetDriverOwn`, `nicpmSetFWOwn` и чтения HIF/SPM,
+после чего пришёл `nicProcessAbnormalInterrupt: MCR_WASR: 0x10000,
+MCR_WASR2: 0x60104` (`FW_OWN_INVALID_ACCESS`) и `glResetTrigger` ушёл в
+бесконечный `Whole chip reset`.
+
+Лечение: блок должен быть выключен в обычной работе — дефолт в 0043 изменён
+на 0, юнит не передаёт параметр.  С ним загрузка даёт `DRIVER OWN, status=1
+count=16`, `Ready bit asserted`, `wlan0 UP 192.168.2.146/24`, автоподключение
+`home` и ноль `LP fail`/`Whole chip reset` в журнале.
