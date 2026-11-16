@@ -5135,3 +5135,44 @@ count=16`, `Ready bit asserted`, `wlan0 UP 192.168.2.146/24`, автоподкл
 
 Ограничения: BT-прошивка (`soc3_0_ram_bt_1_1_hdr.bin`) не скачивается,
 контроллер на ROM-коде; MAC не из NVRAM; звук/coex не проверены.
+
+## §89. M89 — WEXT: почему «скорость 0» и что это на самом деле
+
+`SIOCGIWRATE`/`SIOCGIWNAME` возвращали `EOPNOTSUPP`, потому что драйвер
+присваивал `prWiphy->wext = &wext_handler_def` и
+`prDevHandler->wireless_handlers = &wext_handler_def`, а у этого обработчика
+`num_standard = 0` и `standard = NULL` (только приватные `IOCTL_*`).
+`wext-core.c:get_handler()` берёт `wiphy->wext` и перекрывает его
+`dev->wireless_handlers`, затем ищет стандартный обработчик по индексу —
+и получает NULL.
+
+Патч 0046 (`t1100_wext_compat=1`) не подменяет обработчик, и стандартные
+ioctls идут в `cfg80211_wext_handler`. C-тест на планшете:
+`SIOCGIWNAME = "IEEE 802.11"`, `SIOCGIWRATE = 433000000`, `SIOCGIWESSID =
+"home"`. Python-харнесс врал (EFAULT), потому что `struct ifreq` собирался
+неверно.
+
+NetworkManager 1.54.3 содержит wext-код (`nm-wifi-utils-wext.c`), но для
+bitrate его не вызывает, а `Device.Wireless.Bitrate` не обновляет —
+свойство deprecated. Поэтому plasma-nm показывает 0 при живом линке
+433 Мбит/с; `iw dev wlan0 station get` и WEXT отдают реальную скорость.
+
+## §90. M90 — power save: FW-own и почему wake не работает
+
+Цель — разрешить MCU засыпать (`t1100_no_fw_own=0`). READY проходит, `wlan0`
+создаётся, но сразу после передачи владения прошивке регистровое окно
+`0x180f0000` читается нулями: `WHLPCR=0`, `WCIR=0`, `nicpmSetDriverOwn`
+крутит `LP fail, Timeout(516ms)` и `Power control is FW own!! ignore
+HAL_PORT_WR`.
+
+Вендор для этого случая использует CMD52-байты (`COHEC_00006052`):
+в `HAL_DRIVER_OWN_BY_SDIO_CMD52` пишется `BIT(1)` в byte 1 регистра
+WHLPCR (`MCR_WHLPCR_BYTE1 = 0x05`) и читается обратно бит 0 (= `BIT(8)`
+регистра). Патч 0047 реализует `kalDevReadAfterWriteWithSdioCmd52()` по
+образцу `vendor/wlan/os/linux/hif/ahb_sdioLike/sdio_bus_driver.c`
+(`ahb_sdio_f0_readb/writeb`), но на нашем `ahb_sdioLike` readback всегда
+`0x00` — CMD52 до MCU не доходит либо HIF-домен полностью погашен.
+
+Вывод: deep power save требует отдельного разбора wake-последовательности
+(RE стокового `wlan_drv_gen3.ko` или AP2CONN clock/OSC). Пока оставляем
+`t1100_no_fw_own=1`.

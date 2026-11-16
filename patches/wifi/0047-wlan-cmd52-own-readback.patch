@@ -1,0 +1,125 @@
+wlan: hand the driver-own request over CMD52 (0047)
+
+While the WLAN MCU is asleep the plain register aperture of the SDIO-like
+HIF reads back as zero and writes can be lost, so the vendor's
+COHEC_00006052 workaround performs the firmware handshake with CMD52 byte
+accesses: write BIT(1) to WHLPCR byte 1 (= BIT(9), FW_OWN_REQ_CLR) and
+read the same byte back, where BIT(0) (= BIT(8)) means driver own.
+
+Add kalDevReadAfterWriteWithSdioCmd52() to the AHB HIF backend and use it
+in nicpmSetDriverOwn() before falling back to the polling loop.  This is
+what makes firmware power save usable: without it the driver never gets
+ownership back once the FW has gone to sleep.
+--- a/os/linux/hif/ahb_sdioLike/ahb.c
++++ b/os/linux/hif/ahb_sdioLike/ahb.c
+@@ -616,6 +616,54 @@
+ 	return TRUE;
+ }				/* end of kalDevWriteWithSdioCmd52() */
+ 
++/* T1100: CMD52 byte write followed by a CMD52 read of the same byte.
++ * The vendor uses this for the sleeping-firmware handshake (COHEC_00006052):
++ * while the MCU is asleep the plain register aperture reads back as zero.
++ */
++BOOLEAN kalDevReadAfterWriteWithSdioCmd52(IN P_GLUE_INFO_T prGlueInfo,
++					  IN UINT_32 u4Addr,
++					  OUT PUINT_8 pucData,
++					  IN UINT_32 u4Len)
++{
++	GL_HIF_INFO_T *HifInfo;
++	sdio_gen3_cmd52_info info;
++	UINT_8 ucVal;
++
++	ASSERT(prGlueInfo);
++	HifInfo = &prGlueInfo->rHifInfo;
++	if (!pucData || !u4Len)
++		return FALSE;
++
++	info.word = 0;
++	info.field.rw_flag = SDIO_GEN3_WRITE;
++	info.field.func_num = 0;
++	info.field.addr = u4Addr;
++	info.field.data = pucData[0];
++
++	my_sdio_disable(HifLock);
++	__disable_irq();
++	writel(info.word, (volatile UINT_32 *)(*g_pHifRegBaseAddr + SDIO_GEN3_CMD_SETUP));
++	writel(pucData[0], (volatile UINT_32 *)(*g_pHifRegBaseAddr + SDIO_GEN3_CMD52_DATA));
++	__enable_irq();
++	my_sdio_enable(HifLock);
++
++	info.word = 0;
++	info.field.rw_flag = SDIO_GEN3_READ;
++	info.field.func_num = 0;
++	info.field.addr = u4Addr;
++
++	my_sdio_disable(HifLock);
++	__disable_irq();
++	writel(info.word, (volatile UINT_32 *)(*g_pHifRegBaseAddr + SDIO_GEN3_CMD_SETUP));
++	ucVal = (UINT_8)readl((volatile UINT_32 *)(*g_pHifRegBaseAddr + SDIO_GEN3_CMD52_DATA));
++	__enable_irq();
++	my_sdio_enable(HifLock);
++
++	*pucData = ucVal;
++
++	return TRUE;
++}				/* end of kalDevReadAfterWriteWithSdioCmd52() */
++
+ 
+ /*----------------------------------------------------------------------------*/
+ /*!
+--- a/os/linux/include/gl_kal.h
++++ b/os/linux/include/gl_kal.h
+@@ -824,6 +824,7 @@
+ VOID kalDumpWTBL(P_ADAPTER_T prAdapter);
+ 
+ BOOL kalDevWriteWithSdioCmd52(IN P_GLUE_INFO_T prGlueInfo, IN UINT_32 u4Addr, IN UINT_8 ucData);
++BOOLEAN kalDevReadAfterWriteWithSdioCmd52(IN P_GLUE_INFO_T prGlueInfo, IN UINT_32 u4Addr, OUT PUINT_8 pucData, IN UINT_32 u4Len);
+ 
+ #if CFG_SUPPORT_EXT_CONFIG
+ UINT_32 kalReadExtCfg(IN P_GLUE_INFO_T prGlueInfo);
+--- a/include/nic/mt6630_reg.h
++++ b/include/nic/mt6630_reg.h
+@@ -80,6 +80,7 @@
+ 
+ /* 4 HIF Low Power Control  Register */
+ #define MCR_WHLPCR                          0x0004
++#define MCR_WHLPCR_BYTE1                     0x0005
+ 
+ /* 4 Control  Status Register */
+ #define MCR_WSDIOCSR                        0x0008
+--- a/nic/nic_pwr_mgt.c
++++ b/nic/nic_pwr_mgt.c
+@@ -268,13 +268,27 @@
+ 			HAL_MCR_WR(prAdapter, MCR_WHLPCR, WHLPCR_FW_OWN_REQ_CLR);
+ 		}
+ 
+-		/* T1100: once the FW sleeps, the plain register aperture is gated,
+-		 * so repeat the request as a CMD52 byte write (vendor COHEC_00006052).
++		/* T1100: once the FW sleeps the plain register aperture is gated.
++		 * Use the vendor CMD52 byte handshake (COHEC_00006052): write the
++		 * driver-own request into WHLPCR byte1 and read it back.  Bit0 of
++		 * that byte is WHLPCR bit8, i.e. "the driver owns the hardware".
+ 		 */
+-		if ((i & 63) == 0 &&
+-		    kalDevWriteWithSdioCmd52(prAdapter->prGlueInfo, MCR_WHLPCR + 1,
+-					     (UINT_8)(WHLPCR_FW_OWN_REQ_CLR >> 8)))
+-			DBGLOG(NIC, INFO, "t1100: CMD52 driver-own request (i=%u)\n", i);
++		if ((i & 63) == 0) {
++			UINT_8 ucVal = (UINT_8)(WHLPCR_FW_OWN_REQ_CLR >> 8);
++
++			if (kalDevReadAfterWriteWithSdioCmd52(prAdapter->prGlueInfo,
++							      MCR_WHLPCR_BYTE1, &ucVal, 1)) {
++				DBGLOG(NIC, INFO, "t1100: CMD52 own readback 0x%02x (i=%u)",
++				       ucVal, i);
++				if (ucVal & BIT(0)) {
++					prAdapter->fgIsFwOwn = FALSE;
++					prAdapter->u4OwnFailedCount = 0;
++					prAdapter->u4OwnFailedLogCount = 0;
++					fgStatus = TRUE;
++					break;
++				}
++			}
++		}
+ 
+ 		/* Delay for LP engine to complete its operation. */
+ 		kalUsleep_range(LP_OWN_BACK_LOOP_DELAY_MIN_US, LP_OWN_BACK_LOOP_DELAY_MAX_US);
