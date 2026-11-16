@@ -385,6 +385,14 @@ KeyboardLayout {
                         displayText: "Ctrl"
                         functionKey: true
                     }
+                    Key {
+                        Layout.minimumHeight: 0
+                        weight: normalKeyWidth * 0.6
+                        Layout.fillWidth: false
+                        key: Qt.Key_Alt
+                        displayText: "Alt"
+                        functionKey: true
+                    }
                     SpaceKey {
                         Layout.minimumHeight: 0
                     }
