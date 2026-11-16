@@ -5371,3 +5371,55 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Драйвер в ядре готов (`gps_drv.ko` `eba78916…`), `/dev/stpgps`, WMT включает GPS без MCU-ассерта.
 - Данных нет: raw-PMTK (PMTK000/605/314/220/898, с CRC и без, с length-prefix) даёт 0 байт.
 - Разобрано: пишет в устройство `mnld` (Thumb, stripped), протокол/PMTK — в `libmnl.so`; HAL общается с `mnld` сокетами. Детали и план — `docs/gps-mnl-reverse.md`.
+
+### 16.11 (15): «только его линия» патчей — зависание то же
+
+Проверка гипотезы «две линии патчей (наши 0015–0019 + его 0020–0047) дают
+двойной путь старта». Сборка: `WIFI_DIR=/home/l/t1100-wifi-build-hisline`,
+`KERNEL_OUT=/home/l/t1100-merge2-out`, `LOCALVERSION=-g400cb6f-touch-rot`.
+
+- **Состав.** Применены `common`: 0001, 0002, 0004, 0005, 0009, 0010, 0011,
+  0012, 0013, 0021, 0022, 0023, 0024, 0026, 0030, 0033, 0034; `wlan`: 0001,
+  0002, 0003, 0006, 0007, 0008, 0020, 0025, 0027, 0028, 0029, 0031, 0032,
+  0035–0047. **Исключены** 0015 (`common-stp-transport-trace`) — не нужен,
+  всё линкуется без него; 0019 (`build-makefiles`) — сборкой не применяется
+  (имя не подходит под glob, Makefile заменяется `*.Kbuild`).
+- **Пришлось включить из наших (минимально, из-за зависимостей):**
+  - `0016-common-stp-rx-trace` — только из-за `mtk_wcn_stp_reset_seq_state()`:
+    её вызывает 0017, без 0016 `modpost` даёт
+    `"mtk_wcn_stp_reset_seq_state" [wmt_drv.ko] undefined!`;
+  - `0017-common-warm-reset-and-mt6771-platform` — без него 0030 не
+    применяется (`1 out of 5 hunks FAILED`, `common_main/core/wmt_ic_soc.c.rej`),
+    и он же даёт `t1100_patch_scan()` для списка из двух ROMv4-файлов;
+  - `0018-wlan-warm-reset-and-redownload` — без него 0020 не применяется
+    (`4 out of 6 hunks FAILED`, `common/wlan_lib.c.rej`): это база, на которой
+    написаны M81+.
+- **Модули** (vermagic `6.12.114-g400cb6f-touch-rot SMP preempt mod_unload aarch64`):
+  `wmt_drv.ko` `c11d8101…` (1 173 344 Б), `wlan_drv_gen3.ko` `e460b42a…`
+  (2 970 176 Б), `mtk_btif_drv.ko` `a0d8f8ee…` (187 808 Б, без пересборки).
+- **Разложено** в `/lib/modules/…/updates/wifi/`, бэкап — прежние модули в
+  `/root/wifi-backup-hisline/`, `t1100-wifi.service` **masked**, запуск
+  вручную по §86. `modprobe.d/99-t1100-wifi.conf` не конфликтует: опции
+  сливаются с ручными, `t1100_quiet_ms=100` дублируется тем же значением.
+- **Факты.** `wmt_drv`: `polling_consys_chipid retry(9) chipId(0x00000788)`,
+  `patch ROMv4_be_patch_1_1_hdr.bin: num=2 seq=1 addr=218007f0 size=314120`,
+  `…1_0 … seq=2 addr=22800900 size=229384`, `co-clock enabled`,
+  `WMT_OPID_PWR_ON (BTIF STP, ROM patch) -> 1`. `wlan_drv_gen3`:
+  `Create wireless device success`, `wmt wlan cb register`,
+  `probe of 180f0000.wifi returned 0`. Строк `Ready bit`/`MAC address` нет.
+- **Зависание воспроизвелось и на этой сборке**: после
+  `/usr/local/sbin/t1100-wifi-func-on` устройство сначала отвечает на ping
+  ~40 с, затем `Connection timed out during banner exchange` → `No route to
+  host`, на хосте `usb 1-1.4.4: device not accepting address 31, error -71`,
+  `unable to enumerate USB device`. То есть гипотеза «двойной путь старта из
+  смешанных линий» **не подтверждается**: поведение идентично полной серии.
+- Лог зависания остался на диске: `/root/hisline-dmesg.log` (`dmesg -W`,
+  `sync` после каждой строки) — читать после следующего цикла питания;
+  он и должен дать точку, на которой встаёт SoC.
+- Прогон сделан версией helper'а **до** `12b173c` («retry the WMT func-on
+  until wlan0 appears»): тот коммит пришёл в master уже после запуска, на
+  плате лежит прежний `t1100-wifi-func-on` (1263 Б). Следующий прогон — уже
+  с retry-версией.
+- Следующие шаги (по логу): проверить, доходит ли дело до `DRIVER OWN` /
+  `WIFI_START`, и если встаёт в reset-storm — пробовать набор 0039–0045 без
+  диагностических 0020–0038 и/или отключать 0043/0044/0047 по умолчанию.
