@@ -5426,3 +5426,82 @@ not implemented yet hifType: 0x2`.
    `t1100: own give-up at i=…`, плата жива, клин ищется без потери циклов.
 3. Если обрыв на чтении подтвердится — искать, что гасит HIF-окно:
    часы/CG (`t1100-clk`, `connsys` power-on, `SPM`), а не сам поллинг own.
+
+## §95. M95 — прошит рабочий релиз `wifi1`; own не приходит даже с ним
+
+Сессия целиком про воспроизведение «как у второго разработчика»: собрать то же,
+что у него, прошить и посмотреть. Итог: стек воспроизведён (вплоть до sha
+`mtk_btif_drv 92d4740c…`), но MCU на этом планшете **не отдаёт driver-own**,
+хотя в рабочем прогоне 16.11 11:47 отдавал за 16 мс.
+
+### Что прошито (обратимо)
+
+- p29 = `build/boot_wifi1_working.img` (md5 `26bbf509…`): kernel `6.12.114-wifi1`
+  (`Image.gz` из `out-wifi`, 15 597 592 Б), DTB **`8362894f…`** (побайтно тот
+  же, что в M81-образе; собран из `.dts.pre-wifi.bak` + `refs/wifi-dt-nodes-nonwifi.dts`),
+  ramdisk — из прежнего p29 (`d5cf7ac9…`), заголовок/cmdline — из него же.
+- Прежний p29 снят в `build/recovery/boot_a_before_wifi1.img` (md5 `98c3c42d…`,
+  ядро `-g400cb6f-touch-rot`); вернуть — `tools/host/flash-ssh.sh <img>` или из
+  recovery `recovery.py put`.
+- Первый вариант образа (`cd252166…` DTB с HDMI-узлами) тоже проверен: он ещё
+  и ронял Wi-Fi иначе, но с рабочим DTB поведение то же.
+- Модули в `/lib/modules/6.12.114-wifi1/updates/wifi/` — из коммита `0928f81`
+  («bring the internal Wi-Fi up at boot»): `wlan_drv_gen3` `8410dc20…`,
+  `wmt_drv` `d34c24da…`, `mtk_btif_drv` `92d4740c…` (sha btif совпал с его).
+  `t1100-wifi.service` — **masked**, автозапуска нет.
+
+### Что дало восстановление окружения
+
+- **Журнал планшета хранится** (`/var/log/journal`), и в нём нашёлся
+  единственный удачный прогон — 16.11 11:47:41 UTC. Его последовательность:
+
+```
+driver-own skipped (CONSYS owned by wmt_drv)
+nicpmSetDriverOwn: CMD52 own readback 0x00 (i=0)
+nicpmSetDriverOwn: DRIVER OWN, status=1 count=16
+... FW download end → WIFI_START override=0 seq=3 status=0
+... Ready bit asserted → FW Ver 4.4 → wlan0
+```
+
+  То есть в рабочем прогоне был тот же код (включая 0047 с CMD52-readback) и та
+  же ветка «CONSYS уже включён wmt_drv». Значит дело **не в патчах и не в
+  параметрах**, а в состоянии MCU: у него own приходил за 16 итераций, у нас
+  `WHLPCR` читается `0x0` все 256+ итераций.
+
+### Перебор прогонов (все — на прошитом `wifi1`)
+
+| прогон | конфигурация | результат |
+|---|---|---|
+| W9 | рабочий рецепт (modprobe.d + helper) | `driver-own skipped`, CMD52 0x00 до i=384, клин |
+| W10 | набор без `0044/0047` | то же, но без печатей CMD52: обрыв в том же окне |
+| W11 | + `0048` c `t1100_own_max=256` | плата **жива**: `WHLPCR=0x0` на всех сэмплах, `DRIVER OWN, status=0 count=256` |
+| W12 | + `t1100_wmt_func_on=1` (0028) | рекурсивный второй `power-on` → клин |
+| W13/W14 | набор `0928f81` (рабочая эпоха) | `driver-own skipped` + CMD52 до i=448 → клин |
+| W15 | `btif_stp=0`, `pwr_on_done=0`, `rom_patch_mcif=1`, `probe=1` | **`DRIVER OWN, status=1 count=25`**, Chip ID 6771 — но MCIF-команды (`PATCH_SEMAPHORE`, section-config) таймаутят → `mtk_wcn_wmt_assert_timeout` → whole-chip reset |
+| W16 | `probe=1` + `pwr_on_done=1` + `func_on=1` | клин на probe (watchdog вытащил) |
+| W17 | `btif_stp=0`, `rom_patch_mcif=0` (как M78) | section-config `status=0`, FW скачан, но `Waiting for Ready bit timeout, D.H. MailBox 0x0`, cpupcr 0x1170 — MCU не пошёл в RAM-код |
+
+### Инфраструктура, которая теперь есть
+
+- **Аппаратный watchdog взведён**: `/etc/systemd/system.conf.d/20-t1100-watchdog.conf`
+  → `RuntimeWatchdogSec=10s`. Проверено: при клине SoC планшет **сам**
+  перезагружается через ~10 с (в одном случае загрузился в recovery, в
+  остальных — в Ubuntu). Цикл питания руками больше не нужен.
+- **Логи после клина читаются из recovery** без загрузки Ubuntu:
+  `recovery.py sh 'mkdir -p /mnt/r; mount -o ro /dev/mmcblk0p54 /mnt/r; cat /mnt/r/root/wNN.log'`.
+- **Ограничитель own** (`0048`, `t1100_own_max=N`) превращает клин в чистый
+  отказ: `own give-up at i=N`, плата жива.
+
+### Куда смотреть дальше
+
+1. **Холодный цикл питания** (полное выключение, не warm reboot) и прогон в
+   первые секунды загрузки — единственная неотброшенная переменная между нашим
+   прогоном и рабочим 16.11: CONSYS мог остаться в «залипшем» состоянии после
+   серии warm-reset'ов; в рабочем прогоне планшет стартовал после обычного
+   выключения.
+2. Если не поможет — дампить состояние CONSYS *перед* циклом own изнутри
+   драйвера (`CHLPCR/CHCR/CHISR/CTFSR`, `cpupcr`, SPM `0x1000632c`) и сравнить
+   с рабочим логом (там `power-on-end cpupcr=0x00014ef6`, own через 16 мс).
+3. Проверить, не влияет ли **порядок**: в рабочем логе boot-work сначала падал
+   3 раза (`WMT-CORE: no hif info!`) и перезапускался; у нас он проходит сразу.
+   Это меняет момент, когда MCU получает ROMv4-патч относительно `wmt_lib_*`.
