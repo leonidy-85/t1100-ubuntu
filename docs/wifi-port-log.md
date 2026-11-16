@@ -5176,3 +5176,67 @@ WHLPCR (`MCR_WHLPCR_BYTE1 = 0x05`) и читается обратно бит 0 (
 Вывод: deep power save требует отдельного разбора wake-последовательности
 (RE стокового `wlan_drv_gen3.ko` или AP2CONN clock/OSC). Пока оставляем
 `t1100_no_fw_own=1`.
+
+## §91. M91 — перебор по одному изменению: клин в `nicpmSetDriverOwn` держится
+
+Сессия прервана владельцем (плата не поднималась до конца сессии), поэтому
+таблица заполнена ровно тем, что измерено; незапущенные варианты помечены
+«не проверено».
+
+Исходная точка (до этой сессии, полная серия патчей `0001…0047`): после
+`/usr/local/sbin/t1100-wifi-func-on` SoC встаёт внутри `nicpmSetDriverOwn()` —
+`CMD52 own readback 0x00 (i=0…384)`, 1 мс на итерацию, дальше записи в лог
+нет, т.е. **`DRIVER OWN` ни разу не напечатан** (`status`/`count` не
+выставляются), ни `Ready bit`, ни MAC, ни `wlan0`.
+
+«Только его линия» (`wlan 0020…0047`, наши 0015/0019 выключены,
+0016/0017/0018 включены вынужденно — см. `docs/STATUS.md` 16.11 (15)):
+поведение идентичное, последние строки `/root/hisline-dmesg.log`:
+
+```
+[475.975398] opfunc_wlan_probe:not implemented yet hifType: 0x2, unspecified wifi_hif
+[475.976802] [wlan]t1100_load_nvram_file: nvram loaded from file (1024 bytes)
+[475.976880] [wlan]wlanAdapterStart: t1100: driver-own skipped (CONSYS owned by wmt_drv)
+[475.976893] [wlan]nicpmSetDriverOwn: t1100: CMD52 own readback 0x00 (i=0)
+…                    (i=64, 128, 192, 256, 320)
+[476.361153] [wlan]nicpmSetDriverOwn: t1100: CMD52 own readback 0x00 (i=384)   <- обрыв
+```
+
+### Перебор
+
+| вариант | что менялось | `DRIVER OWN` status/count | `Ready bit` | `wlan0` | итог |
+|---|---|---|---|---|---|
+| 0 | полная серия `0001…0047` | нет строки (клин в цикле own, CMD52 readback `0x00`, i=384) | нет | нет | клин SoC, power-cycle |
+| 0a | его линия (без наших 0015/0019) | то же, `driver-own skipped (CONSYS owned by wmt_drv)` + CMD52 `0x00` до i=384 | нет | нет | клин SoC, power-cycle |
+| 1 | **без `0046`/`0047`** (`wlan_drv_gen3.ko` `b736e185…`, 2 968 144 Б) | не измерено: `wmt rc=0`, `wlan rc=0`, далее helper под `timeout 20` и SoC встал, лог `/root/own-1.log` остался на диске и **не прочитан** (плата недоступна) | нет | нет | клин SoC, power-cycle |
+| 2 | `modprobe wmt_drv t1100_btif_stp=0` (power-on и ROMv4 — только путь ioctl) | не проверено | — | — | — |
+| 3 | `t1100_quiet_ms=1000` | не проверено | — | — | — |
+| 4 | 1 + 3 | не проверено | — | — | — |
+
+Выводы, которые уже можно зафиксировать:
+
+- **0047 (`t1100_cmd52_own_readback`) — не единственная причина**: без 0046 и
+  0047 клин воспроизвёлся. То есть виснет не только CMD52-ветка, но и штатный
+  путь `HAL_MCR_RD(MCR_WHLPCR)` в `while(1)` — похоже на отказ шины при
+  повторных обращениях к окну `0x180f0000`, когда MCU/HIF не отвечает
+  (ср. `refs/m24-btif-bus-write-dead.md`).
+- Ключевое отличие от рабочего лога автора: там `DRIVER OWN, status=1 count=14`,
+  т.е. MCU отдавал владение за 14 мс; у нас ни разу. Строка
+  `driver-own skipped (CONSYS owned by wmt_drv)` (0027) показывает, что CONSYS
+  уже принадлежит WMT-пути — кандидат на следующий шаг (вариант 2).
+- NVRAM читается нормально (`1024 bytes`, `fgNvramAvailable = 1`), так что MAC
+  и калибровка к делу не относятся.
+- Практика логирования: `dmesg -W | while read; do echo >> file; sync; done`
+  переживает жёсткий сброс (page cache успевает сбрасываться), но при клине
+  шины успевает записаться только то, что было до него; `stdout` helper'а при
+  этом теряется (`/root/helper.out` пуст).
+
+### Что делать дальше (вариант 2 из плана)
+
+1. `modprobe wmt_drv t1100_btif_stp=0 t1100_quiet_ms=100` — CONSYS включает
+   сам `wlan_drv_gen3`, а не boot-work; смотреть, появится ли `DRIVER OWN` и
+   `Ready bit`.
+2. Если нет — `t1100_quiet_ms=1000`.
+3. Если и это не даст, снимать клин шины: не долбить `MCR_WHLPCR` в цикле
+   (проверять own раз в N мс, а не каждую итерацию) или ставить `timeout` на
+   каждый `HAL_MCR_RD`.
