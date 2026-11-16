@@ -5286,3 +5286,7 @@ BTIF/STP-транспорт (включая исправленную поляр�
   (flash-patch/`wmt_launcher`-порядок) и, отдельно, ASoC-линк FM-I2S.
 - Wi-Fi/BT восстановлены: `wlan0 UP 192.168.2.146` (`home`), `t1100-wifi`,
   `t1100-bt`, `bluetooth` — active. Подробности — `docs/fm-port-log.md`.
+- Проверено и обратное: если первым в `t1100_rom_patch` подставить
+  `soc3_0_ram_mcu_e1_hdr.bin` (`0xf0000000`), assert тот же (`#4891`, `id=0x4
+  FM`, `irq=0xC`) — порядок загрузки/наличие MCU-образа не лечит. См.
+  `docs/fm-port-log.md` §6b.
