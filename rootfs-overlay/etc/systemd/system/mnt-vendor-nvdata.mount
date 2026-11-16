@@ -1,0 +1,19 @@
+[Unit]
+Description=T1100 nvdata partition (read-only, holds the WIFI NVRAM blob)
+Documentation=file:///usr/share/doc/t1100/wifi-port-log.md
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=t1100-wifi.service local-fs.target
+
+[Mount]
+# wlan_drv_gen3 (патч 0042) читает калибровку/MAC из
+# /mnt/vendor/nvdata/APCFG/APRDEB/WIFI; без монтирования MAC остаётся
+# дефолтным.  Только чтение, журнал не восстанавливаем (nofail: если раздела
+# нет, загрузка не страдает — Wi-Fi просто встанет с дефолтным MAC).
+What=/dev/disk/by-partlabel/nvdata
+Where=/mnt/vendor/nvdata
+Type=ext4
+Options=ro,noload
+
+[Install]
+WantedBy=multi-user.target

@@ -38,7 +38,8 @@ $SSH 'set -e
 	done
 	chown -R root:root /root /etc/pam.d /etc/pipewire /etc/wireplumber /etc/systemd/user \
 		/usr/share/alsa/ucm2 /usr/local/bin 2>/dev/null || true
-	chmod 755 /usr/local/bin/t1100-audio-mixer.sh /usr/local/bin/t1100-charge.sh 2>/dev/null || true
+	chmod 755 /usr/local/bin/t1100-audio-mixer.sh /usr/local/bin/t1100-charge.sh \
+		/usr/local/sbin/t1100-wifi-func-on /usr/local/sbin/t1100-bt-up 2>/dev/null || true
 	systemctl daemon-reload
 	udevadm control --reload-rules 2>/dev/null || true
 	systemctl enable --now t1100-audio-mixer.service 2>/dev/null || true
