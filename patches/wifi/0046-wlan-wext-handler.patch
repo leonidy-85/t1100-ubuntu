@@ -1,0 +1,58 @@
+wlan: keep the cfg80211 WEXT handler so standard ioctls work
+
+The vendor driver points both wiphy->wext and netdev->wireless_handlers at
+its own wext_handler_def.  That table has num_standard = 0 and
+.standard = NULL - only private IOCTL_* commands - so every standard
+wireless extension ioctl fails with -EOPNOTSUPP.  NetworkManager reads the
+link rate through SIOCGIWRATE, gets an error and reports Bitrate = 0, which
+is what KDE shows as a zero connection speed.
+
+Add t1100_wext_compat (default 1): when set, leave wiphy->wext to cfg80211
+(net/wireless/core.c installs cfg80211_wext_handler) and do not override
+netdev->wireless_handlers.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -978,6 +978,11 @@
+ int t1100_no_fw_own = 1;
+ module_param(t1100_no_fw_own, int, 0444);
+ MODULE_PARM_DESC(t1100_no_fw_own, "T1100: never hand ownership back to the firmware");
++
++int t1100_wext_compat = 1;
++module_param(t1100_wext_compat, int, 0444);
++MODULE_PARM_DESC(t1100_wext_compat,
++		 "T1100: keep the cfg80211 WEXT handler instead of the private one");
+ module_param(t1100_ready_trace, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_trace,
+ 		 "T1100: print cpupcr while waiting for the WLAN READY bit");
+--- a/os/linux/gl_init.c
++++ b/os/linux/gl_init.c
+@@ -36,6 +36,8 @@
+ #include "gl_os.h"
+ #include "wlan_lib.h"
+ #include "gl_wext.h"
++
++extern int t1100_wext_compat;
+ #include "gl_cfg80211.h"
+ #include "precomp.h"
+ #if CFG_SUPPORT_AGPS_ASSIST
+@@ -1706,7 +1708,8 @@
+ #endif
+ #ifdef CONFIG_CFG80211_WEXT
+ 	/* 4 <1.5> Use wireless extension to replace IOCTL */
+-	prWiphy->wext = &wext_handler_def;
++	if (!t1100_wext_compat)
++		prWiphy->wext = &wext_handler_def;
+ #endif
+ 
+ 	if (wiphy_register(prWiphy) < 0) {
+@@ -1818,7 +1821,8 @@
+ #endif
+ 	prGlueInfo->prDevHandler->netdev_ops = &wlan_netdev_ops;
+ #ifdef CONFIG_WIRELESS_EXT
+-	prGlueInfo->prDevHandler->wireless_handlers = &wext_handler_def;
++	if (!t1100_wext_compat)
++		prGlueInfo->prDevHandler->wireless_handlers = &wext_handler_def;
+ #endif
+ 	netif_carrier_off(prGlueInfo->prDevHandler);
+ 	netif_tx_stop_all_queues(prGlueInfo->prDevHandler);

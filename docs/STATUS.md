@@ -5249,3 +5249,22 @@ BTIF/STP-транспорт (включая исправленную поляр�
   (надо брать из NVRAM); звук через PipeWire и coex с Wi-Fi ещё не проверялись.
 - Модули: `bluetooth.ko` `9a527bbb…` (0077), `t1100_bt.ko` `d4a8d045…`,
   `bnep`/`rfcomm`/`af_alg`/`algif_*`/`ecc`/`ecdh_generic` — из `out-wifi`.
+
+### 16.11 (7): Wi-Fi — WEXT-скорость и попытка power save
+
+- **Скорость в интерфейсе.** Драйвер подменял wext-обработчик cfg80211 своим
+  приватным (`wext_handler_def` с `num_standard = 0`), поэтому `SIOCGIWRATE`
+  и `SIOCGIWNAME` возвращали `EOPNOTSUPP`. Патч **0046** оставляет обработчик
+  cfg80211 (`t1100_wext_compat=1`). Проверено C-тестом: `SIOCGIWNAME` →
+  `IEEE 802.11`, `SIOCGIWRATE` → `433000000` (5 ГГц, ch52), `SIOCGIWESSID` →
+  `home`. При этом NetworkManager 1.54 больше не обновляет
+  `Device.Wireless.Bitrate` (свойство объявлено deprecated), поэтому
+  plasma-nm всё равно показывает «0». Это косметика NM/KDE, не линк.
+- **Power save.** Патч **0047** добавляет `kalDevReadAfterWriteWithSdioCmd52`
+  и вендорский handshake `WHLPCR` byte 1 (COHEC_00006052). С
+  `t1100_no_fw_own=0` прошивка забирает владение (READY проходит, `wlan0`
+  создаётся), но readback всегда `0x00`: ни обычная запись WHLPCR, ни CMD52
+  не будят MCU в нашем AHB-транспорте. Deep-sleep wake не заработал —
+  power save оставлен выключенным (`t1100_no_fw_own=1`), Wi-Fi работает.
+- Модули: `wlan_drv_gen3.ko` `60d951b2…` (0047), `wmt_drv.ko` `73256ebb…`,
+  `bluetooth.ko` `9a527bbb…`, `t1100_bt.ko` `d4a8d045…`.
