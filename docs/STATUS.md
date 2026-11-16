@@ -5197,3 +5197,23 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Ограничение: power save выключен (`t1100_no_fw_own=1`); wake sleeping MCU
   через HIF-окно на этом порте пока не найден — отдельная задача.
 - Детали и команды — `docs/wifi-port-log.md` §86 (M86).
+
+## 16.11 (5): Wi-Fi поднимается при загрузке; 0043 по умолчанию выключен
+
+- Добавлены `rootfs-overlay/etc/systemd/system/t1100-wifi.service` (oneshot:
+  `modprobe wmt_drv`, `modprobe wlan_drv_gen3` с тихими параметрами,
+  `/usr/local/sbin/t1100-wifi-func-on`) и helper `t1100-wifi-func-on`
+  (ctypes ioctl `0x4004A006`/`0xBEEF0003` на `/dev/stpwmt`).
+- В `/etc/modprobe.d/99-t1100-wifi.conf` на планшете: `wmt_drv
+  t1100_btif_stp=1 t1100_quiet_ms=100 t1100_rom_patch="…1_1… …1_0…"`,
+  `wlan_drv_gen3 t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=1`.
+- Проверено после ребута: `t1100-wifi.service` active, `wlan0 UP
+  192.168.2.146/24`, NM сам подключает `home` (5 ГГц, ch52, `-55 dBm`,
+  433 Mbit/s), `ping 1.1.1.1` ~17 мс, HTTP 200, скан 13 BSS, SSH по Wi-Fi.
+- Важно: диагностический блок `t1100_post_ready` (0043) нельзя держать
+  включённым — сразу после READY он делает лишний driver-own/FW-own и чтения
+  HIF/SPM, после чего FW выдаёт `MCR_WASR: 0x10000` (`FW_OWN_INVALID_ACCESS`)
+  → `GL_RESET_TRIGGER` → шквал `Whole chip reset`. Дефолт в патче изменён на
+  `0`; в юните параметр больше не передаётся.
+- Модули: `wlan_drv_gen3.ko` `f4d5545a…` (0043 с дефолтом 0), `wmt_drv.ko`
+  `73256ebb…`, `mtk_btif_drv.ko` `92d4740c…`.
