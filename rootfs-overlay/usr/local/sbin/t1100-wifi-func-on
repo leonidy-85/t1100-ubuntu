@@ -6,36 +6,67 @@ and then calls back into wlan_drv_gen3 (WMT_OPID_WLAN_PROBE).  The WLAN module
 must already be loaded with t1100_probe=0 so that it only registers the
 callback; this ioctl is what actually starts it.
 
+The probe occasionally loses the race with the BTIF bring-up at boot: the
+ioctl succeeds but no wlan0 appears.  A repeated request fixes it, so retry
+a few times and verify that the netdev really showed up.
+
 WMT_IOCTL_FUNC_ONOFF_CTRL = _IOW(0xa0, 6, int) = 0x4004a006
 arg 0xBEEF0003 = "turn on WMTDRV_TYPE_WIFI (3)".
 """
 import ctypes
 import os
 import sys
+import time
 
 DEV = "/dev/stpwmt"
 CMD = 0x4004A006
 ARG = 0xBEEF0003
+NETDEV = "/sys/class/net/wlan0"
+ATTEMPTS = 4
 
 
-def main():
+def func_on_once(libc):
     try:
         fd = os.open(DEV, os.O_RDWR)
     except OSError as e:
         print("t1100-wifi-func-on: %s: %s" % (DEV, e))
-        return 2
+        return None, None
 
-    libc = ctypes.CDLL("libc.so.6", use_errno=True)
     ret = libc.ioctl(ctypes.c_int(fd), ctypes.c_ulong(CMD),
                      ctypes.c_ulong(ARG))
     err = ctypes.get_errno()
     os.close(fd)
-
     print("t1100-wifi-func-on: ioctl ret=%d errno=%d" % (ret, err))
-    # The WMT operation reports success through the driver log; the ioctl
-    # itself may return EFAULT when the callback still returns FALSE.
-    if ret == 0 or err in (0, 14):
-        return 0
+    return ret, err
+
+
+def wait_netdev(timeout):
+    end = time.time() + timeout
+    while time.time() < end:
+        if os.path.exists(NETDEV):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def main():
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+
+    for attempt in range(1, ATTEMPTS + 1):
+        ret, err = func_on_once(libc)
+        if ret is None:
+            # /dev/stpwmt is not there yet; give the module a moment.
+            time.sleep(1.0)
+            continue
+        # The WMT operation reports success through the driver log; the ioctl
+        # itself may return EFAULT when the callback still returns FALSE.
+        if (ret == 0 or err in (0, 14)) and wait_netdev(6.0):
+            print("t1100-wifi-func-on: wlan0 is up (attempt %d)" % attempt)
+            return 0
+        print("t1100-wifi-func-on: attempt %d did not create wlan0" % attempt)
+        time.sleep(1.0)
+
+    print("t1100-wifi-func-on: wlan0 did not appear")
     return 1
 
 
