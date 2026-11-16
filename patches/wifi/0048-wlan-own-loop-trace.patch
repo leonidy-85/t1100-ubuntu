@@ -1,0 +1,62 @@
+From: t1100-ubuntu <dev@t1100>
+Subject: [PATCH] wlan: trace the driver-own polling loop
+
+Two knobs for the bring-up dead end: t1100_own_dbg prints every 8th
+WHLPCR sample plus markers around the plain-aperture write, and
+t1100_own_plain_wr=0 skips that write entirely.  The pair tells a read
+that never returns from a write to an already-dead HIF window.
+
+--- a/nic/nic_pwr_mgt.c
++++ b/nic/nic_pwr_mgt.c
+@@ -193,6 +193,9 @@
+ 	BOOLEAN fgTimeout;
+ 	BOOLEAN fgHifFwOwn = TRUE;
+ 
++	extern int t1100_own_dbg;
++	extern int t1100_own_plain_wr;
++
+ 	ASSERT(prAdapter);
+ 
+ 	HAL_MCR_RD(prAdapter, MCR_WHLPCR, &u4RegValue);
+@@ -221,6 +224,9 @@
+ 	i = 0;
+ 	while (1) {
+ 		HAL_MCR_RD(prAdapter, MCR_WHLPCR, &u4RegValue);
++		if (t1100_own_dbg && (i & 7) == 0)
++			DBGLOG(NIC, ERROR, "t1100: own i=%u WHLPCR=0x%x dt=%u\n",
++			       i, u4RegValue, kalGetTimeTick() - u4CurrTick);
+ 
+ 		fgTimeout = ((kalGetTimeTick() - u4CurrTick) > LP_OWN_BACK_TOTAL_DELAY_MS) ? TRUE : FALSE;
+ 
+@@ -265,7 +271,13 @@
+ 
+ 		if ((i & (LP_OWN_BACK_CLR_OWN_ITERATION - 1)) == 0) {
+ 			/* Driver request LP ownership - per 256 iterations */
+-			HAL_MCR_WR(prAdapter, MCR_WHLPCR, WHLPCR_FW_OWN_REQ_CLR);
++			if (t1100_own_dbg)
++				DBGLOG(NIC, ERROR, "t1100: own i=%u plain WR WHLPCR (en=%d)\n",
++				       i, t1100_own_plain_wr);
++			if (t1100_own_plain_wr)
++				HAL_MCR_WR(prAdapter, MCR_WHLPCR, WHLPCR_FW_OWN_REQ_CLR);
++			if (t1100_own_dbg)
++				DBGLOG(NIC, ERROR, "t1100: own i=%u plain WR done\n", i);
+ 		}
+ 
+ 		/* T1100: once the FW sleeps, the plain register aperture is gated,
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -978,6 +978,14 @@
+ int t1100_no_fw_own = 1;
+ module_param(t1100_no_fw_own, int, 0444);
+ MODULE_PARM_DESC(t1100_no_fw_own, "T1100: never hand ownership back to the firmware");
++
++int t1100_own_dbg = 0;
++module_param(t1100_own_dbg, int, 0644);
++MODULE_PARM_DESC(t1100_own_dbg, "T1100: trace the driver-own polling loop");
++
++int t1100_own_plain_wr = 1;
++module_param(t1100_own_plain_wr, int, 0644);
++MODULE_PARM_DESC(t1100_own_plain_wr, "T1100: write WHLPCR through the plain aperture");
+ module_param(t1100_ready_trace, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_trace,
+ 		 "T1100: print cpupcr while waiting for the WLAN READY bit");
