@@ -5033,3 +5033,62 @@ ROM (0x594…0x18000), домен выключен/сброшен; если `spm
 (`driver_own`) и `CHLPCR` перед стартом, handshake через mailbox
 (`D2HRM0R = 0x02000020`), а также второй патч (`1_0`, `0x00098020` —
 его область ещё не читали). Патч 0031 — диагностика, лечения не содержит.
+
+### 86. M86: внутренний Wi-Fi заработал — `wlan0`, скан и ассоциация
+
+Барьером был не старт прошивки, а владение железом.  Как только FW забирало
+WLAN-блок (`nicpmSetFWOwn`/`nicEnableInterrupt` с LP own), HIF-окно
+(`0x180f0000`) отключалось: чтения возвращали нули, записи терялись, и
+`nicpmSetDriverOwn` больше никогда не получал BIT(8) — отсюда `LP fail,
+Timeout(516ms)` и `Power control is FW own!! ignore HAL_PORT_WR access!!`.
+Патч 0044 (побайтовая запись через CMD52 в `WHLPCR+1`) этого не исправил.
+
+Цепочка, которая довела до `wlan0`:
+
+- **0039** `stock start order` — вернули стоковый gate `fgIsFwOwn == TRUE ⇒
+  abort`, ровно один `wlanConfigWifiFunc(FALSE, 0)` и параметр
+  `t1100_stock_start`; рекурсивный `mtk_wcn_wmt_func_on(WIFI)` из 0028
+  выключен по умолчанию (`t1100_wmt_func_on=0`) — после этого driver-own
+  стал проходить (`DRIVER OWN, status=1 count=14`).
+- **0040** `t1100_mcr_dump` — все дампы MCR/HIF в окне старта выключены по
+  умолчанию (сток в этом окне читает только `WCIR`).
+- **0041** `quiet start window` — `wlanImageQueryStatus` и
+  `t1100_hif_state("after-download")` убраны под `t1100_readback`.
+- **0042** NVRAM из файла: `/mnt/vendor/nvdata/APCFG/APRDEB/WIFI` (1024
+  байта) читается в `g_aucNvram`, `fgNvramAvailable = TRUE`; MAC стал
+  реальным `08:26:ae:b1:87:39` вместо дефолтного.
+- **0043** `t1100_post_ready` — сэмпл состояния MCU сразу после READY
+  (диагностика, по умолчанию включён: печатает `post-ready-0`/`post-ready-later`).
+- **0044** CMD52 wake — не помог, оставлен как диагностика.
+- **0045** `t1100_no_fw_own=1` — `nicpmSetFWOwn()` не отдаёт владение
+  (`fgIsFwOwn = FALSE`), а `nicEnableInterrupt()` не включает LP own.  Это и
+  есть рабочий режим: MCU остаётся доступным, команды идут.
+
+Рабочая последовательность (после `systemctl reboot`):
+
+```sh
+modprobe wmt_drv t1100_quiet_ms=100          # CONSYS + два ROMv4-патча по BTIF/STP
+modprobe wlan_drv_gen3 t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=1 \
+         t1100_readback=0 t1100_ready_rx=0 t1100_mcr_dump=0 t1100_post_ready=0
+python3 /tmp/wmt_on.py                       # ioctl 0x4004A006 / 0xBEEF0003 на /dev/stpwmt
+```
+
+Что видно: `DRIVER OWN, status=1`, `WIFI_START override=0 addr=0 seq=3 ->
+status=0`, `Ready bit asserted`, `MAC address: 08:26:ae:b1:87:39`, `wlan0`
+создан (`NO-CARRIER`, admin UP), `iw dev wlan0 scan` возвращает 7 сетей
+(`TP-Link_3F9E`, `DIRECT-y0M2070 Series`, `TP-Link_651B`, `ASUS`,
+`MERCUSYS_8CB8`, `TP-Link_5E9C`, `home`), в dmesg идут `mtk_cfg80211_scan`,
+`scnSendScanReqV3`, `nicTxCmd TX CMD ID[0x03]`, `SCAN_STATE_SCAN_START`,
+`pmSetAllBcn2Mcu` — то есть FW живой и обслуживает команды.
+
+Ассоциация: профиль `home` был привязан к имени интерфейса донгла
+(`wlx502b73100fe8`) и на `wlan0` не активировался; после
+`nmcli con mod home connection.interface-name ""` и `nmcli con up home`:
+`Connected to 52:ff:20:8f:da:2d`, 5 ГГц канал 52, `-55 dBm`, TX 433 Mbit/s,
+DHCP `192.168.2.146/24`, `ping 1.1.1.1` 17 мс, `http://archive.ubuntu.com`
+→ 200, SSH по Wi-Fi работает.
+
+Ограничение: питание Wi-Fi пока без power save (`t1100_no_fw_own=1`) —
+wake-путь sleeping MCU на этом порте не найден; после включения PS
+HIF-окно гаснет и хост не может вернуть владение.  Это следующий шаг,
+но на работу `wlan0`/сети он не влияет.

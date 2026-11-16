@@ -1,0 +1,69 @@
+wlan: follow the stock WIFI_START path (driver-own gate, single override=0)
+
+The RE of the stock wlan_drv_gen3.ko (Aurora 4.14) shows that the vendor
+driver never sends an address override: wlanAdapterStart() calls
+wlanConfigWifiFunc(prAdapter, FALSE, 0) exactly once and only after
+nicpmSetDriverOwn() succeeded (fgIsFwOwn == FALSE).  Every start this port
+has sent so far used override=1 with an explicit address (0008/0036), and
+patch 0027 bypassed the driver-own gate because the MCIF handshake did not
+report FW_OWN_BACK.
+
+This patch adds t1100_stock_start (default 1): the driver-own gate is
+enforced again and only one override=0 start is sent.  The recursive
+mtk_wcn_wmt_func_on(WIFI) call from 0028 is disabled by default as well --
+WMT already invokes WLAN_PROBE itself, and the nested call only timed out.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -956,6 +956,13 @@
+ /* T1100: start the firmware at one explicit address and wait there */
+ static unsigned int t1100_start_addr;
+ module_param(t1100_start_addr, uint, 0444);
++/* T1100 M86: follow the stock start path exactly -- require driver-own and
++ * send a single wlanConfigWifiFunc(FALSE, 0) instead of address overrides.
++ */
++static int t1100_stock_start = 1;
++module_param(t1100_stock_start, int, 0444);
++MODULE_PARM_DESC(t1100_stock_start,
++		 "T1100: stock start order (driver-own gate, single override=0 start)");
+ MODULE_PARM_DESC(t1100_start_addr,
+ 		 "T1100: start the firmware at this address only (0 = default sequence)");
+ static int t1100_ready_trace = 1;
+@@ -974,7 +981,7 @@
+ module_param(t1100_ready_polls, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_polls, "T1100: poll count for the WLAN READY bit (10 ms each, 0 = default)");
+ static int t1100_reset_before_start;
+-static int t1100_wmt_func_on = 1;
++static int t1100_wmt_func_on = 0;
+ module_param(t1100_wmt_func_on, int, 0444);
+ MODULE_PARM_DESC(t1100_wmt_func_on, "T1100: switch the WIFI function on through wmt_drv before LP-OWN");
+ extern int t1100_pwr_on_done;	/* set by ahb.c: CONSYS already up (wmt_drv STP) */
+@@ -1097,7 +1104,7 @@
+ 		 * ROMv4 patch over BTIF/STP.  With the patched ROM the MCIF
+ 		 * driver-own handshake no longer succeeds, but the chip is
+ 		 * ours anyway -- continue with the firmware download. */
+-		if (prAdapter->fgIsFwOwn == TRUE && !t1100_pwr_on_done) {
++		if (prAdapter->fgIsFwOwn == TRUE && (!t1100_pwr_on_done || t1100_stock_start)) {
+ 			DBGLOG(INIT, ERROR, "nicpmSetDriverOwn() failed!\n");
+ 			u4Status = WLAN_STATUS_FAILURE;
+ 			eFailReason = DRIVER_OWN_FAIL;
+@@ -1354,9 +1361,10 @@
+ 			};
+ 			BOOLEAN fgReady = FALSE;
+ 			UINT_32 u4Try;
++			UINT_32 u4TryMax = t1100_stock_start ? 1 : 4;
+ 			char acTagStart[16];
+ 
+-			for (u4Try = 0; u4Try < 4 && fgReady == FALSE; u4Try++) {
++			for (u4Try = 0; u4Try < u4TryMax && fgReady == FALSE; u4Try++) {
+ 				if (t1100_start_addr && u4Try > 0)
+ 					break;
+ 				UINT_32 u4Cpupcr = 0;
+@@ -1372,7 +1380,6 @@
+ 					pr_info("t1100-start[%u]: pinned addr=0x%08x\n", u4Try, t1100_start_addr);
+ 					wlanConfigWifiFunc(prAdapter, TRUE, t1100_start_addr);
+ 				} else if (au4Start[u4Try] == 0xffffffff)
+-				if (au4Start[u4Try] == 0xffffffff)
+ 					wlanConfigWifiFunc(prAdapter, FALSE, 0);
+ 				else
+ 					wlanConfigWifiFunc(prAdapter, TRUE, au4Start[u4Try]);

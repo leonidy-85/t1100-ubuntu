@@ -1,0 +1,32 @@
+wlan: keep the start-window diagnostics behind t1100_readback
+
+The stock driver, right after the firmware sections are downloaded, goes
+straight to wlanConfigWifiFunc(FALSE, 0) and then polls WCIR for
+WCIR_WLAN_READY.  Our port still issued two unconditional diagnostics in
+that window: an INIT_CMD_ID_QUERY_PENDING_ERROR (wlanImageQueryStatus)
+and the t1100_hif_state("after-download") register dump, which reads
+WCIR/WASR/D2HRM0R/CPUPCR/WHLPCR plus the raw HIF window and SPM state.
+
+Both now live under t1100_readback, so a run with t1100_readback=0 keeps
+the start window byte-for-byte as quiet as the vendor path.
+
+Signed-off-by: T1100 port <t1100@localhost>
+---
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -1314,13 +1314,13 @@
+ 		 * just received (INIT_CMD_ID_QUERY_PENDING_ERROR). With
+ 		 * CFG_ENABLE_FW_DOWNLOAD_ACK=1 the normal path never does this.
+ 		 */
+-		{
++		if (t1100_readback) {
+ 			WLAN_STATUS u4QueryStatus = wlanImageQueryStatus(prAdapter);
+ 
+ 			pr_info("t1100-query: wlanImageQueryStatus() -> %u (0=ok)\n",
+ 				(UINT_32)u4QueryStatus);
++			t1100_hif_state(prAdapter, "after-download");
+ 		}
+-		t1100_hif_state(prAdapter, "after-download");
+ 
+ 		/*
+ 		 * T1100 M22: hand the ROMv4 patch to the MCU ROM before asking it

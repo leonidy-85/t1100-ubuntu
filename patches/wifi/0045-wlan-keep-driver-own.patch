@@ -1,0 +1,65 @@
+From: t1100-ubuntu <dev@t1100>
+Subject: [PATCH] wlan: keep driver ownership so the MCU stays awake
+
+As soon as the firmware owns the WLAN hardware it gates its HIF clock: reads
+through the register aperture return zero and writes are dropped.  The MCU
+then never grants ownership back ("LP fail, Timeout(516ms)") and every command
+fails with "Power control is FW own!! ignore HAL_PORT_WR access!!".
+
+Until the wake path is understood, keep driver ownership: nicpmSetFWOwn()
+becomes a no-op (fgIsFwOwn = FALSE) and nicEnableInterrupt() no longer sets
+LP own together with the interrupt.  Power save is off, but the MCU stays
+reachable and the driver can send commands.
+
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -970,6 +970,14 @@
+ module_param(t1100_post_ready, int, 0444);
+ MODULE_PARM_DESC(t1100_post_ready,
+ 		 "T1100: dump the MCU state right after the WLAN READY bit");
++
++/* T1100: keep driver ownership of the WLAN hardware.  A sleeping firmware
++ * stops answering the HIF register aperture on this port, so the driver could
++ * never take the MCU back; bring-up therefore runs without power save.
++ */
++int t1100_no_fw_own = 1;
++module_param(t1100_no_fw_own, int, 0444);
++MODULE_PARM_DESC(t1100_no_fw_own, "T1100: never hand ownership back to the firmware");
+ module_param(t1100_ready_trace, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_trace,
+ 		 "T1100: print cpupcr while waiting for the WLAN READY bit");
+--- a/nic/nic_pwr_mgt.c
++++ b/nic/nic_pwr_mgt.c
+@@ -85,8 +85,15 @@
+ 	UINT_32 u4RegValue = 0;
+ 	BOOLEAN fgHifFwOwn = TRUE;
+ 
++	extern int t1100_no_fw_own;
++
+ 	ASSERT(prAdapter);
+ 
++	if (t1100_no_fw_own) {
++		prAdapter->fgIsFwOwn = FALSE;
++		return;
++	}
++
+ 	HAL_MCR_RD(prAdapter, MCR_WHLPCR, &u4RegValue);
+ 	fgHifFwOwn = !(u4RegValue & WHLPCR_FW_OWN_REQ_SET);
+ 	if (fgHifFwOwn != prAdapter->fgIsFwOwn) {
+--- a/nic/nic.c
++++ b/nic/nic.c
+@@ -357,6 +357,14 @@
+ 	BOOLEAN fgIsIntEnableCache;
+ 
+ 	ASSERT(prAdapter);
++
++	{
++		extern int t1100_no_fw_own;
++
++		if (t1100_no_fw_own)
++			prAdapter->fgIsIntEnableWithLPOwnSet = FALSE;
++	}
++
+ 	fgIsIntEnableCache = prAdapter->fgIsIntEnable;
+ 
+ 	prAdapter->fgIsIntEnable = TRUE;	/* NOTE(Kevin): It must be placed before MCR GINT write. */

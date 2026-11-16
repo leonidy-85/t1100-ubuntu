@@ -1,0 +1,47 @@
+wlan: sample the MCU right after the WLAN READY bit
+
+M88: the READY bit now rises and the WLAN probe completes, but a few
+hundred milliseconds later the MCU stops answering the driver-own
+handshake (WHLPCR bit 8 never returns) and the scan times out.  This is
+diagnostic only: right after READY the patch reads the MCU state once,
+tries one driver-own handshake, releases it again and then samples
+cpupcr/WHLPCR/WCIR five times, 200 ms apart.  That tells whether the
+firmware is still running (cpupcr moves) or has already halted.
+
+Controlled by t1100_post_ready (default 1).
+--- a/common/wlan_lib.c
++++ b/common/wlan_lib.c
+@@ -966,6 +966,10 @@
+ MODULE_PARM_DESC(t1100_start_addr,
+ 		 "T1100: start the firmware at this address only (0 = default sequence)");
+ static int t1100_ready_trace = 1;
++static int t1100_post_ready = 1;
++module_param(t1100_post_ready, int, 0444);
++MODULE_PARM_DESC(t1100_post_ready,
++		 "T1100: dump the MCU state right after the WLAN READY bit");
+ module_param(t1100_ready_trace, int, 0444);
+ MODULE_PARM_DESC(t1100_ready_trace,
+ 		 "T1100: print cpupcr while waiting for the WLAN READY bit");
+@@ -1464,6 +1468,22 @@
+ 			if (t1100_readback)
+ 				t1100_mem_dump(prAdapter, 0x000a5800, 4, "after-start");
+ 
++			/* T1100 M88: what does the MCU do right after READY? */
++			if (fgReady && t1100_post_ready) {
++				BOOLEAN fgOwn;
++				int i4K;
++
++				t1100_hif_state(prAdapter, "post-ready-0");
++				fgOwn = nicpmSetDriverOwn(prAdapter);
++				pr_info("t1100-post: driver own right after READY -> %d\n", fgOwn);
++				if (fgOwn)
++					nicpmSetFWOwn(prAdapter, FALSE);
++				for (i4K = 0; i4K < 5; i4K++) {
++					kalMsleep(200);
++					t1100_hif_state(prAdapter, "post-ready-later");
++				}
++			}
++
+ 			if (fgReady == FALSE && t1100_warm_reset && !t1100_redownloaded) {
+ 				/* T1100 M55: the warm reset wipes the MCU RAM, so the
+ 				 * RAM image must be downloaded again before a second

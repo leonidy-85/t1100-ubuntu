@@ -1,0 +1,74 @@
+From: t1100-ubuntu <dev@t1100>
+Subject: [PATCH] wlan: wake a sleeping MCU with a CMD52 driver-own request
+
+The HIF register aperture is a plain memory window on this port
+(ahb_sdioLike).  Once the WLAN firmware takes ownership it gates its clock
+and the window stops answering: reads return zero and writes are dropped.
+That is visible right after the READY bit, when nicpmSetDriverOwn() starts
+failing with "LP fail, Timeout(516ms)" and the MCU stays asleep forever.
+
+The vendor HIF does not use the plain aperture for this handshake: it
+issues a CMD52 byte write to WHLPCR byte 1 (COHEC_00006052).  This patch
+adds the same primitive for the AHB HIF and repeats the driver-own request
+(WHLPCR_FW_OWN_REQ_CLR, bit 9) through it every 64 polling iterations.
+With a working byte path the request reaches the always-on part of the HIF
+controller and the MCU can be woken again.
+
+--- a/os/linux/hif/ahb_sdioLike/ahb.c
++++ b/os/linux/hif/ahb_sdioLike/ahb.c
+@@ -584,6 +584,38 @@
+ 	return TRUE;
+ }				/* end of kalDevRegWrite() */
+ 
++/*----------------------------------------------------------------------------*/
++/*!
++ * \brief Write one byte through the SDIO-like CMD52 port.
++ *
++ * The plain register aperture (HIF_REG_WRITEL) does not reach the MCU once the
++ * WLAN firmware has taken ownership and gated its clock.  The vendor HIF uses
++ * a CMD52 byte write for the driver-own handshake (COHEC_00006052), so expose
++ * the same primitive here.
++ */
++BOOLEAN kalDevWriteWithSdioCmd52(IN P_GLUE_INFO_T prGlueInfo, IN UINT_32 u4Addr, IN UINT_8 ucData)
++{
++	sdio_gen3_cmd52_info info;
++
++	info.word = 0;
++	info.field.rw_flag = SDIO_GEN3_WRITE;
++	info.field.func_num = 0;
++	info.field.addr = u4Addr;
++	info.field.data = ucData;
++
++	my_sdio_disable(HifLock);
++	__disable_irq();
++
++	writel(info.word, (volatile UINT_32 *)(*g_pHifRegBaseAddr + SDIO_GEN3_CMD_SETUP));
++	writel(ucData, (volatile UINT_32 *)(*g_pHifRegBaseAddr + SDIO_GEN3_CMD52_DATA));
++
++	__enable_irq();
++	my_sdio_enable(HifLock);
++
++	DBGLOG(HAL, TRACE, "t1100: CMD52 write 0x%x = 0x%02x\n", u4Addr, ucData);
++	return TRUE;
++}				/* end of kalDevWriteWithSdioCmd52() */
++
+ 
+ /*----------------------------------------------------------------------------*/
+ /*!
+--- a/nic/nic_pwr_mgt.c
++++ b/nic/nic_pwr_mgt.c
+@@ -261,6 +261,14 @@
+ 			HAL_MCR_WR(prAdapter, MCR_WHLPCR, WHLPCR_FW_OWN_REQ_CLR);
+ 		}
+ 
++		/* T1100: once the FW sleeps, the plain register aperture is gated,
++		 * so repeat the request as a CMD52 byte write (vendor COHEC_00006052).
++		 */
++		if ((i & 63) == 0 &&
++		    kalDevWriteWithSdioCmd52(prAdapter->prGlueInfo, MCR_WHLPCR + 1,
++					     (UINT_8)(WHLPCR_FW_OWN_REQ_CLR >> 8)))
++			DBGLOG(NIC, INFO, "t1100: CMD52 driver-own request (i=%u)\n", i);
++
+ 		/* Delay for LP engine to complete its operation. */
+ 		kalUsleep_range(LP_OWN_BACK_LOOP_DELAY_MIN_US, LP_OWN_BACK_LOOP_DELAY_MAX_US);
+ 		i++;
