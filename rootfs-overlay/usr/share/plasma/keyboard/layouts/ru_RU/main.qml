@@ -38,8 +38,8 @@ KeyboardLayout {
     }
     KeyboardRow {
         Layout.fillHeight: false
-        Layout.preferredHeight: 78
-        Layout.maximumHeight: 96
+        Layout.preferredHeight: 60
+        Layout.maximumHeight: 72
         Key { Layout.minimumHeight: 0; key: Qt.Key_Escape; displayText: "Esc" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F1; displayText: "F1" }
         Key { Layout.minimumHeight: 0; key: Qt.Key_F2; displayText: "F2" }
