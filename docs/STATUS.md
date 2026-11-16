@@ -5217,3 +5217,35 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `0`; в юните параметр больше не передаётся.
 - Модули: `wlan_drv_gen3.ko` `f4d5545a…` (0043 с дефолтом 0), `wmt_drv.ko`
   `73256ebb…`, `mtk_btif_drv.ko` `92d4740c…`.
+
+## 16.11 (6): встроенный Bluetooth работает (STP HCI, скан, A2DP)
+
+- Написан свой HCI-драйвер `bt/t1100_bt.c` (модуль `t1100_bt`) поверх
+  вендорского STP/BTIF: `wmt_func_on(BT)` → `mtk_wcn_stp_register_if_rx` →
+  `hci_alloc_dev`/`hci_register_dev`, отправка через `mtk_wcn_stp_send_data`
+  (type 0). Пробник `bt/t1100_bt_probe.c` оставлен для диагностики.
+- Пришлось достроить userspace-обвязку ядра: в rootfs не было `bluetooth.ko`
+  (BT=m), `ecc.ko`, `ecdh_generic.ko`, `af_alg.ko` и `algif_*`; bluetoothd
+  использует AF_ALG для ключей. Модули собраны из `out-wifi` и разложены в
+  `/lib/modules/6.12.114-wifi1/kernel/`.
+- Найдена и исправлена ошибка дерева: `l2cap_sock_ops` заполнял только
+  `.getsockopt_iter`, а `net/socket.c` вызывает `.getsockopt` → любой
+  L2CAP getsockopt давал `-EOPNOTSUPP`, bluetoothd не мог создать GATT db
+  (`Failed to start listening: getsockopt(L2CAP_OPTIONS)`) и не регистрировал
+  адаптер. Патч `0077-bluetooth-l2cap-restore-the-old-getsockopt-abi.patch`
+  добавляет совместимую обёртку старого ABI.
+- В `configs/t1100-wifi.fragment` добавлены `CONFIG_BT_LE=y`,
+  `CONFIG_BT_BNEP=m`, `CONFIG_BT_RFCOMM=m`, `CONFIG_CRYPTO_USER_API_*`.
+- Проверено на планшете: `bluetoothctl list` → `Controller 00:00:46:07:88:01
+  t1100 [default]`; скан находит `EDIFIER D12` (0C:AE:BD:AA:E5:6B); pair/trust/
+  connect проходят (`Paired: yes`, `Bonded: yes`, `Connected: yes`), в логе
+  создан A2DP-транспорт `sep1/fd0` (UUID Audio Sink 0x110b, AVRCP).
+- Автозапуск: `rootfs-overlay/etc/systemd/system/t1100-bt.service` →
+  `/usr/local/sbin/t1100-bt-up` (af_alg/algif/ecc → `bluetooth` → `t1100_bt`),
+  `Before=bluetooth.service`; проверено `systemctl restart t1100-bt` — адаптер
+  регистрируется без перезагрузки.
+- НЕ сделано: прошивка BT (`soc3_0_ram_bt_1_1_hdr.bin`) не загружается —
+  контроллер работает на ROM-коде; BD-адрес дефолтный `00:00:46:07:88:01`
+  (надо брать из NVRAM); звук через PipeWire и coex с Wi-Fi ещё не проверялись.
+- Модули: `bluetooth.ko` `9a527bbb…` (0077), `t1100_bt.ko` `d4a8d045…`,
+  `bnep`/`rfcomm`/`af_alg`/`algif_*`/`ecc`/`ecdh_generic` — из `out-wifi`.

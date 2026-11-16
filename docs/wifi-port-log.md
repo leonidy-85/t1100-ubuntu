@@ -5106,3 +5106,32 @@ MCR_WASR2: 0x60104` (`FW_OWN_INVALID_ACCESS`) и `glResetTrigger` ушёл в
 на 0, юнит не передаёт параметр.  С ним загрузка даёт `DRIVER OWN, status=1
 count=16`, `Ready bit asserted`, `wlan0 UP 192.168.2.146/24`, автоподключение
 `home` и ноль `LP fail`/`Whole chip reset` в журнале.
+
+## §88 (M88). Bluetooth: STP HCI-драйвер и восстановление L2CAP getsockopt
+
+Цель — завести встроенный BT MT6631 (CONSYS_6771), который в вендоре висит на
+том же WMT/STP, что и Wi-Fi.
+
+Что сделано:
+
+- `bt/t1100_bt.c`: HCI-драйвер на экспортах `wmt_drv` — `mtk_wcn_wmt_func_on(0)`,
+  `mtk_wcn_stp_set_bluez(1)`, `mtk_wcn_stp_register_if_rx()` (в bluez-режиме STP
+  отдаёт BT-пакеты не в rx-очередь, а в if_rx callback),
+  `mtk_wcn_stp_send_data(..., type=0)`, `hci_alloc_dev`/`hci_register_dev`.
+- `bt/t1100_bt_probe.c` — диагностический пробник (HCI Reset и hexdump RX);
+  именно он подтвердил транспорт: `04 0e 04 01 03 0c 00`.
+- rootfs: не хватало `bluetooth.ko`, `ecc.ko`, `ecdh_generic.ko`, `af_alg.ko`,
+  `algif_skcipher/hash/aead.ko` — bluetoothd ходит в AF_ALG за ключами.
+- Дерево: `l2cap_sock_ops` имел только `.getsockopt_iter`, а `net/socket.c`
+  вызывает `.getsockopt` → `-EOPNOTSUPP` на `getsockopt(SOL_L2CAP,
+  L2CAP_OPTIONS)`, из-за чего `btd_gatt_database_new()` падал и bluetoothd
+  не регистрировал адаптер. Патч 0077 добавляет обёртку старого ABI
+  (`iov_iter_ubuf` + `struct sockopt`).
+- Конфиг: `CONFIG_BT_LE=y` (BlueZ 5.85 требует LE для GATT даже на BR/EDR),
+  `BNEP`/`RFCOMM`, `CRYPTO_USER_API_SKCIPHER/HASH/AEAD`.
+
+Результат: `hci0` (`00:00:46:07:88:01`, MT0788), скан BR/EDR, паровка и A2DP
+с `EDIFIER D12`; автозапуск через `t1100-bt.service`.
+
+Ограничения: BT-прошивка (`soc3_0_ram_bt_1_1_hdr.bin`) не скачивается,
+контроллер на ROM-коде; MAC не из NVRAM; звук/coex не проверены.

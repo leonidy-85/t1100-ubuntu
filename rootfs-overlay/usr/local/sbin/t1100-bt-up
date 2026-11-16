@@ -1,0 +1,13 @@
+#!/bin/sh
+# Поднять встроенный Bluetooth MT6631 (CONSYS_6771): HCI-транспорт STP/BTIF.
+set -e
+
+# bluetoothd использует AF_ALG для вывода ключей
+modprobe af_alg 2>/dev/null || true
+modprobe algif_skcipher 2>/dev/null || true
+modprobe algif_hash 2>/dev/null || true
+modprobe algif_aead 2>/dev/null || true
+modprobe ecdh_generic 2>/dev/null || true
+
+modprobe bluetooth
+modprobe t1100_bt
