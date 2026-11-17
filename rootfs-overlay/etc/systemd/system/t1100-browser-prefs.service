@@ -1,0 +1,15 @@
+[Unit]
+Description=T1100: раскладывает настройки браузера (/etc/librewolf/user.js) в профили LibreWolf
+Documentation=https://gitflic.ru/project/py6on/t1100-ubuntu/blob/master/docs/browser.md
+# Профилей может не быть (браузер ещё не запускали) — тогда юнит просто ничего
+# не делает; повторный запуск вручную: systemctl start t1100-browser-prefs
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/t1100-browser-prefs.sh
+SyslogIdentifier=t1100-browser-prefs
+
+[Install]
+WantedBy=multi-user.target
