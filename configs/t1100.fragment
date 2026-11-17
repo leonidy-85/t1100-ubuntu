@@ -42,6 +42,11 @@ CONFIG_REGULATOR=y
 CONFIG_RTC_DRV_MT6397=y
 CONFIG_KEYBOARD_MTK_PMIC=y
 CONFIG_KEYBOARD_GPIO=y
+# uinput: инъекция ввода для автопроверок на живой сессии (ydotool). Нужен,
+# чтобы отделить «шейдерный» таймаут панофроста от гонки с devfreq: клик по
+# play без него не сделать (wtype не работает — KWin без virtual-keyboard-v1).
+# См. docs/panfrost-plan.md, раздел 18.11.
+CONFIG_INPUT_UINPUT=y
 
 # --- storage (eMMC boot device + microSD) ----------------------------------
 CONFIG_MMC=y
