@@ -5665,3 +5665,30 @@ power-cycle; починили из recovery на `mmcblk0p54`: `ln -s usr/lib /l
 в `tools/host/deploy-overlay.sh` — `tar --keep-directory-symlink` и проверка,
 что `/lib`, `/bin`, `/sbin` остались symlink-ами. Повторный деплой проверен:
 `/lib` цел, все три юнита активны.
+
+### 17.11 (2): `t1100_own_max=128` по умолчанию — клин в own-цикле снят
+
+Подробности — `docs/wifi-port-log.md` §96.
+
+- **Бисекция** (сборка под `6.12.114-wifi1` из `out-wifi`, `wlan_drv_gen3` с
+  патчем 0048): 16 — жива (`status=0 count=16`), 64 — жива (`count=64`),
+  128 — жива (`count=128`), **192 — клин**. На 192 обрыв случился ещё
+  **до** цикла own (лог кончается на `Reset ALL DBG module log level`), т.е.
+  лимитер не успевает; похоже на протухшее состояние CONSYS после `sysrq-b`.
+  Watchdog поднял плату сам за ~10 с.
+- **Лимит по умолчанию:** `t1100_own_max = 128`, текст ошибки —
+  `t1100: own timeout after %u polls, aborting`; при достижении —
+  `fgStatus = FALSE`, обращения к окну после лимита нет. Патч `0048`
+  переписан под базу без 0046 (иначе не применяется).
+- **Контрольный прогон** (§86 + `t1100_pwr_on_done=0`, без параметра):
+  `own timeout after 128 polls, aborting` → `DRIVER OWN, status=0 count=128`
+  → `wlanProbe failed` → `CONSYS-HW-PWR-OFF`; плата **жива**, `usb0`/ssh на
+  месте, ресетов в dmesg нет.
+- **Модуль:** `wlan_drv_gen3.ko` `985c93be…` (2 970 160 Б, vermagic
+  `6.12.114-wifi1`), разложен в `updates/wifi/`; прежний `8410dc20…` — в
+  `/root/wifi-backup-wifi1/`. `wmt_drv` `d34c24da…`, `mtk_btif_drv` `92d4740c…`
+  не менялись. `t1100-wifi.service` остаётся **masked**.
+- **Что не сделано:** `wlan0` нет — own по-прежнему не приходит; лимит только
+  заменил клин на штатную ошибку. Следующий шаг — не увеличивать лимит, а
+  понять, почему MCU не выставляет `WHLPCR_FW_OWN_REQ_SET` (по §95 работает
+  только в первые секунды после холодного включения).

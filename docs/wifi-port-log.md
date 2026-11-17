@@ -5505,3 +5505,74 @@ nicpmSetDriverOwn: DRIVER OWN, status=1 count=16
 3. Проверить, не влияет ли **порядок**: в рабочем логе boot-work сначала падал
    3 раза (`WMT-CORE: no hif info!`) и перезапускался; у нас он проходит сразу.
    Это меняет момент, когда MCU получает ROMv4-патч относительно `wmt_lib_*`.
+
+## §96. M96 — `t1100_own_max`: бисекция лимита, клин заменён на штатную ошибку
+
+Задача — перестать вешать SoC в `nicpmSetDriverOwn()`. Патч `0048` даёт
+ограничитель итераций `t1100_own_max=N` (проверка в начале цикла, до
+`HAL_MCR_RD(MCR_WHLPCR)`), при достижении — `DBGLOG(NIC, ERROR,
+"t1100: own timeout after %u polls, aborting")`, `fgStatus = FALSE`, `break`,
+т.е. штатный отказ вместо клина.
+
+Сборка: приватное дерево `/home/l/t1100-wifi-build-own48` (его линия без наших
+0015/0019, 0046/0047 нет, 0044/0045/0048 есть), `KERNEL_OUT=
+/home/l/t1100-ubuntu-build/out-wifi` (release `6.12.114-wifi1`, WEXT/TESTMODE=y,
+cfg80211/mac80211 =y), `LOCALVERSION=-wifi1`. На плате — `wmt_drv` `d34c24da…`
+и `mtk_btif_drv` `92d4740c…` из «рабочей эпохи», менялся только `wlan_drv_gen3`.
+
+### Бисекция (`modprobe wlan_drv_gen3 … t1100_pwr_on_done=0 t1100_own_max=N`)
+
+| `t1100_own_max` | плата через 10 с | строка own | лог |
+|---|---|---|---|
+| 16 | **жива**, ssh есть | `DRIVER OWN, status=0 count=16` | `/root/own-16.log` |
+| 64 | **жива** | `DRIVER OWN, status=0 count=64` (`own give-up at i=64 dt=68`) | `/root/own-64.log` |
+| 128 | **жива** | `DRIVER OWN, status=0 count=128` (`dt=132`) | `/root/own-128.log` |
+| 192 | **клин** | до цикла own не дошло | `/root/own-192.log` |
+
+Про 192: лог обрывается на `[51.363562] [wlan]Reset ALL DBG module log level to
+DEFAULT!`, т.е. **внутри `initWlan()` до `nicpmSetDriverOwn`** — лимитер там
+ещё не работает. Похоже на «протухшее» состояние CONSYS после мягкой
+перезагрузки (`sysrq-b` не перезапускает MCU): окно уже погашено, и первое же
+обращение в `HifAhbPltmProbe`/`createWirelessDevice` вешает шину. Аппаратный
+watchdog (`RuntimeWatchdogSec=10s`) поднял плату сам за ~10 с, физический цикл
+питания не понадобился. Вывод: 192 считать небезопасным, потолок — **128**.
+
+### Лимит по умолчанию
+
+В `patches/wifi/0048-wlan-own-loop-trace.patch`: `int t1100_own_max = 128;`
+(было `0`), текст ошибки — `"t1100: own timeout after %u polls, aborting\n"`.
+Контекст хунка переписан под базу без 0046 (`t1100_ready_trace` вместо
+`t1100_wext_compat`), иначе патч не применяется.
+
+Модуль: `wlan_drv_gen3.ko` `985c93be…` (2 970 160 Б), vermagic
+`6.12.114-wifi1`; разложен в `/lib/modules/6.12.114-wifi1/updates/wifi/`,
+прежний `8410dc20…` — в `/root/wifi-backup-wifi1/`.
+
+### Контрольный прогон (без параметра `t1100_own_max`)
+
+`modprobe wmt_drv t1100_quiet_ms=100` (btif_stp=1 и rom_patch из
+`modprobe.d`) → `modprobe wlan_drv_gen3 t1100_probe=0 t1100_rom_patch_mcif=0
+t1100_pwr_on_done=0` → `/usr/local/sbin/t1100-wifi-func-on` под `timeout 20`
+(`/root/ctrl-128.log`):
+
+```
+[303.776746] nicpmSetDriverOwn: t1100: CMD52 driver-own request (i=0)
+[303.842124] nicpmSetDriverOwn: t1100: CMD52 driver-own request (i=64)
+[303.907699] nicpmSetDriverOwn:(NIC ERROR) t1100: own timeout after 128 polls, aborting
+[303.907730] nicpmSetDriverOwn:(NIC INFO) DRIVER OWN, status=0 count=128
+[303.908166] [wlan]wlanProbe:(INIT ERROR) wlanProbe failed
+[303.908963] [WMT-CONSYS-HW][I]mtk_wcn_consys_hw_pwr_off:CONSYS-HW-PWR-OFF, finish(0)
+[303.909117] [HIF-SDIO][W]mtk_wcn_wmt_func_ctrl:OPID(32) type(3) fail
+[303.909210] [HIF-SDIO][I]WMT_close:last call
+```
+
+Плата жива, `usb0`/ssh на месте, в dmesg нет `whole chip reset`/`MCR_WASR`,
+CONSYS корректно выключается. Числового кода в строке `wlanProbe failed` нет
+(в этой сборке сообщение без `(-5)`); ioctl возвращает `-1`/`EFAULT`, helper
+трактует это как успех по контракту.
+
+Итог: клин в own-цикле больше не воспроизводится — на лимите драйвер сам
+возвращает FALSE, `wlanProbe` завершается ошибкой, `wlan0` не создаётся.
+Дальше — не увеличивать лимит, а выяснять, почему MCU не выставляет
+`WHLPCR_FW_OWN_REQ_SET` (по §95: работает только в первые секунды после
+холодного включения).
