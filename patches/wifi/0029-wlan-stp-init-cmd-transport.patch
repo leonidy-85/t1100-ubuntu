@@ -243,7 +243,7 @@ diff -u -N -r a/common/wlan_lib.c b/common/wlan_lib.c
 +		pr_info("t1100-%s: section-config dst=0x%08x len=%u reset=%u -> status=%u (0=ok)\n",
 +			t1100_hif == T1100_HIF_STP ? "stp" : "mcif",
  			u4DestAddr, u4ImgSecSize, fgReset, u4Status);
- 		if (fgReset)
+ 		if (fgReset && t1100_mcr_dump)
  			t1100_dump_mcr(prAdapter, "after-first-section-config");
 @@ -3518,7 +3613,7 @@
  	kalMemCopy(prInitHifTxHeader->rInitWifiCmd.aucBuffer, pucImgSecBuf, u4ImgSecSize);

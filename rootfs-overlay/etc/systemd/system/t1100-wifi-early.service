@@ -1,0 +1,24 @@
+[Unit]
+Description=T1100: внутренний Wi-Fi (CONSYS/MT6631) максимально рано при загрузке
+Documentation=https://gitflic.ru/project/py6on/t1100-ubuntu
+# Зачем «рано»: MCU отдаёт driver-own только в узком окне после холодного
+# включения (единственный удачный прогон — журнал 16.11 11:47, count=16).
+# Поднимаем модули до того, как пользователь успеет зайти по ssh.
+# Подробности: docs/wifi-port-log.md §86, §95–§96; docs/wifi-handover.md.
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service systemd-udev-settle.service
+After=mnt-vendor-nvdata.mount
+Wants=mnt-vendor-nvdata.mount
+Before=multi-user.target
+ConditionPathExistsGlob=/lib/modules/*/updates/wifi/wmt_drv.ko
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/t1100-wifi-start
+# Скрипт сам завершается с 0 при неудаче; таймаут — страховка от зависания.
+TimeoutStartSec=60
+SyslogIdentifier=t1100-wifi-start
+
+[Install]
+WantedBy=multi-user.target

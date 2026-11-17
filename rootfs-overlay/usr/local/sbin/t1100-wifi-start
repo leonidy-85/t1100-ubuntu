@@ -1,0 +1,47 @@
+#!/bin/sh
+# T1100: поднять внутренний Wi-Fi как можно раньше после загрузки.
+#
+# Зачем отдельный скрипт: единственный удачный прогон (журнал 16.11 11:47)
+# показал, что MCU отдаёт driver-own только в узком окне после холодного
+# включения (`DRIVER OWN, status=1 count=16`), а если потрогать CONSYS позже —
+# `WHLPCR` читается нулями и own не приходит. Поэтому последовательность
+# §86 из docs/wifi-port-log.md должна стартовать раньше, чем пользователь
+# успеет зайти по ssh.
+#
+# Шаги:
+#  1. modprobe wmt_drv  — boot-work поднимает CONSYS по BTIF/STP и заливает
+#     два ROMv4-патча (файлы берутся из modprobe.d/99-t1100-wifi.conf);
+#  2. modprobe wlan_drv_gen3 с t1100_probe=0 — модуль только регистрирует
+#     callback, probe запускает ioctl ниже;
+#  3. ioctl WMT_IOCTL_FUNC_ONOFF_CTRL на /dev/stpwmt — «включить WLAN-функцию»,
+#     из него вызывается wlanProbe() и появляется wlan0.
+#
+# Патч 0048 ограничивает ожидание own (t1100_own_max=128), поэтому при неудаче
+# скрипт завершается ошибкой, но плату больше не вешает.
+set -u
+
+WMT_PARAMS="t1100_quiet_ms=100"
+WLAN_PARAMS="t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=0"
+
+echo "t1100-wifi-start: modprobe wmt_drv"
+modprobe wmt_drv $WMT_PARAMS || { echo "wmt_drv: modprobe failed"; exit 1; }
+
+# Boot-work асинхронный: даём ему поднять домен и залить патчи.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -e /dev/stpwmt ] && break
+	sleep 0.2
+done
+
+if [ ! -e /dev/stpwmt ]; then
+	echo "t1100-wifi-start: /dev/stpwmt не появился (boot-work не отработал)"
+	exit 1
+fi
+
+echo "t1100-wifi-start: modprobe wlan_drv_gen3"
+modprobe wlan_drv_gen3 $WLAN_PARAMS || { echo "wlan_drv_gen3: modprobe failed"; exit 1; }
+
+echo "t1100-wifi-start: func on (ioctl)"
+/usr/local/sbin/t1100-wifi-func-on
+rc=$?
+echo "t1100-wifi-start: helper rc=$rc"
+exit 0

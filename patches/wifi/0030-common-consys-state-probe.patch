@@ -78,7 +78,7 @@ diff -u -N -r a/common_main/core/wmt_ic_soc.c b/common_main/core/wmt_ic_soc.c
 diff -u -N -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
 --- a/common_main/platform/mt6771.c	2026-11-16 00:07:46.194543821 +0300
 +++ b/common_main/platform/mt6771.c	2026-11-16 00:31:19.096913875 +0300
-@@ -1409,6 +1409,76 @@
+@@ -1409,6 +1409,87 @@
  	return PLATFORM_SOC_CHIP;
  }
  
@@ -106,9 +106,20 @@ diff -u -N -r a/common_main/platform/mt6771.c b/common_main/platform/mt6771.c
 + * window offsets are the STP/WLAN "function 0/1" block layout (CCIR 0x00,
 + * CHLPCR 0x04, CHCR 0x0c, CHISR 0x10, CTFSR 0x20).
 + */
++/* T1100 M96: the state dump reads SPM and the WLAN HIF window, which is
++ * exactly what wedges the bus when the domain does not answer; keep it for
++ * diagnostics only, never in the normal start window.
++ */
++static int t1100_consys_dbg;
++module_param(t1100_consys_dbg, int, 0444);
++MODULE_PARM_DESC(t1100_consys_dbg, "T1100: dump the CONSYS/SPM/HIF state (diagnostics)");
++
 +VOID t1100_consys_state(const char *pcTag)
 +{
 +	static UINT8 __iomem *wlan_hif;
++
++	if (!t1100_consys_dbg)
++		return;
 +	UINT32 u4Spm = 0, u4Ack = 0, u4Cpupcr = 0;
 +	UINT32 u4Ccir = 0, u4Chlpcr = 0, u4Chcr = 0, u4Chisr = 0;
 +	UINT32 u4Ctf = 0;

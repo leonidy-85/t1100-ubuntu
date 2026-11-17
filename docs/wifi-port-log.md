@@ -5576,3 +5576,67 @@ CONSYS корректно выключается. Числового кода в
 Дальше — не увеличивать лимит, а выяснять, почему MCU не выставляет
 `WHLPCR_FW_OWN_REQ_SET` (по §95: работает только в первые секунды после
 холодного включения).
+
+## §97. M97 — «тихая» сборка: лишние MCIF-команды убраны, READY встаёт
+
+Продолжение §95–§96. Прорыв был в раннем запуске (`t1100-wifi-early.service`):
+own приходит только в узком окне после старта. Но в том прогоне `WIFI_START`
+шёл с `seq=33` вместо `seq=3` — диагностические дампы сами гоняли MCIF-команды
+(`t1100_mem_dump()` через `INIT_CMD_ID_ACCESS_REG`, `wlanImageQueryStatus()`,
+`t1100_hif_state()`), и к моменту старта MCU был уже «занят» ими.
+
+### Что выключено по умолчанию
+
+| патч | параметр | было → стало | что перестало ходить в MCIF/MCR |
+|---|---|---|---|
+| `0018` | `t1100_readback` | 1 → 0 | `t1100_mem_dump()` (ACCESS_REG), `wlanImageQueryStatus()`, `t1100_hif_state("after-download"/"after-reset…")`, `t1100_emi_check` (вложен в него) |
+| `0018` | `t1100_stp_probe_en` | 1 → 0 | разовый дамп регистров STP/function-0/1/2 после power-on |
+| `0035` | `t1100_ready_trace` | 1 → 0 | `wlanGetCpupcr()` в цикле ожидания READY |
+| `0037` | `t1100_ready_rx` | 1 → 0 | чтения ISR RX во время ожидания READY |
+| `0030` | `t1100_consys_dbg` (новый) | — → 0 | `t1100_consys_state()` (SPM `0x1000632c`, ack, cpupcr и окно `0x180f0000`) — теперь под параметром |
+| `0008`/`0029` | `t1100_mcr_dump` | 0 (уже) | дамп `after-first-section-config` стал условным (`fgReset && t1100_mcr_dump`) |
+| `0043` | `t1100_post_ready` | 0 (уже) | лишний driver-own/FW-own сразу после READY (§87) |
+| `0048` | `t1100_own_dbg` | 0 (уже) | трассировка цикла own |
+
+Контекстные строки в `0036`/`0038`/`0039`/`0043` поправлены под новые
+объявления (`static int t1100_ready_trace;`, `static int t1100_readback;`),
+иначе серия не применяется.
+
+### Сборка и прогон
+
+`/home/l/t1100-wifi-build-own48` (его линия без наших 0015/0019, без 0046/0047),
+`KERNEL_OUT=/home/l/t1100-ubuntu-build/out-wifi` (`6.12.114-wifi1`),
+`LOCALVERSION=-wifi1`:
+
+- `wmt_drv.ko` `7602ac53…` (1 173 816 Б) — с `t1100_consys_dbg`
+- `wlan_drv_gen3.ko` `1bf71b0a…` (2 970 136 Б) — тихая, без дампа MCR
+- `mtk_btif_drv.ko` `92d4740c…` (не менялся)
+
+Запуск **только через юнит**: `sync; echo b > /proc/sysrq-trigger` → после ssh
+смотрим `journalctl -b -u t1100-wifi-early` и `journalctl -b -k`. Вручную не
+повторяем: own живёт в окне после старта.
+
+### Результат (две загрузки)
+
+```
+[wlan]nicpmSetDriverOwn: DRIVER OWN, status=1 count=13      (в первом прогоне count=16)
+t1100-mcif: WIFI_START override=0 addr=0x00000000 seq=3 -> status=0
+[wlan]wlanAdapterStart: Ready bit asserted
+[wlan]wlanQueryNicCapability: FW Ver DEC[4.4] HEX[4.4], Driver Ver[0.0]
+[wlan]wlanUpdateNetworkAddress: Using host-supplied MAC address
+[wlan]wlanProbe: MAC address: 08:26:ae:b1:42:99
+```
+
+- `seq` стал **3** (как в рабочем прогоне автора), `Ready bit asserted` есть,
+  `whole chip reset`/`Abnormal PktNum` — **0** в журнале.
+- `ip -br link` → `wlan0 DOWN 08:26:ae:b1:42:99 <NO-CARRIER,BROADCAST,MULTICAST,UP>`;
+  `iw dev wlan0 scan` → 16–18 BSS (`ONEAIR ASP-200S`, `SignalPK`,
+  `DIRECT-7E-HP 4103fdw LJ`, …). Сохранённых профилей NM на плате нет,
+  поэтому ассоциацию не проверяли.
+- Диагностических строк в окне старта теперь ноль:
+  `journalctl -b -k | grep -cE "t1100-mcr|t1100-hif\[|t1100-consys\["` → **0**.
+- MAC отличается от авторского (`…:87:39`) — это NVRAM этого экземпляра.
+
+Юнит `t1100-wifi-early.service` **enabled**, старый `t1100-wifi.service` —
+masked. Откат по модулям: `/root/wifi-backup-pre-quiet/` (`wmt d34c24da…`,
+`wlan 985c93be…`) и `build/wifi/quiet/` локально.

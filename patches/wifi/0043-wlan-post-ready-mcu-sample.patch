@@ -16,7 +16,7 @@ storms, so the block must stay off in normal operation).
 @@ -966,6 +966,10 @@
  MODULE_PARM_DESC(t1100_start_addr,
  		 "T1100: start the firmware at this address only (0 = default sequence)");
- static int t1100_ready_trace = 1;
+ static int t1100_ready_trace;
 +static int t1100_post_ready;
 +module_param(t1100_post_ready, int, 0444);
 +MODULE_PARM_DESC(t1100_post_ready,

@@ -17,7 +17,7 @@ its full window with t1100_start_addr=<addr>.
 +module_param(t1100_start_addr, uint, 0444);
 +MODULE_PARM_DESC(t1100_start_addr,
 +		 "T1100: start the firmware at this address only (0 = default sequence)");
- static int t1100_ready_trace = 1;
+ static int t1100_ready_trace;
  module_param(t1100_ready_trace, int, 0444);
  MODULE_PARM_DESC(t1100_ready_trace,
 @@ -1318,6 +1323,8 @@

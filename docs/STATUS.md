@@ -5692,3 +5692,27 @@ power-cycle; починили из recovery на `mmcblk0p54`: `ln -s usr/lib /l
   заменил клин на штатную ошибку. Следующий шаг — не увеличивать лимит, а
   понять, почему MCU не выставляет `WHLPCR_FW_OWN_REQ_SET` (по §95 работает
   только в первые секунды после холодного включения).
+
+### 17.11 (3): «тихая» сборка + ранний юнит — `wlan0` есть, READY встаёт
+
+Подробности — `docs/wifi-port-log.md` §97.
+
+- **Выключены диагностические обращения в окне старта:** `t1100_readback`
+  (1→0: `t1100_mem_dump`/`wlanImageQueryStatus`/`hif_state`/`emi_check`),
+  `t1100_stp_probe_en` (1→0), `t1100_ready_trace` (1→0), `t1100_ready_rx`
+  (1→0), новый `t1100_consys_dbg` (0) вокруг `t1100_consys_state()`, дамп
+  `t1100-mcr[after-first-section-config]` — только при `t1100_mcr_dump`.
+  `t1100_post_ready`/`t1100_own_dbg` и раньше были 0.
+- **Сборка** (`WIFI_DIR=/home/l/t1100-wifi-build-own48`,
+  `KERNEL_OUT=/home/l/t1100-ubuntu-build/out-wifi`, `-wifi1`):
+  `wmt_drv.ko` `7602ac53…` (1 173 816 Б), `wlan_drv_gen3.ko` `1bf71b0a…`
+  (2 970 136 Б), `mtk_btif_drv.ko` `92d4740c…` (без изменений).
+- **Прогон через `t1100-wifi-early.service` (не вручную):**
+  `DRIVER OWN, status=1 count=13`, `WIFI_START … seq=3 -> status=0`
+  (было `seq=33`), `Ready bit asserted`, `FW Ver DEC[4.4]`,
+  `MAC address: 08:26:ae:b1:42:99`, `wlan0` создан, `iw dev wlan0 scan` —
+  16–18 BSS. Ресетов в журнале нет, диагностических строк MCR/HIF/CONSYS
+  в окне старта — 0.
+- **Ассоциация не проверялась:** сохранённых профилей NM на плате нет.
+  Юнит `t1100-wifi-early.service` **enabled**, старый `t1100-wifi.service`
+  **masked**. Откат: `/root/wifi-backup-pre-quiet/` и `build/wifi/quiet/`.

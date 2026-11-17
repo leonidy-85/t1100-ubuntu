@@ -76,7 +76,7 @@
  #endif
 +		pr_info("t1100-mcif: section-config dst=0x%08x len=%u reset=%u -> status=%u (0=ok)\n",
 +			u4DestAddr, u4ImgSecSize, fgReset, u4Status);
-+		if (fgReset)
++		if (fgReset && t1100_mcr_dump)
 +			t1100_dump_mcr(prAdapter, "after-first-section-config");
  		break;
  	}
