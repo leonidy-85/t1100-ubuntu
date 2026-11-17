@@ -326,8 +326,22 @@ panfrost 13040000.gpu: js fault, js=0, status=DATA_INVALID_FAULT,
 35 с (следует за обновлением кадров), при простое — 0. `LIBGL_ALWAYS_SOFTWARE=1`
 не меняет картину (`js fault` не связан с WebGL). На картинку не влияет.
 
-Что проверять дальше: гипотеза «гонка job IRQ с runtime PM/devfreq-переходом»
-(в `trans_stat` 546 переходов за сессию, в основном 698→800). Тест: зафиксировать
-`min_freq = max_freq` и посмотреть, исчезнут ли `js fault` при той же нагрузке;
-если да — смотреть `panfrost_job_suspend_irq()`/`panfrost_job_enable_interrupts()`
+Что уже исключено и что нет:
+
+| Условие | `js fault` за 35–40 с |
+|---|---|
+| простой/статичная страница | 0–1 |
+| YouTube-видео играет, DVFS свободный (698↔800) | 16 (за 35 с) и 19–21 (за 40 с) |
+| фиксированная частота (698 или 800), но видео **не** играет | 0 |
+| локальная canvas-анимация (`file:///root/anim.html`) | 0 |
+
+То есть счётчик растёт именно на обновлении кадров, и `LIBGL_ALWAYS_SOFTWARE=1`
+его не меняет. **Разделить «кадры» и «DVFS» пока не удалось:** для клика по ▶
+нужна инъекция ввода, а её на плате нет — `wtype` требует
+`virtual-keyboard-v1` (KWin его не даёт), `ydotool` требует `/dev/uinput`
+(в ядре не было `CONFIG_INPUT_UINPUT`). Настройка добавлена в
+`configs/t1100.fragment` (`CONFIG_INPUT_UINPUT=y`), после пересборки/прошивки
+ядра тест повторяется: `ydotool` жмёт play, сравниваем `js fault` при
+`min_freq = max_freq` и при свободном DVFS. Если при фиксированной частоте
+их нет — смотреть `panfrost_job_suspend_irq()`/`panfrost_job_enable_interrupts()`
 и порядок devfreq-перехода.
