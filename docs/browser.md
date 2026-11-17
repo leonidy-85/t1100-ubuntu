@@ -160,7 +160,10 @@ tools/host/session-run.sh --shot /tmp/shot.png true              # снять э
 
 ## 5. Профиль браузера под 3.5 ГиБ и Mali-G72
 
-`configs/librewolf-user.js` (кладётся как `user.js` в профиль):
+Настройки лежат в образе: `rootfs-overlay/etc/librewolf/user.js` →
+на плате `/etc/librewolf/user.js`, а `t1100-browser-prefs.service` при загрузке
+раскладывает их в профили как `user.js` (`configs/librewolf-user.js` — симлинк
+на файл в overlay; после правки — `systemctl start t1100-browser-prefs`).
 
 | pref | зачем |
 |---|---|

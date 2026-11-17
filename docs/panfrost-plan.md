@@ -261,3 +261,73 @@ grep -i gpu /proc/interrupts
    который сам разводит KMS и GPU. Это первый вопрос, который надо решить
    после того, как panfrost поднимется.
 4. Решить DVFS (§3) и только потом включать OPP-таблицу обратно.
+
+# 18.11.2026: разбор `gpu sched timeout` и `js fault` по сценам glmark2
+
+Сессия без прошивки: только замеры на текущем ядре `6.12.114-wifi1`, Mesa
+26.0.3-1ubuntu1, GPU-OPP 698/743/800 МГц (`simple_ondemand`, governors —
+`userspace` и `simple_ondemand`).
+
+## Как правильно мерить GPU на этой плате
+
+`kmscube` и `modetest` требуют DRM master, а его держит `kwin_wayland`
+(`failed to set mode: Permission denied`). Для нагрузки по GPU — Wayland-клиент
+внутри сессии:
+
+```sh
+tools/host/session-run.sh glmark2-es2-wayland
+tools/host/session-run.sh glmark2-es2-wayland -b conditionals:duration=3
+```
+
+## Что нашли: таймауты зависят от шейдера, а не от частоты
+
+Полный прогон `glmark2` даёт Score 1678–1688 на 698 МГц и 1782–1792 на
+800 МГц, но в логе ядра появляются `gpu sched timeout`:
+
+```
+panfrost 13040000.gpu: gpu sched timeout, js=0, config=0x7300, status=0x8,
+  head=0xa3e8680, tail=0xa3e8680, rawstat=0x0, js_state=0x0, int_mask=0x70007
+panfrost 13040000.gpu: Soft-stop failed
+```
+
+По сценам (по 2 прогона на частоту, `-b <scene>:duration=3`):
+
+| сцена | 698 МГц | 800 МГц | score (698/800) |
+|---|---|---|---|
+| conditionals | 4, 4 таймаута | 4, 4 | 324–695 / 569–753 |
+| function | 3, 3 | 4, 6 | 846 / 102–413 |
+| loop | 3, 4 | 3, 3 | 462–607 / 774–851 |
+| ideas | 2, 2 | 2, 3 | 357–370 / 378–489 |
+| build/texture/bump/shading/effect2d/pulsar/shadow/refract/terrain/jellyfish/desktop | 0 | 0 | — |
+
+**Вывод:** таймауты стабильно воспроизводятся только в четырёх сценах с
+тяжёлой шейдерной логикой (ветвления, вызовы функций, циклы) и **не зависят
+от OPP** — это не DVFS и не напряжение. Драйвер после `Soft-stop failed`
+делает сброс и продолжает: картинка корректная, score считается. То есть
+сейчас это «медленная деградация» (каждый таймаут ≈ 2 с), а не отказ.
+
+Гипотеза для следующего шага: кодогенерация Bifrost в Mesa 26.0.3 на этих
+шейдерах даёт патологию (бесконечный цикл/невыровненный доступ). Проверять:
+`PAN_MESA_DEBUG=showmem`/`dump` по сцене, сборка Mesa из
+`scripts/remote/build-mesa-aarch64.sh` (другая ревизия), сравнение с
+программным рендером (`LIBGL_ALWAYS_SOFTWARE=1`) — если в софте шейдер
+проходит, вопрос точно в компиляторе/драйвере, а не в шейдере.
+
+## `js fault` — отдельное явление
+
+```
+panfrost 13040000.gpu: js fault, js=0, status=DATA_INVALID_FAULT,
+  head=0xdfa9040, tail=0xdfa9040
+```
+
+`head == tail` — очередь задания пуста, то есть это не «плохой шейдер», а
+спурьёзное прерывание/гонка при смене питания GPU. Числа: ~12 за загрузку;
+на статичной странице браузера 0–1 за 35 с, при проигрывании видео ≈16 за
+35 с (следует за обновлением кадров), при простое — 0. `LIBGL_ALWAYS_SOFTWARE=1`
+не меняет картину (`js fault` не связан с WebGL). На картинку не влияет.
+
+Что проверять дальше: гипотеза «гонка job IRQ с runtime PM/devfreq-переходом»
+(в `trans_stat` 546 переходов за сессию, в основном 698→800). Тест: зафиксировать
+`min_freq = max_freq` и посмотреть, исчезнут ли `js fault` при той же нагрузке;
+если да — смотреть `panfrost_job_suspend_irq()`/`panfrost_job_enable_interrupts()`
+и порядок devfreq-перехода.

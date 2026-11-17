@@ -17,7 +17,11 @@
    не встаёт и `wlan0` не появляется. Следующий шаг — патч `0037`:
    вычитывать накопленные MCIF RX-события (`nicProcessRxInterrupt`,
    `CHISR/CTFSR=0x1e00`) во время ожидания READY.
-4. **Panfrost.** Редкие `js fault` при старте KDE и shader-таймауты.
+4. **Panfrost.** Таймауты локализованы (18.11): только сцены
+   `conditionals`/`function`/`loop`/`ideas`, одинаково на 698 и 800 МГц —
+   похоже на кодоген Bifrost в Mesa 26.0.3, не DVFS (`docs/panfrost-plan.md`,
+   раздел 18.11). `js fault DATA_INVALID_FAULT` (`head==tail`) — спурьёзные
+   прерывания, следуют за обновлением кадров, картинку не портят.
 5. **Воспроизводимая сборка.** Clean mainline + вся `patches/series`,
    а не `merge3-src` + отдельные патчи.
 6. **Мелочи (текущий).**
@@ -26,6 +30,12 @@
    - [x] 6.2a Топливомер MT6358 (0072/0073): capacity/voltage/current/status проверены на железе (v5, p29 `2d1177c6…`).
    - [ ] 6.3 Длительный suspend/разряд/wakeup.
    - [x] 6.4 Гарнитура: ручное переключение speaker/headphones (авто-ACCDET — отдельный драйвер).
+
+7. **Аппаратный декод видео (новое).** Путь выбран, нужен спайк
+   `mtk_scp` для MT6771: SCP-блок идентичен MT8183 (0x10500000, IRQ 174,
+   `tinysys`/IPI v02), но в стоковой `scp_a` нет сервиса vdec. План и
+   критерий приёмки — `docs/vdec-plan.md`; ADR —
+   `docs/adr/0003-hardware-video-decode-deferred.md`.
 
 ## 6.1 Микрофонный PGA — сделано
 
