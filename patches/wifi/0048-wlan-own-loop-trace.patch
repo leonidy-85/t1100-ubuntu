@@ -30,8 +30,8 @@ hanging the SoC every run.
 +		 * a read to a gated HIF window hangs the whole SoC here.
 +		 */
 +		if (t1100_own_max && i >= (UINT_32)t1100_own_max) {
-+			DBGLOG(NIC, ERROR, "t1100: own give-up at i=%u dt=%u\n",
-+			       i, kalGetTimeTick() - u4CurrTick);
++			DBGLOG(NIC, ERROR,
++			       "t1100: own timeout after %u polls, aborting\n", i);
 +			fgStatus = FALSE;
 +			break;
 +		}
@@ -59,10 +59,9 @@ hanging the SoC every run.
  		/* Delay for LP engine to complete its operation. */
 --- a/common/wlan_lib.c
 +++ b/common/wlan_lib.c
-@@ -979,6 +979,18 @@
+@@ -979,3 +979,15 @@
  module_param(t1100_no_fw_own, int, 0444);
  MODULE_PARM_DESC(t1100_no_fw_own, "T1100: never hand ownership back to the firmware");
- 
 +int t1100_own_dbg = 0;
 +module_param(t1100_own_dbg, int, 0644);
 +MODULE_PARM_DESC(t1100_own_dbg, "T1100: trace the driver-own polling loop");
@@ -71,10 +70,8 @@ hanging the SoC every run.
 +module_param(t1100_own_plain_wr, int, 0644);
 +MODULE_PARM_DESC(t1100_own_plain_wr, "T1100: write WHLPCR through the plain aperture");
 +
-+int t1100_own_max = 0;
++int t1100_own_max = 128;
 +module_param(t1100_own_max, int, 0644);
 +MODULE_PARM_DESC(t1100_own_max, "T1100: give up driver-own polling after N samples");
 +
- int t1100_wext_compat = 1;
- module_param(t1100_wext_compat, int, 0444);
- MODULE_PARM_DESC(t1100_wext_compat,
+ module_param(t1100_ready_trace, int, 0444);
