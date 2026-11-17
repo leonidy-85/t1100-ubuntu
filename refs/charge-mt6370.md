@@ -462,6 +462,59 @@ VBUS_MIN_MV=4300
 Критерий максимума: VBUS ≥ `VBUS_MIN_MV`, `ibus` растёт вместе с IAICR, SSH
 жив, `vbat` не падает.
 
+### 9.6 Что проверено на железе 17.11 (после настройки профиля)
+
+- Сервис `t1100-charge.service` (профиль `hub`) применяет лимиты сам на
+  загрузке: в journal `input_current_limit: 500000 -> 2500000`,
+  `constant_charge_current: 900000 -> 2000000`; после `systemctl reboot`
+  `sample` даёт `iaicr=2500000 ichg=2000000` без ручных действий.
+- `iba`/`ibus` сразу после загрузки: `vbus=4430 ibus=2050 vbat=3915 ibat=1350`
+  (батарея ещё не полная). Когда батарея зарядилась: `vbat=4355 ibat=0
+  ibus=550` (550 мА — собственное потребление, заряд завершён по CV 4.35 В).
+- `t1100-power-guard` больше не трогает лимиты (`ICHRG_UA=0`, `IAICR_UA=`
+  пусто): ручной `systemctl start t1100-power-guard.service` при
+  `IAICR=2500000 ICHG=2000000` не меняет ни одного значения.
+- `udev`-правило проверено принудительным событием:
+  `udevadm trigger --action=change --subsystem-match=power_supply` из состояния
+  `off` (500/900) → `t1100-charge-replug.service` отработал, вернул 2500/2000.
+- **Найдено и исправлено:** `ENV{SYSTEMD_WANTS}="t1100-charge-replug.service"`
+  на `ACTION=="change"` не запускает юнит (systemd применяет WANTS при
+  активации device-юнита, а attach — это change уже активного устройства;
+  проверено `udevadm test --action=change` + журнал). Правило переведено на
+  `RUN+="/bin/systemctl --no-block restart t1100-charge-replug.service"`.
+- Программный `redetect` (online 1→0→1) **не всегда** даёт uevent с
+  `ONLINE=1`: железо уже завершило BC1.2, повторного `attach_i` может не быть,
+  и udev видит только событие `ONLINE=0`. Поэтому `redetect` после ожидания
+  сам применяет профиль, если лимиты ниже hub. Физическое передёргивание
+  кабеля даёт оба события (UVP_D на отключение и attach_i на подключение).
+- Тепловые зоны на прошитом ядре есть (`tmax` читается, 36–39 °C в покое);
+  в первый час после правки `/lib` (см. §9.7) `tmax` был 0.0 — это следствие
+  сломанного userspace, а не отсутствия датчиков.
+
+### 9.7 Грабли: `deploy-overlay.sh` и merged-usr (потеря `/lib`)
+
+При первом деплое 13.11 оверлей содержал `lib/firmware/WMT_SOC.cfg`, и
+`tar -C / -xf -` (без `--keep-directory-symlink`) **заменил symlink
+`/lib -> usr/lib` настоящим каталогом**. Динамический линкер
+`/lib/ld-linux-aarch64.so.1` исчез, и все новые процессы перестали
+запускаться. Уже работавший sshd принимал TCP, но на каждый коннект писал в
+journal:
+
+```
+sshd[2038]: fatal: rexec of /usr/lib/openssh/sshd-session failed: No such file or directory
+```
+
+и закрывал соединение до обмена версиями (`kex_exchange_identification:
+Connection reset by peer`) — снаружи это выглядело как «sshd сломался», хотя
+ядро и сеть были живы (ping 0.2 мс, USB не перечислялся заново).
+
+Лечение: из recovery смонтировать `mmcblk0p54`, убрать каталог `/lib`
+(в нём был только firmware) и вернуть `ln -s usr/lib /lib`; файл перенести в
+`/usr/lib/firmware/`. В репозитории: `rootfs-overlay/lib/` → 
+`rootfs-overlay/usr/lib/firmware/`, в `deploy-overlay.sh` добавлены
+`tar --keep-directory-symlink` и проверка, что `/lib`, `/bin`, `/sbin`
+остались symlink-ами. Деплой после правки проверен: `/lib` не ломается.
+
 ## 10. Готовые команды (для железа)
 
 
