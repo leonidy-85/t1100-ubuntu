@@ -20,7 +20,7 @@ Signed-off-by: t1100-ubuntu <t1100@local>
 +static int t1100_emi_check = 1;
 +module_param(t1100_emi_check, int, 0444);
 +MODULE_PARM_DESC(t1100_emi_check, "T1100: dump the EMI FW sections after the download");
- static int t1100_readback = 1;
+ static int t1100_readback;
  module_param(t1100_readback, int, 0444);
  MODULE_PARM_DESC(t1100_readback, "T1100: read back the RAM image words after the download");
 @@ -1266,6 +1269,29 @@

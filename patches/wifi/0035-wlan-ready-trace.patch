@@ -11,7 +11,7 @@ t1100_ready_trace=0.
  /* T1100 M56: a reset must not hit while the RAM image is being downloaded */
  int t1100_dl_active;
  /* T1100 M58: warm reset right after the download and before the first WIFI_START */
-+static int t1100_ready_trace = 1;
++static int t1100_ready_trace;
 +module_param(t1100_ready_trace, int, 0444);
 +MODULE_PARM_DESC(t1100_ready_trace,
 +		 "T1100: print cpupcr while waiting for the WLAN READY bit");

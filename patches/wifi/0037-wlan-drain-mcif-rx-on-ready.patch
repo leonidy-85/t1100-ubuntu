@@ -21,7 +21,7 @@ Signed-off-by: t1100-ubuntu <t1100@local>
 +/* T1100 M86: the firmware pushes MCIF events while it boots.  Nothing
 + * services them in the AHB path, so drain the RX ring from the READY loop.
 + */
-+static int t1100_ready_rx = 1;
++static int t1100_ready_rx;
 +module_param(t1100_ready_rx, int, 0444);
 +MODULE_PARM_DESC(t1100_ready_rx,
 +		 "T1100: run the MCIF RX handler while waiting for the WLAN READY bit");

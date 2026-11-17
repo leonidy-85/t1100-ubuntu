@@ -292,7 +292,7 @@ diff -u -r a/common/wlan_lib.c b/common/wlan_lib.c
 +static int t1100_stp_write;
 +module_param(t1100_stp_write, int, 0444);
 +MODULE_PARM_DESC(t1100_stp_write, "T1100: write the first 4 KB of section 1 over STP/BTIF");
-+static int t1100_readback = 1;
++static int t1100_readback;
 +module_param(t1100_readback, int, 0444);
 +MODULE_PARM_DESC(t1100_readback, "T1100: read back the RAM image words after the download");
 +static int t1100_driver_own;	/* M72: off by default, it used to clear driver-own */
@@ -716,7 +716,7 @@ diff -u -r a/os/linux/hif/ahb_sdioLike/ahb.c b/os/linux/hif/ahb_sdioLike/ahb.c
 +		 "T1100: CONSYS is already powered on (and ROM-patched) by wmt_drv");
 +
 +/* Read-only probe of the STP function register block (see t1100_stp_probe()). */
-+int t1100_stp_probe_en = 1;
++int t1100_stp_probe_en;
 +module_param(t1100_stp_probe_en, int, 0444);
 +MODULE_PARM_DESC(t1100_stp_probe_en, "T1100: dump the STP/function-0/1/2 HIF registers once after power on");
 +

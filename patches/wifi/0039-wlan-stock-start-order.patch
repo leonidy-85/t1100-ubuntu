@@ -28,7 +28,7 @@ WMT already invokes WLAN_PROBE itself, and the nested call only timed out.
 +		 "T1100: stock start order (driver-own gate, single override=0 start)");
  MODULE_PARM_DESC(t1100_start_addr,
  		 "T1100: start the firmware at this address only (0 = default sequence)");
- static int t1100_ready_trace = 1;
+ static int t1100_ready_trace;
 @@ -974,7 +981,7 @@
  module_param(t1100_ready_polls, int, 0444);
  MODULE_PARM_DESC(t1100_ready_polls, "T1100: poll count for the WLAN READY bit (10 ms each, 0 = default)");
