@@ -18,9 +18,18 @@ kde-spectacle
 
 # --- локализация ---
 language-pack-kde-ru
+# без пакета locales /usr/lib/locale содержит только C.utf8, а LANG=ru_RU.UTF-8
+# задан: apt/dpkg и GUI-программы печатают «Cannot set LC_*» / «Locale not
+# supported by C library» (docs/browser.md).
+locales
 
 # --- мультимедиа ---
 qmmp
+
+# --- браузер ---
+# LibreWolf ставится не из архива Ubuntu: `firefox`/`chromium-browser` здесь —
+# заглушки, тянущие snap (на планшете не работает, docs/browser.md). Репозиторий,
+# ключ, пакет и user.js ставит tools/host/librewolf-install.sh.
 
 # --- утилиты и отладка ---
 htop

@@ -1,6 +1,6 @@
 # STATUS — t1100-ubuntu
 
-Обновлено: 14.11.2026.
+Обновлено: 17.11.2026.
 
 ## Фаза
 
@@ -5752,3 +5752,39 @@ HTTP GET http://archive.ubuntu.com/ → 200
   выключения питания» требует физического power-cycle (см. §97: own живёт
   только в раннем окне после включения, поэтому холодный старт — отдельный
   сценарий; сервис `t1100-wifi-early` включён и стартует до `multi-user`).
+
+## 17.11 (5): браузер на планшете — LibreWolf 160.0, YouTube играет
+
+Подробности, все тексты ошибок и замеры — `docs/browser.md`.
+
+- **Ubuntu-пакеты не годятся:** `firefox` (`1:1snap1-0ubuntu8`) и
+  `chromium-browser` (`2:1snap1-0ubuntu4`) в 26.04 — заглушки под snap.
+  `apt-get install firefox` падает в preinst: `system does not fully support
+  snapd: cannot mount squashfs image … wrong fs type, bad option, bad superblock
+  on /dev/loop0`. Причина доказана опытом: в ядре только
+  `CONFIG_SQUASHFS_ZLIB`, а образы xz/zstd не монтируются (gzip монтируется,
+  xz и zstd — та же ошибка). В `configs/t1100.fragment` добавлены
+  `CONFIG_SQUASHFS_{XZ,LZ4,LZO,ZSTD}=y` (подействует после пересборки ядра и
+  прошивки, в этой сессии не прошивалось).
+- **Поставлен LibreWolf 160.0** (arm64 `.deb` из `repo.librewolf.net`, ключ
+  сверен по отпечатку `662E3CDD…2B12EF16`): 150 МБ за 49 с, 453 МБ на диске,
+  `x-www-browser` через update-alternatives. Воспроизводимо —
+  `tools/host/librewolf-install.sh` (+ `configs/librewolf-user.js`).
+- **Исправлена ещё одна системная ошибка — локали:** `LANG=ru_RU.UTF-8` был
+  задан, а пакета `locales` в образе не было (`/usr/lib/locale` = только
+  `C.utf8`), отсюда `Cannot set LC_*` в apt/dpkg и `Locale not supported by C
+  library` в браузере. Поставлен `locales`, сгенерированы `ru_RU.UTF-8` и
+  `en_US.UTF-8`, добавлено в `configs/rootfs-packages.txt`.
+- **GUI по ssh:** `librewolf` падал с `Error: no DISPLAY environment variable
+  specified` — у `kwin_wayland` в environ нет `WAYLAND_DISPLAY` (сокет создаёт
+  он сам). Новый `tools/host/session-run.sh` собирает env сессии и запускает
+  команду; `--shot` снимает экран.
+- **Проверено:** Wayland-нативное окно, YouTube `Big Buck Bunny 4K 60fps`
+  (VP9, софт-декод) играет — два скриншота с разницей 12 с дают разные кадры
+  (`docs/screens/librewolf-youtube.jpg`); RSS ≈ 640 МиБ, CPU ≈ 170 % (два ядра
+  из восьми), свободно ≈ 970 МиБ. Content-sandbox включён, AppArmor в ядре нет.
+- **Ограничения:** Widevine/DRM выключен (Netflix/Spotify — нет, YouTube — да);
+  аппаратного декода видео нет (4K60 дорого, для комфорта 720p); autoplay
+  заблокирован политикой (клик по ▶); звук не проверялся; panfrost пишет
+  `DATA_INVALID_FAULT` при обновлении кадров (~16 за 35 с на видео, 0–1 на
+  статике) — картинка корректная, отдельная задача `gpu-mesa`.
