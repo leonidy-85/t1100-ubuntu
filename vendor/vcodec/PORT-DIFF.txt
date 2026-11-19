@@ -1,0 +1,1686 @@
+=== modified: mt6771/videocodec_kernel_driver.c ===
+--- oppo-videocodec/mt6771/videocodec_kernel_driver.c	2026-11-20 01:23:11.551144371 +0300
++++ t1100-vcodec-port/mt6771/videocodec_kernel_driver.c	2026-11-20 01:52:35.260999797 +0300
+@@ -55,11 +55,12 @@
+ #endif
+ 
+ #include "videocodec_kernel_driver.h"
++#include "vcodec_compat.h"
+ #include "../videocodec_kernel.h"
+ #include "smi_public.h"
+ #include <asm/cacheflush.h>
+ #include <linux/io.h>
+-#include <asm/sizes.h>
++#include <linux/sizes.h>
+ #include "val_types_private.h"
+ #include "hal_types_private.h"
+ #include "val_api_private.h"
+@@ -93,11 +94,34 @@
+ 
+ #define VCODEC_DEVNAME     "Vcodec"
+ #define VCODEC_DEVNAME2     "Vcodec2"
++/*
++ * Class names differ from device names: an earlier unload leaked the
++ * "Vcodec" class kobjects on this live system, and sysfs class names cannot
++ * be removed without a reboot.  Device nodes are still /dev/Vcodec{,2}.
++ */
++#ifdef VCODEC_LIVE_TEST
++/*
++ * Live-test build: the previous crashed probe left its platform device
++ * registered and holding device_lock, so a same-named driver/class cannot
++ * be loaded again without a reboot.
++ */
++#define VCODEC_DRVNAME      "VcodecPort"
++#define VCODEC_CLASSNAME    "VcodecLive"
++#define VCODEC_CLASSNAME2   "VcodecLive2"
++#define VCODEC_DEBUG_NAME   "vcodec_port"
++#else
++#define VCODEC_DRVNAME      VCODEC_DEVNAME
++#define VCODEC_CLASSNAME    "Vcodec"
++#define VCODEC_CLASSNAME2   "Vcodec2"
++#define VCODEC_DEBUG_NAME   "vcodec"
++#endif
+ #define VCODEC_DEV_MAJOR_NUMBER 160   /* 189 */
+ /* #define VENC_USE_L2C */
+ 
+ static dev_t vcodec_devno = MKDEV(VCODEC_DEV_MAJOR_NUMBER, 0);
+ static dev_t vcodec_devno2 = MKDEV(VCODEC_DEV_MAJOR_NUMBER, 1);
++static struct platform_device *vcodec_pdev;
++static bool vcodec_chrdev_registered;
+ static struct cdev *vcodec_cdev;
+ static struct class *vcodec_class;
+ static struct device *vcodec_device;
+@@ -116,6 +140,7 @@
+ static struct clk *clk_MT_CG_GALS_VENC2MM;   /* CLK_MM_GALS_VENC2MM */
+ #endif
+ static struct clk *clk_MT_CG_VDEC;            /* VDEC */
++static struct clk *clk_MT_CG_LARB1;           /* VDEC larb1 SMI gate */
+ 
+ static struct clk *clk_MT_CG_VENC_VENC;         /* VENC_VENC */
+ 
+@@ -175,6 +200,30 @@
+ 
+ static int gi4DecWaitEMI;
+ 
++/*
++ * mainline port: do not touch the VDEC/VENC register block until the genpd
++ * and clocks are wired to a real consumer.  MFV_SET_PWR_CMD still succeeds
++ * and updates the driver's power reference count.
++ */
++static bool vcodec_hw_power;
++static char *vcodec_class_name = VCODEC_CLASSNAME;
++static char *vcodec_class_name2 = VCODEC_CLASSNAME2;
++module_param_named(class_name, vcodec_class_name, charp, 0444);
++module_param_named(class_name2, vcodec_class_name2, charp, 0444);
++static bool vcodec_vdec_irq_ok;
++static bool vcodec_venc_irq_ok;
++
++#define VCODEC_IRQ_ENABLE(id)	do { if ((id) > 0) enable_irq(id); } while (0)
++#define VCODEC_IRQ_DISABLE(id)	do { if ((id) > 0) disable_irq(id); } while (0)
++#define VCODEC_IRQ_FREE(id)	do { if ((id) > 0) free_irq((id), NULL); } while (0)
++
++#define VCODEC_CLK_ENABLE(c) do {						if (c) {									int __ret = clk_prepare_enable(c);					if (__ret)									pr_info("[VCODEC] clk_enable failed %d\n", __ret);	}								} while (0)
++#define VCODEC_CLK_DISABLE(c) do { if (c) clk_disable_unprepare(c); } while (0)
++module_param_named(hw_power, vcodec_hw_power, bool, 0644);
++MODULE_PARM_DESC(hw_power, "Allow MFV_SET_PWR_CMD to touch the hardware (default: off)");
++
++struct codec_job;
++
+ #define USE_WAKELOCK 0
+ 
+ #if USE_WAKELOCK == 1
+@@ -479,13 +528,17 @@
+ {
+ 	return (void *)KVA_VENC_BASE;
+ }
++#ifndef VCODEC_LIVE_TEST
+ EXPORT_SYMBOL(mt_venc_base_get);
++#endif
+ 
+ void *mt_vdec_base_get(void)
+ {
+ 	return (void *)KVA_VDEC_BASE;
+ }
++#ifndef VCODEC_LIVE_TEST
+ EXPORT_SYMBOL(mt_vdec_base_get);
++#endif
+ 
+ void vdec_polling_status(void)
+ {
+@@ -547,6 +600,12 @@
+ 	mutex_unlock(&VdecPWRLock);
+ 	ret = 0;
+ 
++	if (!vcodec_hw_power) {
++		pr_info("[VCODEC] vdec_power_on: refcount=%u (hardware access disabled)\n",
++			gu4VdecPWRCounter);
++		return;
++	}
++
+ #ifdef CONFIG_MTK_QOS_SUPPORT
+ #ifndef VCODEC_DVFS_V2
+ 	mutex_lock(&DecPMQoSLock);
+@@ -558,28 +617,11 @@
+ #endif
+ #endif
+ 
+-	ret = clk_prepare_enable(clk_MT_SCP_SYS_DIS);
+-	if (ret) {
+-		/* print error log & error handling */
+-		pr_debug("[VCODEC][ERROR] SCP_SYS_DIS not enabled %d\n",
+-			ret);
+-	}
+-
++	VCODEC_CLK_ENABLE(clk_MT_SCP_SYS_DIS);
+ 	smi_bus_prepare_enable(SMI_LARB1, "VDEC");
+-
+-	ret = clk_prepare_enable(clk_MT_SCP_SYS_VDE);
+-	if (ret) {
+-		/* print error log & error handling */
+-		pr_debug("[VCODEC][ERROR] SCP_SYS_VDE not enabled %d\n",
+-			ret);
+-	}
+-
+-	ret = clk_prepare_enable(clk_MT_CG_VDEC);
+-	if (ret) {
+-		/* print error log & error handling */
+-		pr_debug("[VCODEC][ERROR] CG_VDEC not enabled %d\n",
+-			ret);
+-	}
++	VCODEC_CLK_ENABLE(clk_MT_SCP_SYS_VDE);
++	VCODEC_CLK_ENABLE(clk_MT_CG_VDEC);
++	VCODEC_CLK_ENABLE(clk_MT_CG_LARB1);
+ }
+ 
+ #ifdef VCODEC_DEBUG_SYS
+@@ -628,14 +670,15 @@
+ 	if (gu4VdecPWRCounter == 0) {
+ 		pr_debug("[VCODEC] gu4VdecPWRCounter = 0\n");
+ 	} else {
+-		vdec_polling_status();
+ 		gu4VdecPWRCounter--;
+-		clk_disable_unprepare(clk_MT_CG_VDEC);
+-		clk_disable_unprepare(clk_MT_SCP_SYS_VDE);
+-
+-		smi_bus_disable_unprepare(SMI_LARB1, "VDEC");
+-
+-		clk_disable_unprepare(clk_MT_SCP_SYS_DIS);
++		if (vcodec_hw_power) {
++			vdec_polling_status();
++			VCODEC_CLK_DISABLE(clk_MT_CG_LARB1);
++			VCODEC_CLK_DISABLE(clk_MT_CG_VDEC);
++			VCODEC_CLK_DISABLE(clk_MT_SCP_SYS_VDE);
++			smi_bus_disable_unprepare(SMI_LARB1, "VDEC");
++			VCODEC_CLK_DISABLE(clk_MT_SCP_SYS_DIS);
++		}
+ 	}
+ 	mutex_unlock(&VdecPWRLock);
+ 	mutex_lock(&DecPMQoSLock);
+@@ -659,30 +702,18 @@
+ 	mutex_unlock(&VencPWRLock);
+ 	ret = 0;
+ 
+-	pr_debug("[VCODEC] %s +\n", __func__);
+-
+-	ret = clk_prepare_enable(clk_MT_SCP_SYS_DIS);
+-	if (ret) {
+-		/* print error log & error handling */
+-		pr_debug("[VCODEC][ERROR] SCP_SYS_DIS not enabled %d\n",
+-			ret);
++	if (!vcodec_hw_power) {
++		pr_info("[VCODEC] venc_power_on: refcount=%u (hardware access disabled)\n",
++			gu4VencPWRCounter);
++		return;
+ 	}
+ 
+-	smi_bus_prepare_enable(SMI_LARB4, "VENC");
+-
+-	ret = clk_prepare_enable(clk_MT_SCP_SYS_VEN);
+-	if (ret) {
+-		/* print error log & error handling */
+-		pr_debug("[VCODEC][ERROR] SCP_SYS_VEN not enabled %d\n",
+-			ret);
+-	}
++	pr_debug("[VCODEC] %s +\n", __func__);
+ 
+-	ret = clk_prepare_enable(clk_MT_CG_VENC_VENC);
+-	if (ret) {
+-		/* print error log & error handling */
+-		pr_debug("[VCODEC][ERROR][%s] clk VENC not enabled %d\n",
+-			__func__, ret);
+-	}
++	VCODEC_CLK_ENABLE(clk_MT_SCP_SYS_DIS);
++	smi_bus_prepare_enable(SMI_LARB4, "VENC");
++	VCODEC_CLK_ENABLE(clk_MT_SCP_SYS_VEN);
++	VCODEC_CLK_ENABLE(clk_MT_CG_VENC_VENC);
+ 
+ 	pr_debug("[VCODEC] %s -\n", __func__);
+ }
+@@ -696,12 +727,10 @@
+ 		gu4VencPWRCounter--;
+ 		pr_debug("[VCODEC] %s +\n", __func__);
+ 
+-		clk_disable_unprepare(clk_MT_CG_VENC_VENC);
+-		clk_disable_unprepare(clk_MT_SCP_SYS_VEN);
+-
++		VCODEC_CLK_DISABLE(clk_MT_CG_VENC_VENC);
++		VCODEC_CLK_DISABLE(clk_MT_SCP_SYS_VEN);
+ 		smi_bus_disable_unprepare(SMI_LARB4, "VENC");
+-
+-		clk_disable_unprepare(clk_MT_SCP_SYS_DIS);
++		VCODEC_CLK_DISABLE(clk_MT_SCP_SYS_DIS);
+ 
+ 		pr_debug("[VCODEC] %s -\n", __func__);
+ 	}
+@@ -1081,10 +1110,9 @@
+ #if USE_WAKELOCK == 0
+ 	unsigned int suspend_block_cnt = 0;
+ #endif
+-#ifdef VCODEC_DVFS_V2
+ 	struct codec_job *dec_cur_job = 0;
+ 	struct codec_job *enc_cur_job = 0;
+-
++#ifdef VCODEC_DVFS_V2
+ 	int target_freq;
+ 	u64 target_freq_64;
+ #endif
+@@ -1246,7 +1274,7 @@
+ #endif
+ #endif
+ 				if (rHWLock.bSecureInst == VAL_FALSE)
+-					enable_irq(VDEC_IRQ_ID);
++					VCODEC_IRQ_ENABLE(VDEC_IRQ_ID);
+ 
+ #ifdef ENABLE_MMDVFS_VDEC
+ 				VdecDvfsMonitorStart();
+@@ -1414,7 +1442,7 @@
+ 						venc_power_on();
+ #endif
+ #endif
+-						enable_irq(VENC_IRQ_ID);
++						VCODEC_IRQ_ENABLE(VENC_IRQ_ID);
+ 					}
+ 				}
+ 			} else { /* someone use HW, and check timeout value */
+@@ -1560,7 +1588,7 @@
+ 			mutex_unlock(&VdecDVFSLock);
+ #endif
+ 			if (rHWLock.bSecureInst == VAL_FALSE)
+-				disable_irq(VDEC_IRQ_ID);
++				VCODEC_IRQ_DISABLE(VDEC_IRQ_ID);
+ 
+ 			/* TODO: check if turning power off is ok */
+ #ifdef CONFIG_PM
+@@ -1620,7 +1648,7 @@
+ 					VAL_DRIVER_TYPE_H264_ENC ||
+ 				rHWLock.eDriverType ==
+ 					VAL_DRIVER_TYPE_HEVC_ENC) {
+-				disable_irq(VENC_IRQ_ID);
++				VCODEC_IRQ_DISABLE(VENC_IRQ_ID);
+ 				/* turn venc power off */
+ #ifdef CONFIG_PM
+ 				pm_runtime_put_sync(vcodec_device2);
+@@ -1909,20 +1937,65 @@
+ #endif
+ 
+ 	switch (cmd) {
++	case MFV_TEST_CMD:
++	{
++		pr_info("[VCODEC] MFV_TEST_CMD\n");
++		return 0;
++	}
++
++	case MFV_INIT_CMD:
++	{
++		pr_info("[VCODEC] MFV_INIT_CMD\n");
++		return 0;
++	}
++
++	case MFV_DEINIT_CMD:
++	{
++		pr_info("[VCODEC] MFV_DEINIT_CMD\n");
++		return 0;
++	}
++
++	case MFV_SET_PWR_CMD:
++	{
++		unsigned int u4Power = 0;
++
++		if (copy_from_user(&u4Power, (void __user *)arg,
++				   sizeof(u4Power)))
++			return -EFAULT;
++
++		pr_info("[VCODEC] MFV_SET_PWR_CMD power=%u hw_power=%d\n",
++			u4Power, vcodec_hw_power);
++
++		if (vcodec_hw_power) {
++			if (u4Power)
++				vdec_power_on();
++			else
++				vdec_power_off();
++		}
++		return 0;
++	}
++
++	case MFV_SET_CMD_CMD:
++	case MFV_SET_ISR_CMD:
++	{
++		pr_info("[VCODEC] MFV legacy cmd 0x%x ignored\n", cmd);
++		return 0;
++	}
++
+ 	case VCODEC_SET_THREAD_ID:
+ 	{
++		return 0;
+ 	}
+-	break;
+ 
+ 	case VCODEC_ALLOC_NON_CACHE_BUFFER:
+ 	{
++		return 0;
+ 	}
+-	break;
+ 
+ 	case VCODEC_FREE_NON_CACHE_BUFFER:
+ 	{
++		return 0;
+ 	}
+-	break;
+ 
+ 	case VCODEC_INC_DEC_EMI_USER:
+ 	{
+@@ -2129,17 +2202,15 @@
+ 
+ 	case VCODEC_INITHWLOCK:
+ 	{
+-		pr_debug("VCODEC_INITHWLOCK+ tid %d\n", current->pid);
+-		pr_debug("VCODEC_INITHWLOCK- tid %d\n", current->pid);
++		pr_info("VCODEC_INITHWLOCK tid %d\n", current->pid);
++		return 0;
+ 	}
+-	break;
+ 
+ 	case VCODEC_DEINITHWLOCK:
+ 	{
+-		pr_debug("VCODEC_DEINITHWLOCK- tid %d\n", current->pid);
+-		pr_debug("VCODEC_DEINITHWLOCK- tid %d\n", current->pid);
++		pr_info("VCODEC_DEINITHWLOCK tid %d\n", current->pid);
++		return 0;
+ 	}
+-	break;
+ 
+ 	case VCODEC_GET_CPU_LOADING_INFO:
+ 	{
+@@ -2244,8 +2315,8 @@
+ 	{
+ 		/* MB Reason: make sure register order is correct */
+ 		mb();
++		return 0;
+ 	}
+-	break;
+ 
+ 	case VCODEC_SET_LOG_COUNT:
+ 	{
+@@ -2300,554 +2371,32 @@
+ }
+ 
+ #if IS_ENABLED(CONFIG_COMPAT)
+-
+-enum STRUCT_TYPE {
+-	VAL_HW_LOCK_TYPE = 0,
+-	VAL_POWER_TYPE,
+-	VAL_ISR_TYPE,
+-	VAL_MEMORY_TYPE,
+-	VAL_FRAME_INFO_TYPE
+-};
+-
+-enum COPY_DIRECTION {
+-	COPY_FROM_USER = 0,
+-	COPY_TO_USER,
+-};
+-
+-struct COMPAT_VAL_HW_LOCK_T {
+-	/* [IN]     The video codec driver handle */
+-	compat_uptr_t       pvHandle;
+-	/* [IN]     The size of video codec driver handle */
+-	compat_uint_t       u4HandleSize;
+-	/* [IN/OUT] The Lock discriptor */
+-	compat_uptr_t       pvLock;
+-	/* [IN]     The timeout ms */
+-	compat_uint_t       u4TimeoutMs;
+-	/* [IN/OUT] The reserved parameter */
+-	compat_uptr_t       pvReserved;
+-	/* [IN]     The size of reserved parameter structure */
+-	compat_uint_t       u4ReservedSize;
+-	/* [IN]     The driver type */
+-	compat_uint_t       eDriverType;
+-	/* [IN]     True if this is a secure instance */
+-	char                bSecureInst;
+-};
+-
+-struct COMPAT_VAL_POWER_T {
+-	/* [IN]     The video codec driver handle */
+-	compat_uptr_t       pvHandle;
+-	/* [IN]     The size of video codec driver handle */
+-	compat_uint_t       u4HandleSize;
+-	/* [IN]     The driver type */
+-	compat_uint_t       eDriverType;
+-	/* [IN]     Enable or not. */
+-	char                fgEnable;
+-	/* [IN/OUT] The reserved parameter */
+-	compat_uptr_t       pvReserved;
+-	/* [IN]     The size of reserved parameter structure */
+-	compat_uint_t       u4ReservedSize;
+-	/* [OUT]    The number of power user right now */
+-	/* unsigned int        u4L2CUser; */
+-};
+-
+-struct COMPAT_VAL_ISR_T {
+-	/* [IN]     The video codec driver handle */
+-	compat_uptr_t       pvHandle;
+-	/* [IN]     The size of video codec driver handle */
+-	compat_uint_t       u4HandleSize;
+-	/* [IN]     The driver type */
+-	compat_uint_t       eDriverType;
+-	/* [IN]     The isr function */
+-	compat_uptr_t       pvIsrFunction;
+-	/* [IN/OUT] The reserved parameter */
+-	compat_uptr_t       pvReserved;
+-	/* [IN]     The size of reserved parameter structure */
+-	compat_uint_t       u4ReservedSize;
+-	/* [IN]     The timeout in ms */
+-	compat_uint_t       u4TimeoutMs;
+-	/* [IN]     The num of return registers when HW done */
+-	compat_uint_t       u4IrqStatusNum;
+-	/* [IN/OUT] The value of return registers when HW done */
+-	compat_uint_t       u4IrqStatus[IRQ_STATUS_MAX_NUM];
+-};
+-
+-struct COMPAT_VAL_MEMORY_T {
+-	/* [IN]     The allocation memory type */
+-	compat_uint_t       eMemType;
+-	/* [IN]     The size of memory allocation */
+-	compat_ulong_t      u4MemSize;
+-	/* [IN/OUT] The memory virtual address */
+-	compat_uptr_t       pvMemVa;
+-	/* [IN/OUT] The memory physical address */
+-	compat_uptr_t       pvMemPa;
+-	/* [IN]     The memory byte alignment setting */
+-	compat_uint_t       eAlignment;
+-	/* [IN/OUT] The align memory virtual address */
+-	compat_uptr_t       pvAlignMemVa;
+-	/* [IN/OUT] The align memory physical address */
+-	compat_uptr_t       pvAlignMemPa;
+-	/* [IN]     The memory codec for VENC or VDEC */
+-	compat_uint_t       eMemCodec;
+-	compat_uint_t       i4IonShareFd;
+-	compat_uptr_t       pIonBufhandle;
+-	/* [IN/OUT] The reserved parameter */
+-	compat_uptr_t       pvReserved;
+-	/* [IN]     The size of reserved parameter structure */
+-	compat_ulong_t      u4ReservedSize;
+-};
+-
+-struct COMPAT_VAL_FRAME_INFO_T {
+-	compat_uptr_t handle;
+-	compat_uint_t driver_type;
+-	compat_uint_t input_size;
+-	compat_uint_t frame_width;
+-	compat_uint_t frame_height;
+-	compat_uint_t frame_type;
+-	compat_uint_t is_compressed;
+-};
+-
+-static int get_uptr_to_32(compat_uptr_t *p, void __user **uptr)
+-{
+-	void __user *p2p;
+-	int err = get_user(p2p, uptr);
+-	*p = ptr_to_compat(p2p);
+-	return err;
+-}
+-static int compat_copy_struct(
+-			enum STRUCT_TYPE eType,
+-			enum COPY_DIRECTION eDirection,
+-			void __user *data32,
+-			void __user *data)
+-{
+-	compat_uint_t u;
+-	compat_ulong_t l;
+-	compat_uptr_t p;
+-	char c;
+-	int err = 0;
+-
+-	switch (eType) {
+-	case VAL_HW_LOCK_TYPE:
+-	{
+-		if (eDirection == COPY_FROM_USER) {
+-			struct COMPAT_VAL_HW_LOCK_T __user *from32 =
+-				(struct COMPAT_VAL_HW_LOCK_T *)data32;
+-			struct VAL_HW_LOCK_T __user *to =
+-				(struct VAL_HW_LOCK_T *)data;
+-
+-			err = get_user(p, &(from32->pvHandle));
+-			err |= put_user(compat_ptr(p), &(to->pvHandle));
+-			err |= get_user(u, &(from32->u4HandleSize));
+-			err |= put_user(u, &(to->u4HandleSize));
+-			err |= get_user(p, &(from32->pvLock));
+-			err |= put_user(compat_ptr(p), &(to->pvLock));
+-			err |= get_user(u, &(from32->u4TimeoutMs));
+-			err |= put_user(u, &(to->u4TimeoutMs));
+-			err |= get_user(p, &(from32->pvReserved));
+-			err |= put_user(compat_ptr(p), &(to->pvReserved));
+-			err |= get_user(u, &(from32->u4ReservedSize));
+-			err |= put_user(u, &(to->u4ReservedSize));
+-			err |= get_user(u, &(from32->eDriverType));
+-			err |= put_user(u, &(to->eDriverType));
+-			err |= get_user(c, &(from32->bSecureInst));
+-			err |= put_user(c, &(to->bSecureInst));
+-		} else {
+-			struct COMPAT_VAL_HW_LOCK_T __user *to32 =
+-				(struct COMPAT_VAL_HW_LOCK_T *)data32;
+-			struct VAL_HW_LOCK_T __user *from =
+-				(struct VAL_HW_LOCK_T *)data;
+-
+-			err = get_uptr_to_32(&p, &(from->pvHandle));
+-			err |= put_user(p, &(to32->pvHandle));
+-			err |= get_user(u, &(from->u4HandleSize));
+-			err |= put_user(u, &(to32->u4HandleSize));
+-			err |= get_uptr_to_32(&p, &(from->pvLock));
+-			err |= put_user(p, &(to32->pvLock));
+-			err |= get_user(u, &(from->u4TimeoutMs));
+-			err |= put_user(u, &(to32->u4TimeoutMs));
+-			err |= get_uptr_to_32(&p, &(from->pvReserved));
+-			err |= put_user(p, &(to32->pvReserved));
+-			err |= get_user(u, &(from->u4ReservedSize));
+-			err |= put_user(u, &(to32->u4ReservedSize));
+-			err |= get_user(u, &(from->eDriverType));
+-			err |= put_user(u, &(to32->eDriverType));
+-			err |= get_user(c, &(from->bSecureInst));
+-			err |= put_user(c, &(to32->bSecureInst));
+-		}
+-	}
+-	break;
+-	case VAL_POWER_TYPE:
+-	{
+-		if (eDirection == COPY_FROM_USER) {
+-			struct COMPAT_VAL_POWER_T __user *from32 =
+-				(struct COMPAT_VAL_POWER_T *)data32;
+-			struct VAL_POWER_T __user *to =
+-				(struct VAL_POWER_T *)data;
+-
+-			err = get_user(p, &(from32->pvHandle));
+-			err |= put_user(compat_ptr(p), &(to->pvHandle));
+-			err |= get_user(u, &(from32->u4HandleSize));
+-			err |= put_user(u, &(to->u4HandleSize));
+-			err |= get_user(u, &(from32->eDriverType));
+-			err |= put_user(u, &(to->eDriverType));
+-			err |= get_user(c, &(from32->fgEnable));
+-			err |= put_user(c, &(to->fgEnable));
+-			err |= get_user(p, &(from32->pvReserved));
+-			err |= put_user(compat_ptr(p), &(to->pvReserved));
+-			err |= get_user(u, &(from32->u4ReservedSize));
+-			err |= put_user(u, &(to->u4ReservedSize));
+-		} else {
+-			struct COMPAT_VAL_POWER_T __user *to32 =
+-				(struct COMPAT_VAL_POWER_T *)data32;
+-			struct VAL_POWER_T __user *from =
+-				(struct VAL_POWER_T *)data;
+-
+-			err = get_uptr_to_32(&p, &(from->pvHandle));
+-			err |= put_user(p, &(to32->pvHandle));
+-			err |= get_user(u, &(from->u4HandleSize));
+-			err |= put_user(u, &(to32->u4HandleSize));
+-			err |= get_user(u, &(from->eDriverType));
+-			err |= put_user(u, &(to32->eDriverType));
+-			err |= get_user(c, &(from->fgEnable));
+-			err |= put_user(c, &(to32->fgEnable));
+-			err |= get_uptr_to_32(&p, &(from->pvReserved));
+-			err |= put_user(p, &(to32->pvReserved));
+-			err |= get_user(u, &(from->u4ReservedSize));
+-			err |= put_user(u, &(to32->u4ReservedSize));
+-		}
+-	}
+-	break;
+-	case VAL_ISR_TYPE:
+-	{
+-		int i = 0;
+-
+-		if (eDirection == COPY_FROM_USER) {
+-			struct COMPAT_VAL_ISR_T __user *from32 =
+-				(struct COMPAT_VAL_ISR_T *)data32;
+-			struct VAL_ISR_T __user *to =
+-				(struct VAL_ISR_T *)data;
+-
+-			err = get_user(p, &(from32->pvHandle));
+-			err |= put_user(compat_ptr(p), &(to->pvHandle));
+-			err |= get_user(u, &(from32->u4HandleSize));
+-			err |= put_user(u, &(to->u4HandleSize));
+-			err |= get_user(u, &(from32->eDriverType));
+-			err |= put_user(u, &(to->eDriverType));
+-			err |= get_user(p, &(from32->pvIsrFunction));
+-			err |= put_user(compat_ptr(p), &(to->pvIsrFunction));
+-			err |= get_user(p, &(from32->pvReserved));
+-			err |= put_user(compat_ptr(p), &(to->pvReserved));
+-			err |= get_user(u, &(from32->u4ReservedSize));
+-			err |= put_user(u, &(to->u4ReservedSize));
+-			err |= get_user(u, &(from32->u4TimeoutMs));
+-			err |= put_user(u, &(to->u4TimeoutMs));
+-			err |= get_user(u, &(from32->u4IrqStatusNum));
+-			err |= put_user(u, &(to->u4IrqStatusNum));
+-			for (; i < IRQ_STATUS_MAX_NUM; i++) {
+-				err |= get_user(u, &(from32->u4IrqStatus[i]));
+-				err |= put_user(u, &(to->u4IrqStatus[i]));
+-			}
+-			return err;
+-
+-		} else {
+-			struct COMPAT_VAL_ISR_T __user *to32 =
+-				(struct COMPAT_VAL_ISR_T *)data32;
+-			struct VAL_ISR_T __user *from =
+-				(struct VAL_ISR_T *)data;
+-
+-			err = get_uptr_to_32(&p, &(from->pvHandle));
+-			err |= put_user(p, &(to32->pvHandle));
+-			err |= get_user(u, &(from->u4HandleSize));
+-			err |= put_user(u, &(to32->u4HandleSize));
+-			err |= get_user(u, &(from->eDriverType));
+-			err |= put_user(u, &(to32->eDriverType));
+-			err |= get_uptr_to_32(&p, &(from->pvIsrFunction));
+-			err |= put_user(p, &(to32->pvIsrFunction));
+-			err |= get_uptr_to_32(&p, &(from->pvReserved));
+-			err |= put_user(p, &(to32->pvReserved));
+-			err |= get_user(u, &(from->u4ReservedSize));
+-			err |= put_user(u, &(to32->u4ReservedSize));
+-			err |= get_user(u, &(from->u4TimeoutMs));
+-			err |= put_user(u, &(to32->u4TimeoutMs));
+-			err |= get_user(u, &(from->u4IrqStatusNum));
+-			err |= put_user(u, &(to32->u4IrqStatusNum));
+-			for (; i < IRQ_STATUS_MAX_NUM; i++) {
+-				err |= get_user(u, &(from->u4IrqStatus[i]));
+-				err |= put_user(u, &(to32->u4IrqStatus[i]));
+-			}
+-		}
+-	}
+-	break;
+-	case VAL_MEMORY_TYPE:
+-	{
+-		if (eDirection == COPY_FROM_USER) {
+-			struct COMPAT_VAL_MEMORY_T __user *from32 =
+-				(struct COMPAT_VAL_MEMORY_T *)data32;
+-			struct VAL_MEMORY_T __user *to =
+-				(struct VAL_MEMORY_T *)data;
+-
+-			err = get_user(u, &(from32->eMemType));
+-			err |= put_user(u, &(to->eMemType));
+-			err |= get_user(l, &(from32->u4MemSize));
+-			err |= put_user(l, &(to->u4MemSize));
+-			err |= get_user(p, &(from32->pvMemVa));
+-			err |= put_user(compat_ptr(p), &(to->pvMemVa));
+-			err |= get_user(p, &(from32->pvMemPa));
+-			err |= put_user(compat_ptr(p), &(to->pvMemPa));
+-			err |= get_user(u, &(from32->eAlignment));
+-			err |= put_user(u, &(to->eAlignment));
+-			err |= get_user(p, &(from32->pvAlignMemVa));
+-			err |= put_user(compat_ptr(p), &(to->pvAlignMemVa));
+-			err |= get_user(p, &(from32->pvAlignMemPa));
+-			err |= put_user(compat_ptr(p), &(to->pvAlignMemPa));
+-			err |= get_user(u, &(from32->eMemCodec));
+-			err |= put_user(u, &(to->eMemCodec));
+-			err |= get_user(u, &(from32->i4IonShareFd));
+-			err |= put_user(u, &(to->i4IonShareFd));
+-			err |= get_user(p, &(from32->pIonBufhandle));
+-			err |= put_user(compat_ptr(p), &(to->pIonBufhandle));
+-			err |= get_user(p, &(from32->pvReserved));
+-			err |= put_user(compat_ptr(p), &(to->pvReserved));
+-			err |= get_user(l, &(from32->u4ReservedSize));
+-			err |= put_user(l, &(to->u4ReservedSize));
+-		} else {
+-			struct COMPAT_VAL_MEMORY_T __user *to32 =
+-				(struct COMPAT_VAL_MEMORY_T *)data32;
+-
+-			struct VAL_MEMORY_T __user *from =
+-				(struct VAL_MEMORY_T *)data;
+-
+-			err = get_user(u, &(from->eMemType));
+-			err |= put_user(u, &(to32->eMemType));
+-			err |= get_user(l, &(from->u4MemSize));
+-			err |= put_user(l, &(to32->u4MemSize));
+-			err |= get_uptr_to_32(&p, &(from->pvMemVa));
+-			err |= put_user(p, &(to32->pvMemVa));
+-			err |= get_uptr_to_32(&p, &(from->pvMemPa));
+-			err |= put_user(p, &(to32->pvMemPa));
+-			err |= get_user(u, &(from->eAlignment));
+-			err |= put_user(u, &(to32->eAlignment));
+-			err |= get_uptr_to_32(&p, &(from->pvAlignMemVa));
+-			err |= put_user(p, &(to32->pvAlignMemVa));
+-			err |= get_uptr_to_32(&p, &(from->pvAlignMemPa));
+-			err |= put_user(p, &(to32->pvAlignMemPa));
+-			err |= get_user(u, &(from->eMemCodec));
+-			err |= put_user(u, &(to32->eMemCodec));
+-			err |= get_user(u, &(from->i4IonShareFd));
+-			err |= put_user(u, &(to32->i4IonShareFd));
+-			err |= get_uptr_to_32(&p,
+-				(void __user **)&(from->pIonBufhandle));
+-			err |= put_user(p, &(to32->pIonBufhandle));
+-			err |= get_uptr_to_32(&p, &(from->pvReserved));
+-			err |= put_user(p, &(to32->pvReserved));
+-			err |= get_user(l, &(from->u4ReservedSize));
+-			err |= put_user(l, &(to32->u4ReservedSize));
+-		}
+-	}
+-	break;
+-	case VAL_FRAME_INFO_TYPE:
+-	{
+-		if (eDirection == COPY_FROM_USER) {
+-			struct COMPAT_VAL_FRAME_INFO_T __user *from32 =
+-				(struct COMPAT_VAL_FRAME_INFO_T *)data32;
+-			struct VAL_FRAME_INFO_T __user *to =
+-				(struct VAL_FRAME_INFO_T *)data;
+-
+-			err = get_user(p, &(from32->handle));
+-			err |= put_user(compat_ptr(p), &(to->handle));
+-			err |= get_user(u, &(from32->driver_type));
+-			err |= put_user(u, &(to->driver_type));
+-			err |= get_user(u, &(from32->input_size));
+-			err |= put_user(u, &(to->input_size));
+-			err |= get_user(u, &(from32->frame_width));
+-			err |= put_user(u, &(to->frame_width));
+-			err |= get_user(u, &(from32->frame_height));
+-			err |= put_user(u, &(to->frame_height));
+-			err |= get_user(u, &(from32->frame_type));
+-			err |= put_user(u, &(to->frame_type));
+-			err |= get_user(u, &(from32->is_compressed));
+-			err |= put_user(u, &(to->is_compressed));
+-		} else {
+-			struct COMPAT_VAL_FRAME_INFO_T __user *to32 =
+-				(struct COMPAT_VAL_FRAME_INFO_T *)data32;
+-			struct VAL_FRAME_INFO_T __user *from =
+-				(struct VAL_FRAME_INFO_T *)data;
+-
+-			err = get_uptr_to_32(&p, &(from->handle));
+-			err |= put_user(p, &(to32->handle));
+-			err |= get_user(u, &(from->driver_type));
+-			err |= put_user(u, &(to32->driver_type));
+-			err |= get_user(u, &(from->input_size));
+-			err |= put_user(u, &(to32->input_size));
+-			err |= get_user(u, &(from->frame_width));
+-			err |= put_user(u, &(to32->frame_width));
+-			err |= get_user(u, &(from->frame_height));
+-			err |= put_user(u, &(to32->frame_height));
+-			err |= get_user(u, &(from->frame_type));
+-			err |= put_user(u, &(to32->frame_type));
+-			err |= get_user(u, &(from->is_compressed));
+-			err |= put_user(u, &(to32->is_compressed));
+-		}
+-	}
+-	break;
+-	default:
+-	break;
+-	}
+-
+-	return err;
+-}
+-
+-
++/*
++ * 32-bit HAL compatibility.  Only the commands that do not carry a
++ * pointer-bearing 64-bit structure are translated for now; the rest return
++ * -ENOTTY until the compat structure conversion is ported.  MFV_* (the
++ * legacy init/power ABI) carry a plain u32 and work as-is.
++ */
+ static long vcodec_unlocked_compat_ioctl(struct file *file,
+ 		unsigned int cmd, unsigned long arg)
+ {
+-	long ret = 0;
+-	/* pr_debug("vcodec_unlocked_compat_ioctl: 0x%x\n", cmd); */
+ 	switch (cmd) {
+-	case VCODEC_ALLOC_NON_CACHE_BUFFER:
+-	case VCODEC_FREE_NON_CACHE_BUFFER:
+-	{
+-		struct COMPAT_VAL_MEMORY_T __user *data32;
+-		struct VAL_MEMORY_T __user *data;
+-		int err;
+-
+-		data32 = compat_ptr(arg);
+-		data = compat_alloc_user_space(sizeof(struct VAL_MEMORY_T));
+-		if (data == NULL)
+-			return -EFAULT;
+-
+-		err = compat_copy_struct(VAL_MEMORY_TYPE,
+-			COPY_FROM_USER, (void *)data32, (void *)data);
+-		if (err)
+-			return (long)err;
+-
+-		ret = file->f_op->unlocked_ioctl(file,
+-			cmd, (unsigned long)data);
+-
+-		err = compat_copy_struct(VAL_MEMORY_TYPE,
+-			COPY_TO_USER, (void *)data32, (void *)data);
+-
+-		if (err)
+-			return err;
+-		return ret;
+-	}
+-	break;
+-	case VCODEC_LOCKHW:
+-	case VCODEC_UNLOCKHW:
+-	{
+-		struct COMPAT_VAL_HW_LOCK_T __user *data32;
+-		struct VAL_HW_LOCK_T __user *data;
+-		int err;
+-
+-		data32 = compat_ptr(arg);
+-		data = compat_alloc_user_space(sizeof(struct VAL_HW_LOCK_T));
+-		if (data == NULL)
+-			return -EFAULT;
+-
+-		err = compat_copy_struct(VAL_HW_LOCK_TYPE,
+-			COPY_FROM_USER, (void *)data32, (void *)data);
+-		if (err)
+-			return err;
+-
+-		ret = file->f_op->unlocked_ioctl(file,
+-			cmd, (unsigned long)data);
+-
+-		err = compat_copy_struct(VAL_HW_LOCK_TYPE,
+-			COPY_TO_USER, (void *)data32, (void *)data);
+-
+-		if (err)
+-			return err;
+-		return ret;
+-	}
+-	break;
+-
+-	case VCODEC_INC_PWR_USER:
+-	case VCODEC_DEC_PWR_USER:
+-	{
+-		struct COMPAT_VAL_POWER_T __user *data32;
+-		struct VAL_POWER_T __user *data;
+-		int err;
+-
+-		data32 = compat_ptr(arg);
+-		data = compat_alloc_user_space(sizeof(struct VAL_POWER_T));
+-		if (data == NULL)
+-			return -EFAULT;
+-
+-		err = compat_copy_struct(VAL_POWER_TYPE,
+-			COPY_FROM_USER, (void *)data32, (void *)data);
+-
+-		if (err)
+-			return err;
+-
+-		ret = file->f_op->unlocked_ioctl(file,
+-			cmd, (unsigned long)data);
+-
+-		err = compat_copy_struct(VAL_POWER_TYPE,
+-			COPY_TO_USER, (void *)data32, (void *)data);
+-
+-		if (err)
+-			return err;
+-		return ret;
+-	}
+-	break;
+-
+-	case VCODEC_WAITISR:
+-	{
+-		struct COMPAT_VAL_ISR_T __user *data32;
+-		struct VAL_ISR_T __user *data;
+-		int err;
+-
+-		data32 = compat_ptr(arg);
+-		data = compat_alloc_user_space(sizeof(struct VAL_ISR_T));
+-		if (data == NULL)
+-			return -EFAULT;
+-
+-		err = compat_copy_struct(VAL_ISR_TYPE,
+-			COPY_FROM_USER, (void *)data32, (void *)data);
+-		if (err)
+-			return err;
+-
+-		ret = file->f_op->unlocked_ioctl(file,
+-			VCODEC_WAITISR, (unsigned long)data);
+-
+-		err = compat_copy_struct(VAL_ISR_TYPE,
+-			COPY_TO_USER, (void *)data32, (void *)data);
+-
+-		if (err)
+-			return err;
+-		return ret;
+-	}
+-	break;
+-
+-	case VCODEC_SET_FRAME_INFO:
+-	{
+-		struct COMPAT_VAL_FRAME_INFO_T __user *data32;
+-		struct VAL_FRAME_INFO_T __user *data;
+-		int err;
+-
+-		data32 = compat_ptr(arg);
+-		data = compat_alloc_user_space(sizeof(struct VAL_FRAME_INFO_T));
+-		if (data == NULL)
+-			return -EFAULT;
+-
+-		err = compat_copy_struct(VAL_FRAME_INFO_TYPE, COPY_FROM_USER,
+-			(void *)data32, (void *)data);
+-		if (err)
+-			return err;
+-
+-		ret = file->f_op->unlocked_ioctl(file,
+-			VCODEC_SET_FRAME_INFO, (unsigned long)data);
+-
+-		err = compat_copy_struct(VAL_FRAME_INFO_TYPE, COPY_TO_USER,
+-			(void *)data32, (void *)data);
+-
+-		if (err)
+-			return err;
+-	}
+-
+-	default:
++	case MFV_TEST_CMD:
++	case MFV_INIT_CMD:
++	case MFV_DEINIT_CMD:
++	case MFV_SET_CMD_CMD:
++	case MFV_SET_PWR_CMD:
++	case MFV_SET_ISR_CMD:
++	case VCODEC_SET_THREAD_ID:
++	case VCODEC_INITHWLOCK:
++	case VCODEC_DEINITHWLOCK:
++	case VCODEC_MB:
+ 		return vcodec_unlocked_ioctl(file, cmd, arg);
++	default:
++		pr_info_ratelimited("[VCODEC] compat ioctl 0x%x not ported yet\n",
++				    cmd);
++		return -ENOTTY;
+ 	}
+-	return 0;
+ }
+ #else
+ #define vcodec_unlocked_compat_ioctl NULL
+@@ -2920,7 +2469,7 @@
+ 				vdec_power_off();
+ #endif
+ #endif
+-				disable_irq(VDEC_IRQ_ID);
++				VCODEC_IRQ_DISABLE(VDEC_IRQ_ID);
+ 			}
+ 		}
+ 
+@@ -2950,7 +2499,7 @@
+ 				venc_power_off();
+ #endif
+ #endif
+-				disable_irq(VENC_IRQ_ID);
++				VCODEC_IRQ_DISABLE(VENC_IRQ_ID);
+ 			}
+ 		}
+ 		grVcodecEncHWLock.pvHandle = 0;
+@@ -3192,6 +2741,19 @@
+ };
+ #endif
+ 
++static struct class *vcodec_class_create(const char *name, const char *alt)
++{
++	struct class *c;
++
++	c = class_create(name);
++	if (IS_ERR(c) && PTR_ERR(c) == -EEXIST) {
++		pr_info("[VCODEC] class %s already exists, trying %s\n",
++			name, alt);
++		c = class_create(alt);
++	}
++	return c;
++}
++
+ static int vcodec_probe(struct platform_device *dev)
+ {
+ 	int ret;
+@@ -3218,9 +2780,16 @@
+ 	gu4L2CCounter = 0;
+ 	mutex_unlock(&L2CLock);
+ 
+-	ret = register_chrdev_region(vcodec_devno, 1, VCODEC_DEVNAME);
+-	if (ret)
+-		pr_debug("[ERROR] Can't Get Major number for VCodec Device\n");
++	ret = register_chrdev_region(vcodec_devno, 2, VCODEC_DEVNAME);
++	if (ret) {
++		pr_info("[VCODEC] cannot reserve major %d (%d), using dynamic major\n",
++			VCODEC_DEV_MAJOR_NUMBER, ret);
++		ret = alloc_chrdev_region(&vcodec_devno, 0, 2, VCODEC_DEVNAME);
++		if (ret)
++			return ret;
++	}
++	vcodec_chrdev_registered = true;
++	vcodec_devno2 = vcodec_devno + 1;
+ 
+ 	vcodec_cdev = cdev_alloc();
+ 	vcodec_cdev->owner = THIS_MODULE;
+@@ -3228,18 +2797,57 @@
+ 
+ 	ret = cdev_add(vcodec_cdev, vcodec_devno, 1);
+ 	if (ret)
+-		pr_debug("[ERROR] Can't add Vcodec Device\n");
++		pr_info("[ERROR] Can't add Vcodec Device\n");
+ 
+-	vcodec_class = class_create(THIS_MODULE, VCODEC_DEVNAME);
++	vcodec_class = vcodec_class_create(vcodec_class_name, "VcodecPort");
+ 	if (IS_ERR(vcodec_class)) {
+ 		ret = PTR_ERR(vcodec_class);
+-		pr_debug("[VCODEC][ERROR] create class fail %d", ret);
++		pr_info("[VCODEC][ERROR] create class fail %d\n", ret);
+ 		return ret;
+ 	}
+ 
+ 	vcodec_device = device_create(vcodec_class,
+ 			NULL, vcodec_devno,
+ 			NULL, VCODEC_DEVNAME);
++	if (IS_ERR(vcodec_device)) {
++		/*
++		 * A previous unload on this live system can leave a stale
++		 * device kobject holding char major 160.  Retry with a
++		 * dynamically allocated major; the device node is still
++		 * /dev/Vcodec.
++		 */
++		pr_info("[VCODEC] device_create %d:%d failed %ld, retrying dynamic major\n",
++			MAJOR(vcodec_devno), MINOR(vcodec_devno),
++			PTR_ERR(vcodec_device));
++		cdev_del(vcodec_cdev);
++		vcodec_cdev = NULL;
++		unregister_chrdev_region(vcodec_devno, 2);
++		vcodec_chrdev_registered = false;
++
++		ret = alloc_chrdev_region(&vcodec_devno, 0, 2, VCODEC_DEVNAME);
++		if (ret)
++			return ret;
++		vcodec_chrdev_registered = true;
++		vcodec_devno2 = vcodec_devno + 1;
++
++		vcodec_cdev = cdev_alloc();
++		vcodec_cdev->owner = THIS_MODULE;
++		vcodec_cdev->ops = &vcodec_fops;
++		ret = cdev_add(vcodec_cdev, vcodec_devno, 1);
++		if (ret)
++			pr_info("[ERROR] Can't add Vcodec Device (retry)\n");
++
++		vcodec_device = device_create(vcodec_class, NULL,
++				vcodec_devno, NULL, VCODEC_DEVNAME);
++		if (IS_ERR(vcodec_device)) {
++			pr_info("[VCODEC] device_create retry failed %ld\n",
++				PTR_ERR(vcodec_device));
++			return PTR_ERR(vcodec_device);
++		}
++	}
++	pr_info("[VCODEC] char device /dev/%s major=%d minor=%d\n",
++		VCODEC_DEVNAME, MAJOR(vcodec_devno), MINOR(vcodec_devno));
++
+ #ifdef CONFIG_PM
+ 	vcodec_device->pm_domain = &mt_vdec_pm_domain;
+ 
+@@ -3251,7 +2859,7 @@
+ 	if (ret)
+ 		pr_debug("[ERROR] Can't add Vcodec Device 2\n");
+ 
+-	vcodec_class2 = class_create(THIS_MODULE, VCODEC_DEVNAME2);
++	vcodec_class2 = vcodec_class_create(vcodec_class_name2, "VcodecPort2");
+ 	if (IS_ERR(vcodec_class2)) {
+ 		ret = PTR_ERR(vcodec_class2);
+ 		pr_debug("[VCODEC][ERROR] create class 2 fail %d", ret);
+@@ -3261,29 +2869,49 @@
+ 	vcodec_device2 = device_create(vcodec_class2,
+ 			NULL, vcodec_devno2,
+ 			NULL, VCODEC_DEVNAME2);
+-	vcodec_device2->pm_domain = &mt_venc_pm_domain;
++	if (IS_ERR(vcodec_device2)) {
++		pr_info("[VCODEC][ERROR] device_create %s failed %ld\n",
++			VCODEC_DEVNAME2, PTR_ERR(vcodec_device2));
++	} else {
++		vcodec_device2->pm_domain = &mt_venc_pm_domain;
++		pm_runtime_enable(vcodec_device2);
++	}
+ 
+ 	pm_runtime_enable(vcodec_device);
+-	pm_runtime_enable(vcodec_device2);
+ #endif
+ 
+-	if (request_irq(VDEC_IRQ_ID,
+-		(irq_handler_t)video_intr_dlr,
+-		IRQF_TRIGGER_LOW, VCODEC_DEVNAME, NULL) < 0)
+-		pr_debug("[VCODEC][ERROR] error to request dec irq\n");
+-	else
+-		pr_debug("[VCODEC] req success dec irq %d\n", VDEC_IRQ_ID);
+-
+-	if (request_irq(VENC_IRQ_ID,
+-		(irq_handler_t)video_intr_dlr2,
+-		IRQF_TRIGGER_LOW, VCODEC_DEVNAME, NULL) < 0)
+-		pr_debug("[VCODEC][ERROR] error to request enc irq\n");
+-	else
+-		pr_debug("[VCODEC] req success enc irq %d\n", VENC_IRQ_ID);
++	vcodec_vdec_irq_ok = false;
++	vcodec_venc_irq_ok = false;
+ 
++	if (VDEC_IRQ_ID > 0) {
++		if (request_irq(VDEC_IRQ_ID,
++				(irq_handler_t)video_intr_dlr,
++				IRQF_TRIGGER_LOW, VCODEC_DEVNAME, NULL) < 0) {
++			pr_info("[VCODEC] cannot request dec irq %d (probably owned by mtk-vcodec-dec), continuing without ISR\n",
++				VDEC_IRQ_ID);
++			VDEC_IRQ_ID = 0;
++		} else {
++			vcodec_vdec_irq_ok = true;
++			pr_info("[VCODEC] requested dec irq %d\n", VDEC_IRQ_ID);
++			VCODEC_IRQ_DISABLE(VDEC_IRQ_ID);
++		}
++	} else {
++		pr_info("[VCODEC] no dec irq available (DT-less path)\n");
++	}
+ 
+-	disable_irq(VDEC_IRQ_ID);
+-	disable_irq(VENC_IRQ_ID);
++	if (VENC_IRQ_ID > 0) {
++		if (request_irq(VENC_IRQ_ID,
++				(irq_handler_t)video_intr_dlr2,
++				IRQF_TRIGGER_LOW, VCODEC_DEVNAME, NULL) < 0) {
++			pr_info("[VCODEC] cannot request enc irq %d, continuing without ISR\n",
++				VENC_IRQ_ID);
++			VENC_IRQ_ID = 0;
++		} else {
++			vcodec_venc_irq_ok = true;
++			pr_info("[VCODEC] requested enc irq %d\n", VENC_IRQ_ID);
++			VCODEC_IRQ_DISABLE(VENC_IRQ_ID);
++		}
++	}
+ 
+ #if 0
+ #ifndef CONFIG_MTK_SMI_EXT
+@@ -3307,34 +2935,49 @@
+ #endif
+ #endif
+ 
+-	clk_MT_CG_VDEC = devm_clk_get(&dev->dev, "MT_CG_VDEC");
+-	if (IS_ERR(clk_MT_CG_VDEC)) {
+-		pr_debug("[VCODEC][ERROR] Unable to devm_clk_get MT_CG_VDEC\n");
+-		return PTR_ERR(clk_MT_CG_VDEC);
+-	}
+-
+-	clk_MT_CG_VENC_VENC = devm_clk_get(&dev->dev, "MT_CG_VENC");
+-	if (IS_ERR(clk_MT_CG_VENC_VENC)) {
+-		pr_debug("[VCODEC][ERROR] Unable to devm_clk_get MT_CG_VENC_VENC\n");
+-		return PTR_ERR(clk_MT_CG_VENC_VENC);
+-	}
+-
+-	clk_MT_SCP_SYS_VDE = devm_clk_get(&dev->dev, "MT_SCP_SYS_VDE");
+-	if (IS_ERR(clk_MT_SCP_SYS_VDE)) {
+-		pr_debug("[VCODEC][ERROR] Unable to devm_clk_get MT_SCP_SYS_VDE\n");
+-		return PTR_ERR(clk_MT_SCP_SYS_VDE);
+-	}
+-
+-	clk_MT_SCP_SYS_VEN = devm_clk_get(&dev->dev, "MT_SCP_SYS_VEN");
+-	if (IS_ERR(clk_MT_SCP_SYS_VEN)) {
+-		pr_debug("[VCODEC][ERROR] Unable to devm_clk_get MT_SCP_SYS_VEN\n");
+-		return PTR_ERR(clk_MT_SCP_SYS_VEN);
+-	}
+-
+-	clk_MT_SCP_SYS_DIS = devm_clk_get(&dev->dev, "MT_SCP_SYS_DIS");
+-	if (IS_ERR(clk_MT_SCP_SYS_DIS)) {
+-		pr_debug("[VCODEC][ERROR] Unable to devm_clk_get MT_SCP_SYS_DIS\n");
+-		return PTR_ERR(clk_MT_SCP_SYS_DIS);
++	/*
++	 * Clocks are optional.  On the DT-less path the init code already
++	 * resolved vdec/larb1 from the mainline video-codec/larb nodes.
++	 */
++	if (dev->dev.of_node) {
++		struct clk *c;
++
++		c = devm_clk_get(&dev->dev, "MT_CG_VDEC");
++		if (!IS_ERR(c))
++			clk_MT_CG_VDEC = c;
++		else
++			pr_info("[VCODEC] clock MT_CG_VDEC not available (%ld)\n",
++				PTR_ERR(c));
++
++		c = devm_clk_get(&dev->dev, "MT_CG_VENC");
++		if (!IS_ERR(c))
++			clk_MT_CG_VENC_VENC = c;
++		else
++			pr_info("[VCODEC] clock MT_CG_VENC not available (%ld)\n",
++				PTR_ERR(c));
++
++		c = devm_clk_get(&dev->dev, "MT_SCP_SYS_VDE");
++		if (!IS_ERR(c))
++			clk_MT_SCP_SYS_VDE = c;
++		else
++			pr_info("[VCODEC] clock MT_SCP_SYS_VDE not available (%ld)\n",
++				PTR_ERR(c));
++
++		c = devm_clk_get(&dev->dev, "MT_SCP_SYS_VEN");
++		if (!IS_ERR(c))
++			clk_MT_SCP_SYS_VEN = c;
++		else
++			pr_info("[VCODEC] clock MT_SCP_SYS_VEN not available (%ld)\n",
++				PTR_ERR(c));
++
++		c = devm_clk_get(&dev->dev, "MT_SCP_SYS_DIS");
++		if (!IS_ERR(c))
++			clk_MT_SCP_SYS_DIS = c;
++		else
++			pr_info("[VCODEC] clock MT_SCP_SYS_DIS not available (%ld)\n",
++				PTR_ERR(c));
++	} else {
++		pr_info("[VCODEC] DT-less platform device, keeping clocks from init\n");
+ 	}
+ 
+ #if USE_WAKELOCK == 0
+@@ -3381,10 +3024,9 @@
+ 	return 0;
+ }
+ 
+-static int vcodec_remove(struct platform_device *pDev)
++static void vcodec_remove(struct platform_device *pDev)
+ {
+ 	pr_debug("%s\n", __func__);
+-	return 0;
+ }
+ 
+ #ifdef CONFIG_MTK_HIBERNATION
+@@ -3418,12 +3060,31 @@
+ 	.resume = vcodec_resume,
+ #endif
+ 	.driver = {
+-		.name  = VCODEC_DEVNAME,
++		.name  = VCODEC_DRVNAME,
+ 		.owner = THIS_MODULE,
+ 		.of_match_table = vcodec_of_match,
+ 	},
+ };
+ 
++static void __iomem *vcodec_map_compat(const char *compat,
++					phys_addr_t fallback,
++					resource_size_t size)
++{
++	struct device_node *node;
++	struct resource res;
++	void __iomem *base = NULL;
++
++	node = of_find_compatible_node(NULL, NULL, compat);
++	if (node) {
++		if (!of_address_to_resource(node, 0, &res))
++			base = ioremap(res.start, size);
++		of_node_put(node);
++	}
++	if (!base)
++		base = ioremap(fallback, size);
++	return base;
++}
++
+ static int __init vcodec_driver_init(void)
+ {
+ 	enum VAL_RESULT_T  eValHWLockRet;
+@@ -3449,38 +3110,109 @@
+ 	gu4LogCount = 0;
+ 	mutex_unlock(&LogCountLock);
+ 
++	/*
++	 * Locate the blocks.  Prefer vendor-compatible DT nodes; if the board
++	 * DT only has the mainline mt8183-compatible nodes (as on the T1100),
++	 * reuse those; otherwise fall back to the stock MT6771 map.
++	 */
+ 	{
+-		struct device_node *node = NULL;
+-
+-		node = of_find_compatible_node(NULL, NULL, "mediatek,venc");
+-		KVA_VENC_BASE = (unsigned long)of_iomap(node, 0);
+-		VENC_IRQ_ID =  irq_of_parse_and_map(node, 0);
+-		KVA_VENC_IRQ_STATUS_ADDR =    KVA_VENC_BASE + 0x05C;
+-		KVA_VENC_IRQ_ACK_ADDR  = KVA_VENC_BASE + 0x060;
+-	}
+-
+-	{
+-		struct device_node *node = NULL;
++		struct device_node *node;
++		struct resource res;
+ 
+ 		node = of_find_compatible_node(NULL, NULL, "mediatek,vdec");
+-		KVA_VDEC_BASE = (unsigned long)of_iomap(node, 0);
+-		VDEC_IRQ_ID =  irq_of_parse_and_map(node, 0);
+-		KVA_VDEC_MISC_BASE = KVA_VDEC_BASE + 0x0000;
++		if (!node)
++			node = of_find_compatible_node(NULL, NULL,
++						"mediatek,mt8183-vcodec-dec");
++		if (node) {
++			if (!of_address_to_resource(node, 0, &res))
++				KVA_VDEC_BASE = (unsigned long)
++					ioremap(res.start, VDEC_REGION);
++			VDEC_IRQ_ID = irq_of_parse_and_map(node, 0);
++			clk_MT_CG_VDEC = of_clk_get_by_name(node, "vdec");
++			if (IS_ERR(clk_MT_CG_VDEC)) {
++				long __e = PTR_ERR(clk_MT_CG_VDEC);
++
++				pr_info("[VCODEC] of_clk_get_by_name(vdec) on %s failed %ld, trying index 0\n",
++					of_node_full_name(node), __e);
++				clk_MT_CG_VDEC = of_clk_get(node, 0);
++				if (IS_ERR(clk_MT_CG_VDEC)) {
++					pr_info("[VCODEC] of_clk_get(0) failed %ld (clocks=%d names=%d)\n",
++						PTR_ERR(clk_MT_CG_VDEC),
++						of_property_count_u32_elems(node, "clocks"),
++						of_property_count_strings(node, "clock-names"));
++					clk_MT_CG_VDEC = NULL;
++				}
++			}
++			of_node_put(node);
++		}
++		if (!KVA_VDEC_BASE)
++			KVA_VDEC_BASE = (unsigned long)
++				ioremap(VDEC_BASE_PHY, VDEC_REGION);
++		KVA_VDEC_MISC_BASE = KVA_VDEC_BASE;
+ 		KVA_VDEC_VLD_BASE = KVA_VDEC_BASE + 0x1000;
+ 	}
++
+ 	{
+-		struct device_node *node = NULL;
++		struct device_node *node;
++
++		node = of_find_compatible_node(NULL, NULL, "mediatek,venc");
++		if (node) {
++			struct resource res;
+ 
+-		node = of_find_compatible_node(NULL,
+-				NULL, "mediatek,vdec_gcon");
+-		KVA_VDEC_GCON_BASE = (unsigned long)of_iomap(node, 0);
+-
+-		pr_debug("[VCODEC][DeviceTree] KVA_VENC_BASE(0x%lx), KVA_VDEC_BASE(0x%lx), KVA_VDEC_GCON_BASE(0x%lx)",
+-			 KVA_VENC_BASE, KVA_VDEC_BASE, KVA_VDEC_GCON_BASE);
+-		pr_debug("[VCODEC][DeviceTree] VDEC_IRQ_ID(%d), VENC_IRQ_ID(%d)",
+-			 VDEC_IRQ_ID, VENC_IRQ_ID);
++			if (!of_address_to_resource(node, 0, &res))
++				KVA_VENC_BASE = (unsigned long)
++					ioremap(res.start, VENC_REGION);
++			VENC_IRQ_ID = irq_of_parse_and_map(node, 0);
++			clk_MT_CG_VENC_VENC = of_clk_get_by_name(node, "venc");
++			if (IS_ERR(clk_MT_CG_VENC_VENC))
++				clk_MT_CG_VENC_VENC = NULL;
++			of_node_put(node);
++		}
++		if (!KVA_VENC_BASE)
++			KVA_VENC_BASE = (unsigned long)
++				ioremap(VENC_BASE, VENC_REGION);
++		KVA_VENC_IRQ_STATUS_ADDR = KVA_VENC_BASE + 0x05C;
++		KVA_VENC_IRQ_ACK_ADDR = KVA_VENC_BASE + 0x060;
++	}
++
++	KVA_VDEC_GCON_BASE = (unsigned long)
++		vcodec_map_compat("mediatek,vdec_gcon", 0x16000000, 0x1000);
++
++	{
++		struct device_node *node;
++
++		node = of_find_node_by_path("/soc/larb@16010000");
++		if (!node) {
++			struct device_node *n;
++
++			for_each_compatible_node(n, NULL,
++						 "mediatek,mt8183-smi-larb") {
++				struct resource r;
++
++				if (!of_address_to_resource(n, 0, &r) &&
++				    r.start == 0x16010000) {
++					node = n;
++					break;
++				}
++				of_node_put(n);
++			}
++		}
++		if (node) {
++			clk_MT_CG_LARB1 = of_clk_get_by_name(node, "smi");
++			if (IS_ERR(clk_MT_CG_LARB1))
++				clk_MT_CG_LARB1 = NULL;
++			of_node_put(node);
++		}
+ 	}
+ 
++	pr_info("[VCODEC] iomap VENC=0x%lx VDEC=0x%lx GCON=0x%lx irq dec=%d enc=%d\n",
++		KVA_VENC_BASE, KVA_VDEC_BASE, KVA_VDEC_GCON_BASE,
++		VDEC_IRQ_ID, VENC_IRQ_ID);
++	pr_info("[VCODEC] clocks from DT: vdec=%s larb1=%s venc=%s\n",
++		clk_MT_CG_VDEC ? "ok" : "missing",
++		clk_MT_CG_LARB1 ? "ok" : "missing",
++		clk_MT_CG_VENC_VENC ? "ok" : "missing");
++
+ 	spin_lock_irqsave(&LockDecHWCountLock, ulFlagsLockHW);
+ 	gu4LockDecHWCount = 0;
+ 	spin_unlock_irqrestore(&LockDecHWCountLock, ulFlagsLockHW);
+@@ -3588,22 +3320,37 @@
+ #endif
+ 
+ #ifdef VCODEC_DEBUG_SYS
+-	vcodec_debug_kobject = kobject_create_and_add("vcodec", NULL);
+-
++	vcodec_debug_kobject = kobject_create_and_add(VCODEC_DEBUG_NAME, NULL);
+ 	if (!vcodec_debug_kobject) {
+-		pr_debug("Faile to create and add vcodec kobject");
+-		return -ENOMEM;
++		pr_info("[VCODEC] cannot create /sys/vcodec (non-fatal)\n");
++	} else {
++		error = sysfs_create_file(vcodec_debug_kobject,
++				&vcodec_debug_attr.attr);
++		if (error)
++			pr_info("[VCODEC] cannot create /sys/%s/%s (non-fatal)\n",
++				VCODEC_DEBUG_NAME, "vcodec");
+ 	}
++#endif
+ 
+-	error = sysfs_create_file(vcodec_debug_kobject,
+-			&vcodec_debug_attr.attr);
+-	if (error) {
+-		pr_debug("Faile to create and add vcodec_debug file in /sys/vcodec/");
++	error = platform_driver_register(&vcodec_driver);
++	if (error)
+ 		return error;
++
++	/*
++	 * The T1100 DTB has no "mediatek,vdec_gcon" node, so the of match
++	 * above never fires.  Bind through a simple platform device so that
++	 * vcodec_probe() still creates /dev/Vcodec.
++	 */
++	if (!of_find_compatible_node(NULL, NULL, "mediatek,vdec_gcon")) {
++		vcodec_pdev = platform_device_register_simple(VCODEC_DRVNAME,
++				PLATFORM_DEVID_NONE, NULL, 0);
++		if (IS_ERR(vcodec_pdev)) {
++			platform_driver_unregister(&vcodec_driver);
++			return PTR_ERR(vcodec_pdev);
++		}
+ 	}
+-#endif
+ 
+-	return platform_driver_register(&vcodec_driver);
++	return 0;
+ }
+ 
+ static void __exit vcodec_driver_exit(void)
+@@ -3627,19 +3374,33 @@
+ 
+ 	mutex_unlock(&IsOpenedLock);
+ 
+-	cdev_del(vcodec_cdev);
+-	unregister_chrdev_region(vcodec_devno, 1);
++	if (vcodec_cdev)
++		cdev_del(vcodec_cdev);
++	if (vcodec_chrdev_registered) {
++		/* both /dev/Vcodec (minor 0) and /dev/Vcodec2 (minor 1) */
++		unregister_chrdev_region(vcodec_devno, 2);
++		vcodec_chrdev_registered = false;
++	}
+ #ifdef CONFIG_PM
+-	cdev_del(vcodec_cdev2);
+-#endif
++	if (vcodec_cdev2)
++		cdev_del(vcodec_cdev2);
++	if (!IS_ERR_OR_NULL(vcodec_device2))
++		device_destroy(vcodec_class2, vcodec_devno2);
++	if (!IS_ERR_OR_NULL(vcodec_class2))
++		class_destroy(vcodec_class2);
++#endif
++	if (!IS_ERR_OR_NULL(vcodec_device))
++		device_destroy(vcodec_class, vcodec_devno);
++	if (!IS_ERR_OR_NULL(vcodec_class))
++		class_destroy(vcodec_class);
+ 	/* [TODO] iounmap the following? */
+ #if 0
+ 	iounmap((void *)KVA_VENC_IRQ_STATUS_ADDR);
+ 	iounmap((void *)KVA_VENC_IRQ_ACK_ADDR);
+ #endif
+ 
+-	free_irq(VENC_IRQ_ID, NULL);
+-	free_irq(VDEC_IRQ_ID, NULL);
++	VCODEC_IRQ_FREE(VENC_IRQ_ID);
++	VCODEC_IRQ_FREE(VDEC_IRQ_ID);
+ 
+ 	/* MT6589_HWLockEvent part */
+ 	eValHWLockRet = eVideoCloseEvent(&DecHWLockEvent,
+@@ -3669,9 +3430,12 @@
+ #endif
+ 
+ #ifdef VCODEC_DEBUG_SYS
+-	kobject_put(vcodec_debug_kobject);
++	if (vcodec_debug_kobject)
++		kobject_put(vcodec_debug_kobject);
+ #endif
+ 
++	if (vcodec_pdev)
++		platform_device_unregister(vcodec_pdev);
+ 	platform_driver_unregister(&vcodec_driver);
+ }
+ 
+=== modified: videocodec_kernel.c ===
+--- oppo-videocodec/videocodec_kernel.c	2026-11-20 01:26:18.090851397 +0300
++++ t1100-vcodec-port/videocodec_kernel.c	2026-11-20 01:51:00.929973340 +0300
+@@ -11,6 +11,8 @@
+  * GNU General Public License for more details.
+  */
+ 
++#include <linux/mm.h>
++#include <linux/sched.h>
+ #include <linux/uaccess.h>
+ #include <linux/module.h>
+ #include <linux/fs.h>
+@@ -38,52 +40,71 @@
+ #endif
+ #define pr_fmt(fmt) "["KBUILD_MODNAME"]" fmt
+ 
+-unsigned long pmem_user_v2p_video(unsigned long va)
++static int vcodec_va_to_pfn_pfnmap(unsigned long va, unsigned long *pfn)
+ {
+-	unsigned long pageOffset = (va & (PAGE_SIZE - 1));
+-	pgd_t *pgd;
+-	pud_t *pud;
+-	pmd_t *pmd;
+-	pte_t *pte;
+-	unsigned long pa;
++	struct vm_area_struct *vma;
++	struct follow_pfnmap_args args;
++	int ret = -EINVAL;
++
++	mmap_read_lock(current->mm);
++	vma = find_vma(current->mm, va);
++	if (!vma || va < vma->vm_start)
++		goto out;
++
++	memset(&args, 0, sizeof(args));
++	args.vma = vma;
++	args.address = va;
++	ret = follow_pfnmap_start(&args);
++	if (ret)
++		goto out;
++
++	*pfn = args.pfn;
++	follow_pfnmap_end(&args);
++	ret = 0;
++out:
++	mmap_read_unlock(current->mm);
++	return ret;
++}
+ 
+-	if (current == NULL) {
+-		pr_info("[ERROR] %s, current is NULL!\n", __func__);
+-		return 0;
+-	}
++static int vcodec_va_to_pfn_gup(unsigned long va, unsigned long *pfn)
++{
++	struct page *page = NULL;
++	int ret;
+ 
+-	if (current->mm == NULL) {
+-		pr_info("[ERROR] v2p, mm is NULL! tgid=0x%x, name=%s\n",
+-				current->tgid, current->comm);
+-		return 0;
+-	}
++	ret = pin_user_pages_fast(va & PAGE_MASK, 1, 0, &page);
++	if (ret != 1)
++		return -EFAULT;
+ 
+-	pgd = pgd_offset(current->mm, va);  /* what is tsk->mm */
+-	if (pgd_none(*pgd) || pgd_bad(*pgd)) {
+-		pr_info("[ERROR] v2p, va=0x%lx, pgd invalid!\n", va);
+-		return 0;
+-	}
++	*pfn = page_to_pfn(page);
++	unpin_user_page(page);
++	return 0;
++}
+ 
+-	pud = pud_offset(pgd, va);
+-	if (pud_none(*pud) || pud_bad(*pud)) {
+-		pr_info("[ERROR] v2p, va=0x%lx, pud invalid!\n", va);
+-		return 0;
+-	}
++/*
++ * Mainline 6.12 replacement for MTK's pmem_user_v2p_video().
++ *
++ * The vendor driver only uses the returned physical address as a stable
++ * per-instance handle (HW lock ownership, DVFS job key).  Handle both
++ * PFNMAP/IO mappings (ION/dma-buf) and ordinary user pages.
++ */
++unsigned long pmem_user_v2p_video(unsigned long va)
++{
++	unsigned long page_offset = va & (PAGE_SIZE - 1);
++	unsigned long pfn = 0;
+ 
+-	pmd = pmd_offset(pud, va);
+-	if (pmd_none(*pmd) || pmd_bad(*pmd)) {
+-		pr_info("[ERROR] v2p(), va=0x%lx, pmd invalid!\n", va);
++	if (!current || !current->mm) {
++		pr_info("[ERROR] %s, current/mm is NULL!\n", __func__);
+ 		return 0;
+ 	}
+ 
+-	pte = pte_offset_map(pmd, va);
+-	if (pte_present(*pte)) {
+-		pa = (pte_val(*pte) & PHYS_MASK & (PAGE_MASK)) | pageOffset;
+-		pte_unmap(pte);
+-		return pa;
++	if (vcodec_va_to_pfn_pfnmap(va, &pfn) &&
++	    vcodec_va_to_pfn_gup(va, &pfn)) {
++		pr_info_ratelimited("[ERROR] v2p: va=0x%lx not mapped\n", va);
++		return 0;
+ 	}
+ 
+-	pr_info("[ERROR] v2p, va=0x%lx, pte invalid!\n", va);
+-	return 0;
++	return (pfn << PAGE_SHIFT) | page_offset;
+ }
++#ifndef VCODEC_LIVE_TEST
+ EXPORT_SYMBOL(pmem_user_v2p_video);
++#endif
+=== modified: val.c ===
+--- oppo-videocodec/mt6771/common/val/src/val.c	2026-11-20 01:23:10.192429086 +0300
++++ t1100-vcodec-port/mt6771/common/val/src/val.c	2026-11-20 01:34:29.601647153 +0300
+@@ -24,6 +24,7 @@
+ #include <linux/sched.h>
+ #include <linux/wait.h>
+ #include <linux/time.h>
++#include <linux/timekeeping.h>
+ #include <linux/mm.h>
+ #include <linux/slab.h>
+ #include <linux/semaphore.h>
+@@ -255,10 +256,10 @@
+ enum VAL_RESULT_T eVideoGetTimeOfDay(struct VAL_TIME_T *a_prParam,
+ 			unsigned int a_u4ParamSize)
+ {
+-	struct timeval t1;
++	struct timespec64 t1;
+ 
+-	do_gettimeofday(&t1);
+-	a_prParam->u4Sec = t1.tv_sec;
+-	a_prParam->u4uSec = t1.tv_usec;
++	ktime_get_real_ts64(&t1);
++	a_prParam->u4Sec = (unsigned int)t1.tv_sec;
++	a_prParam->u4uSec = (unsigned int)(t1.tv_nsec / 1000);
+ 	return VAL_RESULT_NO_ERROR;
+ }
+=== modified: dvfs_v2.c ===
+--- oppo-videocodec/mt6771/common/drv/src/dvfs_v2.c	2026-11-20 01:23:08.170786914 +0300
++++ t1100-vcodec-port/mt6771/common/drv/src/dvfs_v2.c	2026-11-20 01:34:29.601730965 +0300
+@@ -55,10 +55,10 @@
+  */
+ long long get_time_us(void)
+ {
+-	struct timeval tv;
++	struct timespec64 tv;
+ 
+-	do_gettimeofday(&tv);
+-	return (1000000LL * tv.tv_sec + tv.tv_usec);
++	ktime_get_real_ts64(&tv);
++	return (1000000LL * tv.tv_sec + tv.tv_nsec / 1000);
+ }
+ 
+ /**
+=== modified: videocodec_kernel.h ===
+--- oppo-videocodec/videocodec_kernel.h	2026-11-20 01:26:19.749717382 +0300
++++ t1100-vcodec-port/videocodec_kernel.h	2026-11-20 01:33:43.367488591 +0300
+@@ -14,6 +14,8 @@
+ #ifndef __VIDEOCODEC_KERNEL_H__
+ #define __VIDEOCODEC_KERNEL_H__
+ 
++#include <linux/types.h>
++
+ unsigned long pmem_user_v2p_video(unsigned long va);
+ 
+ #endif /* __VIDEOCODEC_KERNEL_H__ */
