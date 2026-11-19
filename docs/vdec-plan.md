@@ -109,3 +109,75 @@ SCP-прошивка» (`/delete-node/ &vcodec_dec;`). Теперь SCP есть
   (AP-side `/dev/Vcodec`, `/dev/vpu` или SCP) и искать
   MT6771-специфичную прошивку/путь.
 - HEVC по-прежнему вне цели; софт-декод остаётся fallback.
+
+## 7. Вендорский AP-side VDEC: `/dev/Vcodec` + 32-битный HAL (21.11.2026)
+
+Проверка Aurora T800 (`defaultuser@192.168.2.76`, Aurora 5.2.1.210, kernel
+4.14.186, MT6771V/C) показала: **декодирование там идёт не через SCP**. SCP
+занят сенсорами (в dmesg — `lsm6ds3_acc`, `bmi160_acc`, `lis3dh`, `bmp280`,
+`akm09915`), а `/dev/vpu` (major 506, owner `system:camera`) и ядра
+`vpu_core0/1` (`0x19100000`, `0x19200000`) относятся к камере.
+
+Реальный путь:
+
+```
+media.codec (OMX service)
+  -> libMtkOmxVdecEx.so
+  -> libvcodecdrv.so
+  -> ioctl/mmap /dev/Vcodec (char 160:0)
+```
+
+`/sys/dev/char/160:0` указывает на `/sys/devices/virtual/Vcodec/Vcodec`;
+драйвер `Vcodec` привязан к `16000000.vdec_gcon`. В kallsyms видны
+`vcodec_open/release/mmap/unlocked_ioctl`, `vdec_power_on/off`,
+`mt_vdec_runtime_suspend/resume`, `mt_vdec_base_get`, `VdecDvfsBegin/End/Step`,
+`vcodec_venc_pmqos`. IRQ — `MT_SYSIRQ 250` и `247`.
+
+### Исходник драйвера найден публично
+
+В `oppo-source/android_kernel_oppo_mt6771`, ветка `oppo/mt6771_r_11`:
+
+```
+drivers/misc/mediatek/videocodec/
+  mt6771/videocodec_kernel_driver.c   ~105 КБ, 3682 строки
+  mt6771/videocodec_kernel_driver.h   ioctl ABI, magic 'M'
+  mt6771/common/drv/{src,inc}         drv_base.c, dvfs_v2.c, drv_api.h
+  mt6771/common/val/src/val.c
+  include/...                         val_types_*, hal_types_*, val_api_*
+```
+
+Драйвер совпадает с Aurora по символам и ioctl: `vcodec_unlocked_ioctl`
+(строка 1894), `mt_vdec_base_get` (484), `VdecDvfsBegin` (361),
+`vcodec_venc_pmqos` (1039), `compatible = "mediatek,vdec_gcon"`.
+
+### Важное ограничение: кодек не в ядре
+
+`videocodec_kernel_driver.c` содержит только перечисления типов
+H.264/HEVC/VP9, PMQoS и диспетчеризацию IRQ. В `common/val/src/val.c`,
+`common/drv/src/drv_base.c`, `dvfs_v2.c`, `hal.c` **нет** кодак-алгоритмов.
+`MFV_ALLOC_MEM_CMD` есть только в заголовке (case в драйвере отсутствует),
+`VCODEC_ALLOC_NON_CACHE_BUFFER/FREE` — пустые тела. Драйвер делает
+питание/клоки/ISR/блокировки/mmap, а H.264/HEVC/VP9 считает **32-битная
+user-space `libvcodecdrv.so`**, выделяя память через `/dev/ion`
+(`libion_mtk.so`).
+
+### 32-битный runtime на T1100 проверен
+
+T1100: `CONFIG_COMPAT=y`, `CONFIG_COMPAT_BINFMT_ELF=y`; статический ARM32
+бинарник работает. Собран bionic-chroot с Aurora: `/system/bin/linker`,
+`/system/lib`, `/vendor/lib`, VNDK v30; 32-битный `hello32bionic` и vendor
+OMX service запускаются, `strace` подтверждает загрузку ELF32
+`/system/lib/libc.so`. Closure: 107 библиотек/бинарников, 0 unresolved
+`DT_NEEDED`. Для bionic обязательны `/proc` и `/dev` внутри chroot.
+
+### Блокеры и следующий шаг
+
+| Блокер | Состояние |
+|---|---|
+| `/dev/Vcodec` | нет в mainline; `bringup` портирует vendor-драйвер на 6.12 |
+| `/dev/ion` | нет; `CONFIG_ION` отсутствует, `libion_mtk` ходит в `/dev/ion` |
+| `/dev/dma_heap` | нет; `CONFIG_DMABUF_HEAPS` не включён |
+
+Варианты: (1) порт `Vcodec` + 32-битный `libion`-шим над DMA-BUF/memfd;
+(2) порт MTK ION; (3) переписать HAL. Пока цель — H.264; HEVC по-прежнему
+вне реалистичного пути (mainline HEVC только LAT, вендор — OMX-блоб).
