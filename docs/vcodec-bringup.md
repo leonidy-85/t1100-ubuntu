@@ -162,3 +162,30 @@ MT6771 (другая ревизия/ABI), либо stateless-контролы (S
 
 Состояние p29: `build/scp/boot_vcodec2.img` (md5 `bc48aedf…`), SCP
 `running`, vcodec-модуль чистый, декод не работает.
+
+## Вендорский путь: `/dev/Vcodec` + 32-битный `libvcodecdrv` (21.11.2026)
+
+После проверки T800 стало ясно, что mt8183-прошивка SCP — тупик для MT6771:
+на T800 VDEC управляется AP-side драйвером `Vcodec` (`/dev/Vcodec`, char
+160:0), а не SCP. SCP там обслуживает сенсоры, VPU — камеру.
+
+- Драйвер `Vcodec` найден в публичном дереве OPPO MT6771:
+  `drivers/misc/mediatek/videocodec/mt6771/videocodec_kernel_driver.c`
+  (3682 строки), `compatible = "mediatek,vdec_gcon"`, ioctl magic `'M'`.
+- Драйвер — инфраструктура: `vcodec_open/release/mmap/unlocked_ioctl`,
+  `vdec_power_on/off`, `mt_vdec_runtime_*`, `mt_vdec_base_get`, DVFS/PMQoS,
+  IRQ 250/247. Кодак-алгоритмов в нём нет.
+- H.264/HEVC/VP9 считает 32-битная `libvcodecdrv.so` (Android bionic),
+  она использует `/dev/ion` через `libion_mtk.so`; `libMtkOmxVdecEx.so` —
+  OMX-обёртка.
+- 32-битный bionic на T1100 уже проверен: `CONFIG_COMPAT` работает,
+  chroot с Aurora `/system/bin/linker` + `/system/lib` + `/vendor/lib`
+  запускает 32-битные бинарники; нужны `/proc` и `/dev`.
+- Блокеры: нет `/dev/Vcodec`, нет `/dev/ion`, нет `/dev/dma_heap`
+  (`CONFIG_ION`/`CONFIG_DMABUF_HEAPS` не включены). Драйвер `Vcodec`
+  декод-память не выделяет (`MFV_ALLOC_MEM_CMD` без case,
+  `VCODEC_ALLOC_NON_CACHE_BUFFER` пустой), поэтому нужен ION/DMA-BUF шим.
+
+Текущая p29: `build/scp/boot_vcodec2.img` (md5 `bc48aedf…`); откат —
+`build/scp/boot_scp2.img` (`57ac8b08…`) и `/root/boot_a_before_scp.img`
+(`efaeaacc…`). Ничего не прошивалось.

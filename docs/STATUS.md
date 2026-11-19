@@ -5596,3 +5596,25 @@ BTIF/STP-транспорт (включая исправленную поляр�
   разобрать архитектуру декода на эталонном T800 (AP-side `/dev/Vcodec`,
   `/dev/vpu`, SCP) и искать MT6771-прошивку/путь. Детали —
   `docs/vcodec-bringup.md`.
+
+### 21.11 (1): архитектура T800 — AP-side `/dev/Vcodec`, 32-битный HAL
+
+- Проверен Aurora T800: VDEC там **не через SCP**. `/dev/Vcodec` (char 160:0)
+  — AP-side драйвер `Vcodec`, привязанный к `16000000.vdec_gcon`; SCP занят
+  сенсорами, `/dev/vpu` (506:0, `system:camera`) — камерой.
+- В публичном дереве `oppo-source/android_kernel_oppo_mt6771` найден исходник
+  `drivers/misc/mediatek/videocodec/mt6771/videocodec_kernel_driver.c`
+  (~105 КБ): `vcodec_unlocked_ioctl`, `vcodec_mmap`, `vdec_power_on/off`,
+  `mt_vdec_base_get`, `VdecDvfsBegin`, `compatible = "mediatek,vdec_gcon"`.
+- Драйвер — только инфраструктура (питание/клоки/ISR/память/ioctl). Кодак
+  H.264/HEVC/VP9 — в 32-битной user-space `libvcodecdrv.so`; она использует
+  `/dev/ion` через `libion_mtk.so`. `libMtkOmxVdecEx.so` — OMX-обёртка.
+- 32-битный bionic на T1100 проверен: `CONFIG_COMPAT=y`, статический ARM32
+  работает; chroot с Aurora `/system/bin/linker`/`/system/lib`/`/vendor/lib`
+  + VNDK v30 запускает 32-битные бинарники и vendor OMX service. Нужны
+  `/proc` и `/dev` внутри chroot.
+- Блокеры: нет `/dev/Vcodec` (порт vendor-драйвера в работе), нет `/dev/ion`,
+  нет `/dev/dma_heap`. Драйвер `Vcodec` декод-память не выделяет, поэтому
+  нужен ION/DMA-BUF шим. p29 не менялась: `build/scp/boot_vcodec2.img`
+  (md5 `bc48aedf…`), откат `boot_scp2.img` (`57ac8b08…`).
+- Детали: `docs/vdec-plan.md` §7, `docs/vcodec-bringup.md`.
