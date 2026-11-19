@@ -1,6 +1,10 @@
 # Аппаратный декод видео: отложен, пока не доказан SCP-путь
 
-**Статус:** proposed (18.11.2026)
+**Статус:** superseded by ADR 0004 (20.11.2026)
+
+> **Обновлено 20.11.2026:** SCP-путь доказан — mainline `mtk_scp` поднимает
+> MT8183-прошивку на MT6771, `mtk-vcodec-dec` пробуется. См.
+> `docs/scp-bringup.md`, `docs/vcodec-bringup.md` и ADR 0004.
 
 Узел `vcodec_dec` в `mt6771.dtsi` остаётся удалённым: mainline-драйвер
 `mediatek,mt8183-vcodec-dec` требует rproc (`mediatek,scp`/`mediatek,vpu`) с

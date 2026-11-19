@@ -5561,3 +5561,22 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Пользователь собрал `exfat.ko` на самом планшете (kbuild-дерево в `/root/kbuild/linux-6.12.114`), модуль забран в репо: `rootfs-overlay/lib/modules/6.12.114-wifi1/kernel/fs/exfat/exfat.ko`, sha256 `75657f1bbfe1c01a39be35c2f954dd50899fb7620ff2edab826c7d8cfd372314`, 113 280 Б.
 - vermagic `6.12.114-wifi1 SMP preempt mod_unload aarch64`; на планшете `modprobe exfat` → 0, `/proc/filesystems` содержит exfat.
 - В `.gitignore` добавлено исключение `!rootfs-overlay/lib/modules/**/*.ko`, иначе глобальный `*.ko` не давал положить модуль в репозиторий. После перепрошивки rootfs достаточно `depmod -a 6.12.114-wifi1`.
+
+### 20.11 (2): SCP загружен на MT6771 — путь к железному декоду открыт
+
+- Спайк A из `docs/vdec-plan.md` выполнен: mainline `mtk_scp` с прошивкой `mediatek/mt8183/scp.img` поднимает SCP на MT6771. DTB: `scp@10500000` (`mediatek,mt8183-scp`, IRQ **174**) + `reserved-memory/memory@50000000` (41 MiB, no-map). Скрипт — `scripts/dtb-add-scp.py`, детали — `docs/scp-bringup.md`.
+- Прошивка: linux-firmware `mediatek/mt8183/scp.img`, 1 030 776 Б, sha256 `401e9c02…`; в ней есть `VDEC_SERVICE`, `h264`, `vp9`. Стоковая `scp_a` (p21) — не ELF, а контейнер `tinysys-loader-CM4_A`, mainline её не грузит.
+- Модули на планшете: `mtk_scp.ko`, `mtk_scp_ipi.ko`, `mtk_rpmsg.ko` (без последнего — `Unknown symbol mtk_rpmsg_create_rproc_subdev`), `depmod -a 6.12.114-wifi1`, `/etc/modules-load.d/scp.conf`.
+- Результат: `remoteproc0` → `running`, FW `kukui_scp_v2.0.13324-280b9fce97`, IRQ 174 в `/proc/interrupts` с ненулевым счётчиком. Грабли: в первой DTB было `interrupts = <0 0x174 4>` (hwirq 372) — SCP стартовал, но IRQ не приходил, драйвер падал с `-62`; правильное значение `0xae` (174), как в стоковом DTS.
+- p29: `build/scp/boot_scp2.img` (md5 `57ac8b08…`, sha256 `8106920f…`), бэкап до опыта — `/root/boot_a_before_scp.img` (md5 `efaeaacc…`). Планшет грузится штатно, SCP работает.
+- Раз в секунду `No handler for ipi id = 13` (cros-ec-rpmsg, addr 0xd) — без cros-ec драйвера, на работу не влияет.
+- Дальше: вернуть `vcodec_dec`, включить IOMMU, проверить `scp_get_vdec_hw_capa()`, собрать `mtk-vcodec-dec`. HEVC не цель (mainline только LAT).
+
+### 20.11 (3): vcodec пробуется — `/dev/video0`, H.264 stateless
+
+- DTB: возвращён `video-codec@16020000` (`mediatek,mt8183-vcodec-dec`), IRQ 250 level-low, VDEC-домен 10, `mediatek,scp`/`mediatek,vdecsys`; `iommus` пока нет. Модули `mtk-vcodec-dec`, `mtk-vcodec-common`, `mtk-vcodec-dbgfs`, `videobuf2-*`, `v4l2-mem2mem`, `v4l2-h264`, `v4l2-vp9`, `videodev`, `mc`; автозагрузка `/etc/modules-load.d/vcodec.conf`.
+- Результат: `probe of 16020000.video-codec returned 0`, `/dev/video0` (`driver=mtk-vcodec-dec`, `card=MT8183 video decoder`), формат `H.264 Parsed Slice Data` `0x34363253`. SCP принял VDEC-сервис.
+- Грабли: `fdtput -t x` парсит числа как hex; первая попытка дала IRQ `0x250` (592) и power-domain `0x10` (16) → `PM: genpd_xlate_onecell: invalid domain index 16`. Правильно: `0xfa`/`0xa`.
+- p29: `build/scp/boot_vcodec2.img` (md5 `bc48aedf…`, sha256 `afd35d86…`); откат — `build/scp/boot_scp2.img` (md5 `57ac8b08…`) или `/root/boot_a_before_scp.img` (md5 `efaeaacc…`).
+- Осталось: userspace V4L2 request (GStreamer `v4l2codecs`/`v4l2-request-test`/mpv), возможно `iommus` для DMA. В rootfs нет `v4l2-ctl`/`gst-launch-1.0`/`ffmpeg`.
+- Детали — `docs/vcodec-bringup.md`, ADR 0004.
