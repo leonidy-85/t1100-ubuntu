@@ -5580,3 +5580,19 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - p29: `build/scp/boot_vcodec2.img` (md5 `bc48aedf…`, sha256 `afd35d86…`); откат — `build/scp/boot_scp2.img` (md5 `57ac8b08…`) или `/root/boot_a_before_scp.img` (md5 `efaeaacc…`).
 - Осталось: userspace V4L2 request (GStreamer `v4l2codecs`/`v4l2-request-test`/mpv), возможно `iommus` для DMA. В rootfs нет `v4l2-ctl`/`gst-launch-1.0`/`ffmpeg`.
 - Детали — `docs/vcodec-bringup.md`, ADR 0004.
+
+### 20.11 (4): userspace V4L2 и предел mt8183-прошивки
+
+- На планшет поставлены `gstreamer1.0-tools`, `gstreamer1.0-plugins-bad`,
+  `gstreamer1.0-plugins-ugly`, `v4l-utils`.
+- `/dev/video0` + `/dev/media0`, `v4l2slh264dec` 1.28.2; пайплайн
+  x264 → `v4l2slh264dec` доходит до EOS, но firmware mt8183 отвергает
+  каждый кадр: `err=196738` (`0x30082`, `DEC_ERR_RET=3`).
+- Диагностика: `subdev_bitmap=1`, `hw_id=0`, `pw_on`/`clock_on`
+  вызываются; 3/4-байтовый start code, x264/openh264/MP4 и длина буфера
+  на ошибку не влияют.
+- Вывод: AP-сторона работает, ошибка — в VDEC-сервисе mt8183-прошивки
+  (несовместимость с VDEC MT6771 или stateless-контролы). Следующий шаг —
+  разобрать архитектуру декода на эталонном T800 (AP-side `/dev/Vcodec`,
+  `/dev/vpu`, SCP) и искать MT6771-прошивку/путь. Детали —
+  `docs/vcodec-bringup.md`.
