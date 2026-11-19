@@ -54,6 +54,15 @@ dmesg | grep -E "Oops|WARNING|BUG|Call trace"
 `Vcodec`/`Vcodec2`, `/dev/video0` и `/dev/media0` (mainline
 `mtk-vcodec-dec`) не затронуты.
 
+## Инструменты
+
+- `tools/ionshim.c` — 32-битный bionic `LD_PRELOAD`-шим `/dev/ion` поверх
+  `memfd`; проверены alloc/free/map/share/custom.
+- `tools/ion_test.c` — тест `libion_mtk`/`libion` как в decoder HAL.
+- `tools/v4l2_expbuf.c` — тест `VIDIOC_EXPBUF` на `/dev/video0`.
+
+Подробности и команды сборки — `tools/README.md`.
+
 ## Ограничения
 
 - IRQ VDEC 250 сейчас занят `mtk-vcodec-dec` без `IRQF_SHARED`; драйвер
