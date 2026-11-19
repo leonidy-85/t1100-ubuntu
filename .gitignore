@@ -17,4 +17,5 @@ __pycache__/
 *.log
 
 # vendor reference blobs (Aurora RPM payloads: firmware, 4.14 modules)
-/vendor/
+/vendor/*
+!/vendor/vcodec/

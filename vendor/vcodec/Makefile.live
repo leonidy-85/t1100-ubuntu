@@ -1,0 +1,16 @@
+# Live-test build: unique module and driver name because a crashed probe
+# left the production module/device locked in this boot.
+obj-m := vcodec_port.o
+
+vcodec_port-objs := \
+	videocodec_kernel.o \
+	mt6771/videocodec_kernel_driver.o \
+	mt6771/common/val/src/val.o \
+	mt6771/common/drv/src/drv_base.o \
+	mt6771/common/drv/src/dvfs_v2.o
+
+ccflags-y += -DVCODEC_LIVE_TEST \
+	-I$(src)/compat \
+	-I$(src)/include \
+	-I$(src)/include/kernel \
+	-I$(src)/mt6771/common/drv/inc
