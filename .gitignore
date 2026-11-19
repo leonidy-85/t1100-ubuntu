@@ -3,6 +3,7 @@
 /build/
 *.o
 *.ko
+!rootfs-overlay/lib/modules/**/*.ko
 *.dtb
 *.img
 !docs/**/*.img
