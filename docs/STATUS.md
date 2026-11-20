@@ -5698,6 +5698,11 @@ BTIF/STP-транспорт (включая исправленную поляр�
   в первую минуту вызывает `loginctl unlock-sessions` — десктоп
   открывается без ввода пароля. `ready-set` замаскирован, OSK —
   `/usr/bin/osk-wayland -> phosh-osk-stevia`.
+- Пароль при разблокировке сначала не принимался: ALT использует **tcb**,
+  а мы записали пароль только в `/etc/shadow`. Создан
+  `/etc/tcb/user/shadow` (и tcb-root), после чего `ssh user@10.42.66.66`
+  с паролем проходит (`LOGIN_OK`). В `build/alt-mobile/setup-rootfs.sh`
+  добавлено создание tcb-файлов.
 - Проверено: ALT 2026.09, Phosh 0.58, `grim` 2176×1600, `systemctl --failed`
   — 0, SSH root по USB-RNDIS и Wi-Fi работает; Wi-Fi `home` подключён,
   `wlan0` — `192.168.2.52/24`, интернет есть. Тач не готов; декод H.264
