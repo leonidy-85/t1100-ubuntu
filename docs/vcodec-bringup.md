@@ -275,15 +275,28 @@ ion-shim: GET_PHYS h=2..4 pa=0xfe18… cma-ioctl
 То есть 32-битный vendor-HAL создаёт и инициализирует декодер через наш
 `/dev/Vcodec` + ION-шим с реальными PA. Полный декод не запускался.
 
+### 21.11 (2): 32-битный compat портирован и проверен
+
+- `compat_alloc_user_space` в 6.12 нет, поэтому нативные обработчики
+  переписаны на kernel-структуры (`vcodec_lockhw_kernel`,
+  `vcodec_unlockhw_kernel`, `vcodec_waitisr_kernel`,
+  `vcodec_set_frame_info_kernel`); user-обёртки и compat-слой делают
+  `copy_from_user`/`copy_to_user` и трансляцию 32-битных `compat_uptr_t`.
+- В `vcodec_unlocked_compat_ioctl` добавлены `VCODEC_LOCKHW` (0x0d),
+  `VCODEC_UNLOCKHW` (0x33), `VCODEC_WAITISR` (0x0b),
+  `VCODEC_SET_FRAME_INFO` (0x37).
+- 32-битный тест `vcodec_compat2` (ELF32 ARM static, `H264_DEC=6`):
+  `MFV_INIT`, `SET_PWR(1)`, `LOCKHW`, `SET_FRAME_INFO`, `UNLOCKHW`,
+  `SET_PWR(0)`, `DEINIT` — 0; `WAITISR` без IRQ — `-1/errno=2`
+  (ожидаемый таймаут). `ENOTTY` ни на одной из четырёх команд нет.
+- IRQ 398 теперь у `Vcodec` (`mtk-vcodec-dec` отвязан); модуль загружен
+  с `hw_power=1`, `vcodec_lockisr_test` PASS.
+
 ### Осталось
 
-- compat-трансляция структур `VCODEC_LOCKHW/UNLOCKHW` (0x0d/0x33),
-  `VCODEC_WAITISR` (0x0b), `VCODEC_SET_FRAME_INFO` (0x37) не портирована
-  (vendor делает её через `compat_alloc_user_space`, которого нет в 6.12);
-  для полного декода её надо переписать на in-kernel копии.
-- IRQ 398 всё ещё у `mtk-vcodec-dec`: vendor-драйвер логирует
-  `continuing without ISR`. Для декода нужно либо снять `mtk-vcodec-dec`,
-  либо сделать IRQ shared.
+- Полный H.264 decode через 32-битный vendor HAL: `eVDecDrvDecode` или
+  OMX-компонент `OMX.MTK.VIDEO.DECODER.AVC`; нужен реальный Annex B
+  access unit и output-буферы.
 - `/dev/MTK_SMI` и `mem_bw_ctrl` отсутствуют — HAL логирует ошибки
   профилей SMI/EMI, но продолжает.
 
