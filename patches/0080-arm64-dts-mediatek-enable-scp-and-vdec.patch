@@ -1,0 +1,75 @@
+dts: enable the mainline SCP and the VDEC decoder on MT6771
+
+The board DTS used to delete &scp and &vcodec_dec: the Android SCP
+firmware is not compatible with the upstream driver.  The mainline
+mt8183 scp.img does boot on MT6771 (IRQ 174, reserved DRAM at
+0x50000000), so keep the inherited nodes, reserve that window, and
+enable SCP and VDEC.  The VDEC node drops its iommus property because
+the board keeps the IOMMU disabled; the vendor HAL passes physical
+buffers instead.
+
+--- a/arch/arm64/boot/dts/mediatek/mt6771.dtsi
++++ b/arch/arm64/boot/dts/mediatek/mt6771.dtsi
+@@ -103,20 +103,10 @@
+ };
+ 
+ /*
+- * The SCP node of mt8183.dtsi carries memory-region = <&scp_mem_reserved>.
+- * That region cannot be declared (see /reserved-memory above), and the Android
+- * SCP firmware is not compatible with the upstream SCP driver anyway, so the
+- * node is removed. LK's own "mediatek,scp" node requirement is satisfied by
+- * the inert node in mt6771-fplus-t1100-lk-compat.dtsi.
++ * SCP and VDEC stay in the tree: the board DTS reserves 0x50000000 for the
++ * mainline mt8183 SCP firmware and enables both nodes. The vendor Android
++ * SCP firmware is not used.
+  */
+-/delete-node/ &scp;
+-
+-/*
+- * vcodec_dec points at &scp (mediatek,scp = <&scp>) and needs SCP firmware to
+- * do anything useful; removing it keeps the tree consistent after the delete
+- * above. There is no vcodec_enc node on MT8183 in 6.12.
+- */
+-/delete-node/ &vcodec_dec;
+ 
+ /*
+  * Smart Voltage Scaling writes DVFS/thermal registers using efuse calibration
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -1158,6 +1158,23 @@
+ };
+ 
+ /*
++ * SCP: the mainline mt8183 firmware (linux-firmware mediatek/mt8183/scp.img)
++ * boots on MT6771; the probe needs the reserved region at 0x50000000 above.
++ * VDEC: the mt8183 decoder driver probes and powers up; without IOMMU it
++ * uses the physical buffers handed to it by the vendor HAL. The iommus
++ * property is dropped because the board keeps the IOMMU disabled.
++ */
++&scp {
++	status = "okay";
++	firmware-name = "mediatek/mt8183/scp.img";
++};
++
++&vcodec_dec {
++	/delete-property/ iommus;
++	status = "okay";
++};
++
++/*
+  * LK compatibility layer: must be included last (docs/lk-dtb-rules.md).
+  */
+ #include "mt6771-fplus-t1100-lk-compat.dtsi"
+@@ -1209,6 +1226,12 @@
+ 		alignment = <0 0x200000>;
+ 		alloc-ranges = <0 0x40000000 0 0x80000000>;
+ 	};
++
++	scp_mem_reserved: memory@50000000 {
++		compatible = "shared-dma-pool";
++		reg = <0 0x50000000 0 0x2900000>;
++		no-map;
++	};
+ };
+ 
+ &{/} {

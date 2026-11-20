@@ -5634,3 +5634,8 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `vcodec_lockisr_test` PASS. Полный H.264 decode через 32-битный HAL
   ещё не подтверждён. p29 `build/boot_pa.img` (`d7c12647…`), откат
   `build/scp/boot_vcodec2.img` (`bc48aedf…`).
+- DTS↔DTB расхождение закрыто патчем
+  `0080-arm64-dts-mediatek-enable-scp-and-vdec.patch`: `memory@50000000`,
+  `&scp` и `&vcodec_dec` теперь в исходниках; DTB собирается (61 521 Б)
+  и семантически совпадает с рабочим DTB из p29. На плату новый DTB пока
+  не прошит.
