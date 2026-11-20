@@ -5722,3 +5722,22 @@ BTIF/STP-транспорт (включая исправленную поляр�
   не возобновлялся.
 - Детали, команды и откат — `docs/alt-mobile.md`. `build/` в gitignore;
   образ ALT в репозиторий не коммитится.
+
+### 20.11 (6): Waydroid — ядро и образы подготовлены
+
+- Waydroid 1.6.3 уже установлен в ALT Mobile, но ядро `6.12.114-wifi1`
+  без binderfs/PSI: `# CONFIG_ANDROID_BINDER_IPC is not set`,
+  `# CONFIG_PSI is not set`, `# CONFIG_NF_TABLES is not set`.
+- В `configs/t1100_defconfig` и `configs/t1100.fragment` добавлен блок
+  Waydroid: `ANDROID_BINDER_IPC=y`, `ANDROID_BINDERFS=y`,
+  `ANDROID_BINDER_DEVICES=""`, `PSI=y`, `INPUT_UINPUT=y`, `UHID=m`,
+  `NF_TABLES=m`, `NF_TABLES_INET=y`, `NF_TABLES_NETDEV=y`, `NFT_NAT=m`,
+  `NFT_MASQ=m`. Binderfs/PSI — bool, нужен новый `Image`; uhid/nftables
+  можно модулями.
+- Локальная сборка `Image dtbs modules` завершилась `BUILD_RC=0`;
+  `Image` 41 МиБ. Образы Waydroid скачаны и проверены: system.zip
+  (871M, sha256 `5fb8179e…`), vendor-mainline.zip (141M, sha256 `20a49c11…`).
+- Планшет потерял SSH во время распаковки `system.zip` (RNDIS пингуется,
+  порт 22 — `Connection refused`); нужен физический power-cycle.
+  Прошивка p29 не выполнялась, p29 прежний: `build/boot_pa.img`
+  (md5 `d7c12647…`). Инструкция — `docs/waydroid.md`.

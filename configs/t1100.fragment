@@ -212,6 +212,21 @@ CONFIG_ARM_MEDIATEK_CPUFREQ=y
 CONFIG_MTK_THERMAL=y
 CONFIG_MTK_SOC_THERMAL=y
 
+# --- Waydroid / Android container -------------------------------------------
+# Binderfs and PSI are bool: they require the kernel Image, not modules.
+CONFIG_ANDROID_BINDER_IPC=y
+CONFIG_ANDROID_BINDERFS=y
+CONFIG_ANDROID_BINDER_DEVICES=""
+CONFIG_PSI=y
+CONFIG_INPUT_UINPUT=y
+CONFIG_UHID=m
+# Waydroid network: bridge/veth + NAT; nftables is the current default.
+CONFIG_NF_TABLES=m
+CONFIG_NF_TABLES_INET=y
+CONFIG_NF_TABLES_NETDEV=y
+CONFIG_NFT_NAT=m
+CONFIG_NFT_MASQ=m
+
 # --- USB Wi-Fi adapters (host mode; built-in CONSYS is not supported) --------
 # Common mainline USB Wi-Fi drivers. Firmware comes from linux-firmware; for
 # MT7601U/RT2870/RTL8XXXU, Ubuntu ships .zst firmware, so decompress it in the
