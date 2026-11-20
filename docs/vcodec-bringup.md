@@ -189,3 +189,104 @@ MT6771 (другая ревизия/ABI), либо stateless-контролы (S
 Текущая p29: `build/scp/boot_vcodec2.img` (md5 `bc48aedf…`); откат —
 `build/scp/boot_scp2.img` (`57ac8b08…`) и `/root/boot_a_before_scp.img`
 (`efaeaacc…`). Ничего не прошивалось.
+
+## 20.11.2026 (вечер): PA для CMA-буферов, compat-ioctl и non-cache alloc
+
+Задача: разблокировать 32-битный vendor-HAL — отдать физический адрес
+dma-buf из `/dev/dma_heap` и довести compat-ioctl `Vcodec`.
+
+### Kernel: `DMA_HEAP_IOCTL_PHYS` (патч 0079)
+
+`/proc/self/pagemap` не отдаёт PFN для dma-buf (`VM_PFNMAP`), поэтому PA
+пришлось экспортировать из ядра. Добавлен heap-private ioctl:
+
+```c
+struct dma_heap_phys_data { __u32 fd; __u32 flags; __u64 pa; __u64 size; };
+#define DMA_HEAP_IOCTL_PHYS _IOWR('H', 0x1, struct dma_heap_phys_data)
+```
+
+- реализован только в **CMA-хеапе** (`/dev/dma_heap/reserved`, он же
+  `cma`): буфер — один `cma_alloc()`, поэтому диапазон физически
+  непрерывен; проверяется первый/последний PFN, иначе `-ENOTSUPP`;
+- `CAP_SYS_ADMIN` обязателен (PA обходит IOMMU); чужой dma-buf
+  (`dmabuf->ops != cma_heap_buf_ops`) → `-EINVAL`; system-хеап → `-ENOTTY`;
+- в `dma_heap_ops` добавлен опциональный `->ioctl()`, generic dma-buf не
+  трогали.
+
+Факты: `Image` #2 (`6.12.114-wifi1`, сборка 20.11 09:56), p29 =
+`build/boot_pa.img` (md5 `d7c12647f9ca68dc2e37e31d5cba0f30`, sha256
+`0e265c9a…1877ff`). Бэкап p29 до прошивки —
+`build/recovery/boot_a_heaps_2026-11-20.img` (md5 `6bc3c35e…`).
+Прошито через `dd` с чтением обратно (sha256 совпал), до/после — `sync`.
+
+Проверка на 64-битном тесте:
+
+```
+/dev/dma_heap/reserved: alloc fd=4 phys rc=0 pa=0xfe190000 size=65536 flags=3
+/dev/dma_heap/system:   phys rc=-1 ENOTTY
+```
+
+### Shim: PA через ioctl, fallback остаётся
+
+`vendor/vcodec/tools/ionshim.c`:
+
+- при `GET_PHYS` сначала `DMA_HEAP_IOCTL_PHYS` на heap-fd, который выдал
+  буфер (fd хранится per-handle); в лог пишется `cma-ioctl`;
+- если ioctl недоступен (system heap / memfd / старое ядро) — прежний
+  pagemap-fallback, затем PA=0;
+- добавлен fallback `/dev/dma_heap/cma` → `/dev/dma_heap/reserved`
+  (симлинк `cma` живёт только до перезагрузки).
+
+### Vcodec: compat и `VCODEC_ALLOC_NON_CACHE_BUFFER`
+
+- compat-whitelist: `0x22` ALLOC_NON_CACHE, `0x23` FREE_NON_CACHE,
+  `0x27/0x28` INC/DEC_PWR_USER (трансляция 32-битного `VAL_POWER_T`),
+  `0x17/0x18` EMI-счётчики, `0x13/0x14` SYSRAM, `0x31` GET_CORE_NUMBER,
+  `0x35` SET_LOG_COUNT. Проверено `vcodec_compat32`: ни один не даёт
+  `ENOTTY`; `0x17/0x18` возвращают 0xFF (как vendor) и декрементируют
+  счётчик.
+- `VCODEC_ALLOC_NON_CACHE_BUFFER` больше не пустой: драйвер выделяет
+  `dma_alloc_coherent()` на VDEC-устройстве (32-битная DMA-маска, общая
+  CMA-область), кладёт запись в `grNCMemoryList` (иначе `vcodec_mmap()`
+  отвергает PA), отдаёт HAL'у `pvMemPa`, а `FREE` освобождает. Список
+  `grNCMemoryList` теперь явно инициализируется `-1` — без этого
+  `Add_NonCacheMemoryList()` не находил слот (vendor-баг).
+- `vcodec_mmap()` принимает PA как offset (HAL зовёт `mmap64`).
+
+Проверка `nc_test32` (32-бит bionic): `ioctl(0x22, size=64K)` → PA
+`0xfe190000`, `mmap64(fd, offset=PA)` → VA, запись/чтение OK, `ioctl(0x23)`
+освобождает. `VERDICT: PASS`.
+
+`pa_probe32` (тот же allocator, что у HAL): три типа (SW, HW cacheable,
+MCI) → `PA=0xfe19…`, запись по VA, `VERDICT: PASS`.
+
+### HAL: Create/Init H.264 проходят
+
+Прежний SIGSEGV в `eVDecDrvInit` был не платформенным: harness передавал
+`eVDecDrvCreate(..., 0)` (codec format 0), HAL отвечал
+`CodecFormat is not support => 0` и падал в error-path. С корректным
+форматом (`0x40` H.264, `0x80`, `0x40000`) в `hal32`:
+
+```
+Create=0 handle=0x...   Init=1
+ion-shim: GET_PHYS h=2..4 pa=0xfe18… cma-ioctl
+```
+
+То есть 32-битный vendor-HAL создаёт и инициализирует декодер через наш
+`/dev/Vcodec` + ION-шим с реальными PA. Полный декод не запускался.
+
+### Осталось
+
+- compat-трансляция структур `VCODEC_LOCKHW/UNLOCKHW` (0x0d/0x33),
+  `VCODEC_WAITISR` (0x0b), `VCODEC_SET_FRAME_INFO` (0x37) не портирована
+  (vendor делает её через `compat_alloc_user_space`, которого нет в 6.12);
+  для полного декода её надо переписать на in-kernel копии.
+- IRQ 398 всё ещё у `mtk-vcodec-dec`: vendor-драйвер логирует
+  `continuing without ISR`. Для декода нужно либо снять `mtk-vcodec-dec`,
+  либо сделать IRQ shared.
+- `/dev/MTK_SMI` и `mem_bw_ctrl` отсутствуют — HAL логирует ошибки
+  профилей SMI/EMI, но продолжает.
+
+p29: `build/boot_pa.img` (md5 `d7c12647…`); бэкап
+`build/recovery/boot_a_heaps_2026-11-20.img` (`6bc3c35e…`); откат —
+`build/scp/boot_vcodec2.img` (`bc48aedf…`) или бэкап.

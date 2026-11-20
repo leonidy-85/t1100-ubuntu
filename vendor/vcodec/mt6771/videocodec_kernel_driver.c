@@ -83,6 +83,11 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
+#include <linux/of_platform.h>
+#include <linux/pm_domain.h>
+#include <linux/dma-mapping.h>
+#include <linux/list.h>
+#include <linux/slab.h>
 
 #if IS_ENABLED(CONFIG_COMPAT)
 #include <linux/uaccess.h>
@@ -212,6 +217,61 @@ module_param_named(class_name, vcodec_class_name, charp, 0444);
 module_param_named(class_name2, vcodec_class_name2, charp, 0444);
 static bool vcodec_vdec_irq_ok;
 static bool vcodec_venc_irq_ok;
+static struct platform_device *vcodec_vdec_pdev;
+static bool vcodec_vdec_genpd_on;
+static bool vcodec_vdec_genpd_attached;
+static bool vcodec_vdec_pm_enabled;
+
+/*
+ * VCODEC_ALLOC_NON_CACHE_BUFFER backend.
+ *
+ * The vendor driver has an empty handler (confirmed against
+ * oppo-source/android_kernel_oppo_mt6771, oppo/mt6771_r_11), so non-cache
+ * buffers never worked there either.  The 32-bit HAL calls this hook for
+ * VAL_MEM_TYPE values above 2 and then mmaps /dev/Vcodec at the returned
+ * physical address; without an allocation it gets PA 0 and the mmap fails.
+ *
+ * Allocate from the platform device's coherent DMA pool (32-bit mask, the
+ * default CMA area on this kernel) so the range is physically contiguous,
+ * register it in the driver's grNCMemoryList so vcodec_mmap() accepts it,
+ * and hand the PA back to the HAL.
+ */
+struct vcodec_nc_alloc {
+	struct list_head list;
+	struct device *dev;
+	void *kva;
+	dma_addr_t pa;
+	size_t size;
+	pid_t pid;
+};
+
+static LIST_HEAD(vcodec_nc_allocs);
+static DEFINE_MUTEX(vcodec_nc_lock);
+
+/*
+ * grNCMemoryList() starts zeroed, while Add_NonCacheMemoryList() looks for
+ * slots with ulKVA == ulKPA == -1.  Force_Free_NonCacheMemoryList() has that
+ * side effect, but only when some caller invokes it; the vendor HAL never
+ * does on this path.  Initialise the list explicitly so the mmap validator
+ * can match our allocations.
+ */
+static void vcodec_nc_list_init(void)
+{
+	static bool done;
+	int i, j;
+
+	if (done)
+		return;
+	for (i = 0; i < MULTI_INST_NUM_x_10; i++) {
+		grNCMemoryList[i].ulKVA = -1L;
+		grNCMemoryList[i].ulKPA = -1L;
+		grNCMemoryList[i].ulSize = -1L;
+		grNCMemoryList[i].u4ThreadNum = VCODEC_THREAD_MAX_NUM;
+		for (j = 0; j < VCODEC_THREAD_MAX_NUM; j++)
+			grNCMemoryList[i].u4ThreadID[j] = 0xffffffff;
+	}
+	done = true;
+}
 
 #define VCODEC_IRQ_ENABLE(id)	do { if ((id) > 0) enable_irq(id); } while (0)
 #define VCODEC_IRQ_DISABLE(id)	do { if ((id) > 0) disable_irq(id); } while (0)
@@ -591,11 +651,103 @@ void vdec_polling_status(void)
 	/* pr_debug("u4Counter %d\n", u4Counter); */
 }
 
+static void vcodec_find_vdec_device(void)
+{
+	struct device_node *node;
+	struct platform_device *pdev;
+
+	node = of_find_compatible_node(NULL, NULL,
+				       "mediatek,mt8183-vcodec-dec");
+	if (!node)
+		node = of_find_compatible_node(NULL, NULL, "mediatek,vdec");
+	if (!node) {
+		pr_info("[VCODEC] no VDEC DT node, genpd power unavailable\n");
+		return;
+	}
+
+	pdev = of_find_device_by_node(node);
+	of_node_put(node);
+	if (!pdev) {
+		pr_info("[VCODEC] VDEC platform device not found\n");
+		return;
+	}
+	vcodec_vdec_pdev = pdev;
+	pr_info("[VCODEC] VDEC genpd device: %s\n", dev_name(&pdev->dev));
+}
+
+static int vcodec_vdec_genpd_get(void)
+{
+	struct device *dev;
+	int ret;
+
+	if (!vcodec_vdec_pdev)
+		return -ENODEV;
+	if (vcodec_vdec_genpd_on)
+		return 0;
+
+	dev = &vcodec_vdec_pdev->dev;
+
+	if (!dev->pm_domain) {
+		ret = dev_pm_domain_attach(dev, true);
+		if (ret) {
+			pr_info("[VCODEC] VDEC genpd attach failed %d\n", ret);
+			return ret;
+		}
+		vcodec_vdec_genpd_attached = true;
+	}
+
+	if (dev->power.disable_depth) {
+		pm_runtime_enable(dev);
+		vcodec_vdec_pm_enabled = true;
+	}
+
+	ret = pm_runtime_get_sync(dev);
+	if (ret < 0) {
+		pr_info("[VCODEC] VDEC genpd get failed %d\n", ret);
+		if (vcodec_vdec_pm_enabled) {
+			pm_runtime_disable(dev);
+			vcodec_vdec_pm_enabled = false;
+		}
+		if (vcodec_vdec_genpd_attached) {
+			dev_pm_domain_detach(dev, true);
+			vcodec_vdec_genpd_attached = false;
+		}
+		return ret;
+	}
+
+	vcodec_vdec_genpd_on = true;
+	pr_info("[VCODEC] VDEC genpd on\n");
+	return 0;
+}
+
+static void vcodec_vdec_genpd_put(void)
+{
+	struct device *dev;
+
+	if (!vcodec_vdec_pdev || !vcodec_vdec_genpd_on)
+		return;
+
+	dev = &vcodec_vdec_pdev->dev;
+	pm_runtime_put_sync(dev);
+	if (vcodec_vdec_pm_enabled) {
+		pm_runtime_disable(dev);
+		vcodec_vdec_pm_enabled = false;
+	}
+	if (vcodec_vdec_genpd_attached) {
+		dev_pm_domain_detach(dev, true);
+		vcodec_vdec_genpd_attached = false;
+	}
+	vcodec_vdec_genpd_on = false;
+	pr_info("[VCODEC] VDEC genpd off\n");
+}
+
 void vdec_power_on(void)
 {
 	int ret = 0;
+	bool first;
 
 	mutex_lock(&VdecPWRLock);
+	first = (gu4VdecPWRCounter == 0);
 	gu4VdecPWRCounter++;
 	mutex_unlock(&VdecPWRLock);
 	ret = 0;
@@ -604,6 +756,18 @@ void vdec_power_on(void)
 		pr_info("[VCODEC] vdec_power_on: refcount=%u (hardware access disabled)\n",
 			gu4VdecPWRCounter);
 		return;
+	}
+
+	if (first) {
+		ret = vcodec_vdec_genpd_get();
+		if (ret) {
+			pr_info("[VCODEC] vdec_power_on: no VDEC genpd (%d), not touching clocks\n",
+				ret);
+			mutex_lock(&VdecPWRLock);
+			gu4VdecPWRCounter--;
+			mutex_unlock(&VdecPWRLock);
+			return;
+		}
 	}
 
 #ifdef CONFIG_MTK_QOS_SUPPORT
@@ -670,14 +834,20 @@ void vdec_power_off(void)
 	if (gu4VdecPWRCounter == 0) {
 		pr_debug("[VCODEC] gu4VdecPWRCounter = 0\n");
 	} else {
+		unsigned int remaining;
+
 		gu4VdecPWRCounter--;
+		remaining = gu4VdecPWRCounter;
 		if (vcodec_hw_power) {
-			vdec_polling_status();
+			if (vcodec_vdec_genpd_on)
+				vdec_polling_status();
 			VCODEC_CLK_DISABLE(clk_MT_CG_LARB1);
 			VCODEC_CLK_DISABLE(clk_MT_CG_VDEC);
 			VCODEC_CLK_DISABLE(clk_MT_SCP_SYS_VDE);
 			smi_bus_disable_unprepare(SMI_LARB1, "VDEC");
 			VCODEC_CLK_DISABLE(clk_MT_SCP_SYS_DIS);
+			if (remaining == 0)
+				vcodec_vdec_genpd_put();
 		}
 	}
 	mutex_unlock(&VdecPWRLock);
@@ -1919,6 +2089,144 @@ static long vcodec_set_frame_info(unsigned long arg)
 	return 0;
 }
 
+static long vcodec_pwr_user_kernel(struct VAL_POWER_T *p, int inc)
+{
+	pr_debug("[VCODEC] %s_PWR_USER eDriverType %d\n",
+		 inc ? "INC" : "DEC", p->eDriverType);
+
+	mutex_lock(&L2CLock);
+#ifdef VENC_USE_L2C
+	if (p->eDriverType == VAL_DRIVER_TYPE_H264_ENC) {
+		if (inc) {
+			gu4L2CCounter++;
+			if (gu4L2CCounter == 1) {
+				if (config_L2(0)) {
+					mutex_unlock(&L2CLock);
+					return -EFAULT;
+				}
+			}
+		} else {
+			gu4L2CCounter--;
+			if (gu4L2CCounter == 0) {
+				if (config_L2(1)) {
+					mutex_unlock(&L2CLock);
+					return -EFAULT;
+				}
+			}
+		}
+	}
+#endif
+	mutex_unlock(&L2CLock);
+	return 0;
+}
+
+static long vcodec_nc_alloc(struct VAL_MEMORY_T *m)
+{
+	struct vcodec_nc_alloc *a;
+	struct device *dev;
+	unsigned int tid = current->pid;
+	size_t size;
+	void *kva;
+	dma_addr_t pa;
+
+	if (!m)
+		return -EINVAL;
+
+	size = PAGE_ALIGN((size_t)m->u4MemSize);
+	if (!size)
+		return -EINVAL;
+
+	dev = vcodec_vdec_pdev ? &vcodec_vdec_pdev->dev : NULL;
+	if (!dev) {
+		pr_info("[VCODEC] ALLOC_NON_CACHE_BUFFER: no VDEC device\n");
+		return -ENODEV;
+	}
+
+	kva = dma_alloc_coherent(dev, size, &pa, GFP_KERNEL);
+	if (!kva) {
+		pr_info("[VCODEC] ALLOC_NON_CACHE_BUFFER: dma_alloc_coherent(%zu) failed\n",
+			size);
+		return -ENOMEM;
+	}
+
+	a = kzalloc(sizeof(*a), GFP_KERNEL);
+	if (!a) {
+		dma_free_coherent(dev, size, kva, pa);
+		return -ENOMEM;
+	}
+
+	a->dev = dev;
+	a->kva = kva;
+	a->pa = pa;
+	a->size = size;
+	a->pid = current->pid;
+
+	vcodec_nc_list_init();
+
+	mutex_lock(&vcodec_nc_lock);
+	list_add_tail(&a->list, &vcodec_nc_allocs);
+	mutex_unlock(&vcodec_nc_lock);
+
+	Add_NonCacheMemoryList((unsigned long)kva, (unsigned long)pa, size, 1, &tid);
+
+	m->u4MemSize = size;
+	m->pvMemVa_ext64 = 0;	/* the HAL gets a user VA from vcodec_mmap() */
+	m->pvMemPa_ext64 = (unsigned long long)pa;
+	m->i4IonShareFd = (unsigned int)-1;
+	m->pIonBufhandle_ext64 = 0;
+
+	pr_info("[VCODEC] ALLOC_NON_CACHE_BUFFER size=0x%zx type=%d pa=0x%llx\n",
+		size, m->eMemType, (unsigned long long)pa);
+
+	return 0;
+}
+
+static long vcodec_nc_free(struct VAL_MEMORY_T *m)
+{
+	struct vcodec_nc_alloc *a, *tmp;
+	unsigned long long pa;
+
+	if (!m)
+		return -EINVAL;
+
+	pa = (unsigned long long)m->pvMemPa_ext64;
+
+	mutex_lock(&vcodec_nc_lock);
+	list_for_each_entry_safe(a, tmp, &vcodec_nc_allocs, list) {
+		if ((unsigned long long)a->pa != pa)
+			continue;
+		list_del(&a->list);
+		mutex_unlock(&vcodec_nc_lock);
+
+		Free_NonCacheMemoryList((unsigned long)a->kva,
+					(unsigned long)a->pa);
+		dma_free_coherent(a->dev, a->size, a->kva, a->pa);
+		pr_info("[VCODEC] FREE_NON_CACHE_BUFFER pa=0x%llx size=0x%zx\n",
+			pa, a->size);
+		kfree(a);
+		return 0;
+	}
+	mutex_unlock(&vcodec_nc_lock);
+
+	/* Not ours (or already freed): vendor parity says success. */
+	return 0;
+}
+
+static void vcodec_nc_free_all(void)
+{
+	struct vcodec_nc_alloc *a, *tmp;
+
+	mutex_lock(&vcodec_nc_lock);
+	list_for_each_entry_safe(a, tmp, &vcodec_nc_allocs, list) {
+		list_del(&a->list);
+		Free_NonCacheMemoryList((unsigned long)a->kva,
+					(unsigned long)a->pa);
+		dma_free_coherent(a->dev, a->size, a->kva, a->pa);
+		kfree(a);
+	}
+	mutex_unlock(&vcodec_nc_lock);
+}
+
 static long vcodec_unlocked_ioctl(struct file *file,
 		unsigned int cmd, unsigned long arg)
 {
@@ -1989,12 +2297,25 @@ static long vcodec_unlocked_ioctl(struct file *file,
 
 	case VCODEC_ALLOC_NON_CACHE_BUFFER:
 	{
+		struct VAL_MEMORY_T m;
+
+		if (copy_from_user(&m, (void __user *)arg, sizeof(m)))
+			return -EFAULT;
+		ret = vcodec_nc_alloc(&m);
+		if (ret)
+			return ret;
+		if (copy_to_user((void __user *)arg, &m, sizeof(m)))
+			return -EFAULT;
 		return 0;
 	}
 
 	case VCODEC_FREE_NON_CACHE_BUFFER:
 	{
-		return 0;
+		struct VAL_MEMORY_T m;
+
+		if (copy_from_user(&m, (void __user *)arg, sizeof(m)))
+			return -EFAULT;
+		return vcodec_nc_free(&m);
 	}
 
 	case VCODEC_INC_DEC_EMI_USER:
@@ -2122,77 +2443,21 @@ static long vcodec_unlocked_ioctl(struct file *file,
 
 	case VCODEC_INC_PWR_USER:
 	{
-		pr_debug("VCODEC_INC_PWR_USER + tid = %d\n", current->pid);
-		user_data_addr = (unsigned char *)arg;
-		ret = copy_from_user(&rPowerParam,
-			user_data_addr, sizeof(struct VAL_POWER_T));
-		if (ret) {
-			pr_debug("[ERROR] copy_from_user failed %lu\n", ret);
+		struct VAL_POWER_T p;
+
+		if (copy_from_user(&p, (void __user *)arg, sizeof(p)))
 			return -EFAULT;
-		}
-		pr_debug("[VCODEC] INC_PWR_USER eDriverType %d\n",
-			rPowerParam.eDriverType);
-		mutex_lock(&L2CLock);
-
-#ifdef VENC_USE_L2C
-		if (rPowerParam.eDriverType == VAL_DRIVER_TYPE_H264_ENC) {
-			gu4L2CCounter++;
-			pr_debug("[VCODEC] INC_PWR_USER L2C counter %d\n",
-				gu4L2CCounter);
-
-			if (gu4L2CCounter == 1) {
-				if (config_L2(0)) {
-					pr_debug("[VCODEC][ERROR] Switch L2C size to 512K failed\n");
-					mutex_unlock(&L2CLock);
-					return -EFAULT;
-				}
-				pr_debug("[VCODEC] Switch L2C size to 512K successful\n");
-
-			}
-		}
-#endif
-		mutex_unlock(&L2CLock);
-		pr_debug("VCODEC_INC_PWR_USER - tid = %d\n", current->pid);
-		return 0;
+		return vcodec_pwr_user_kernel(&p, 1);
 	}
-	break;
 
 	case VCODEC_DEC_PWR_USER:
 	{
-		pr_debug("DEC_PWR_USER + tid = %d\n", current->pid);
-		user_data_addr = (unsigned char *)arg;
-		ret = copy_from_user(&rPowerParam,
-			user_data_addr, sizeof(struct VAL_POWER_T));
-		if (ret) {
-			pr_debug("[ERROR] copy_from_user failed: %lu\n", ret);
+		struct VAL_POWER_T p;
+
+		if (copy_from_user(&p, (void __user *)arg, sizeof(p)))
 			return -EFAULT;
-		}
-		pr_debug("[VCODEC] DEC_PWR_USER eDriverType %d\n",
-			rPowerParam.eDriverType);
-
-		mutex_lock(&L2CLock);
-
-#ifdef VENC_USE_L2C
-		if (rPowerParam.eDriverType == VAL_DRIVER_TYPE_H264_ENC) {
-			gu4L2CCounter--;
-			pr_debug("[VCODEC] DEC_PWR_USER L2C counter %d\n",
-				gu4L2CCounter);
-
-			if (gu4L2CCounter == 0) {
-				if (config_L2(1)) {
-					pr_debug("[VCODEC][ERROR] Switch L2C size to 0K failed\n");
-					mutex_unlock(&L2CLock);
-					return -EFAULT;
-				}
-				pr_debug("[VCODEC] Switch L2C size to 0K successful\n");
-			}
-		}
-#endif
-		mutex_unlock(&L2CLock);
-		pr_debug("VCODEC_DEC_PWR_USER - tid = %d\n", current->pid);
-		return 0;
+		return vcodec_pwr_user_kernel(&p, 0);
 	}
-	break;
 
 	case VCODEC_WAITISR:
 	{
@@ -2377,11 +2642,43 @@ static long vcodec_unlocked_ioctl(struct file *file,
 
 #if IS_ENABLED(CONFIG_COMPAT)
 /*
- * 32-bit HAL compatibility.  Only the commands that do not carry a
- * pointer-bearing 64-bit structure are translated for now; the rest return
- * -ENOTTY until the compat structure conversion is ported.  MFV_* (the
- * legacy init/power ABI) carry a plain u32 and work as-is.
+ * 32-bit HAL compatibility.  64-bit structure commands are translated;
+ * scalar _IOW commands are forwarded to the native handler.
  */
+struct COMPAT_VAL_POWER_T {
+	compat_uptr_t	pvHandle;
+	compat_uint_t	u4HandleSize;
+	compat_uint_t	eDriverType;
+	char		fgEnable;
+	compat_uptr_t	pvReserved;
+	compat_uint_t	u4ReservedSize;
+};
+
+static long vcodec_compat_pwr_user(unsigned long arg, int inc)
+{
+	struct COMPAT_VAL_POWER_T cp;
+	struct VAL_POWER_T p;
+
+	if (copy_from_user(&cp, compat_ptr(arg), sizeof(cp)))
+		return -EFAULT;
+
+	memset(&p, 0, sizeof(p));
+	p.pvHandle = compat_ptr(cp.pvHandle);
+	p.u4HandleSize = cp.u4HandleSize;
+	p.eDriverType = cp.eDriverType;
+	p.fgEnable = cp.fgEnable;
+	p.pvReserved = compat_ptr(cp.pvReserved);
+	p.u4ReservedSize = cp.u4ReservedSize;
+
+	return vcodec_pwr_user_kernel(&p, inc);
+}
+
+/*
+ * First fields of the 32-bit VAL_MEMORY_T are layout-compatible with the
+ * native one up to i4IonDevFd (verified against the HAL's 96-byte struct),
+ * so ALLOC/FREE_NON_CACHE_BUFFER can be forwarded with the 32-bit pointer.
+ */
+
 static long vcodec_unlocked_compat_ioctl(struct file *file,
 		unsigned int cmd, unsigned long arg)
 {
@@ -2397,6 +2694,25 @@ static long vcodec_unlocked_compat_ioctl(struct file *file,
 	case VCODEC_DEINITHWLOCK:
 	case VCODEC_MB:
 		return vcodec_unlocked_ioctl(file, cmd, arg);
+
+	case VCODEC_INC_PWR_USER:
+		return vcodec_compat_pwr_user(arg, 1);
+	case VCODEC_DEC_PWR_USER:
+		return vcodec_compat_pwr_user(arg, 0);
+
+	/* scalar counters / buffer hooks: 32-bit pointer is fine */
+	case VCODEC_INC_DEC_EMI_USER:
+	case VCODEC_DEC_DEC_EMI_USER:
+	case VCODEC_INC_ENC_EMI_USER:
+	case VCODEC_DEC_ENC_EMI_USER:
+	case VCODEC_INC_SYSRAM_USER:
+	case VCODEC_DEC_SYSRAM_USER:
+	case VCODEC_GET_CORE_NUMBER:
+	case VCODEC_SET_LOG_COUNT:
+	case VCODEC_ALLOC_NON_CACHE_BUFFER:
+	case VCODEC_FREE_NON_CACHE_BUFFER:
+		return vcodec_unlocked_ioctl(file, cmd, arg);
+
 	default:
 		pr_info_ratelimited("[VCODEC] compat ioctl 0x%x not ported yet\n",
 				    cmd);
@@ -2446,6 +2762,7 @@ static int vcodec_release(struct inode *inode, struct file *file)
 	Driver_Open_Count--;
 
 	if (Driver_Open_Count == 0) {
+		vcodec_nc_free_all();
 		mutex_lock(&VdecHWLock);
 		gu4VdecLockThreadId = 0;
 		pvCheckHandle = grVcodecDecHWLock.pvHandle;
@@ -2602,6 +2919,8 @@ static int vcodec_mmap(struct file *file, struct vm_area_struct *vma)
 
 	length = vma->vm_end - vma->vm_start;
 	pfn = vma->vm_pgoff<<PAGE_SHIFT;
+	pr_debug("[VCODEC][mmap] enter pgoff 0x%lx pfn 0x%lx len 0x%lx\n",
+		 (unsigned long)vma->vm_pgoff, pfn, length);
 
 	if (((length > VENC_REGION) || (pfn < VENC_BASE) ||
 		(pfn > VENC_BASE+VENC_REGION)) &&
@@ -2636,10 +2955,11 @@ static int vcodec_mmap(struct file *file, struct vm_area_struct *vma)
 	}
 #endif
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
-	pr_debug("[VCODEC][mmap] vma->start 0x%lx, vma->end 0x%lx, vma->pgoff 0x%lx\n",
-			 (unsigned long)vma->vm_start,
-			 (unsigned long)vma->vm_end,
-			 (unsigned long)vma->vm_pgoff);
+	pr_debug("[VCODEC][mmap] start 0x%lx end 0x%lx pgoff 0x%lx len 0x%lx\n",
+		 (unsigned long)vma->vm_start,
+		 (unsigned long)vma->vm_end,
+		 (unsigned long)vma->vm_pgoff,
+		 (unsigned long)(vma->vm_end - vma->vm_start));
 	if (remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,
 		vma->vm_end - vma->vm_start, vma->vm_page_prot)) {
 		return -EAGAIN;
@@ -2697,8 +3017,6 @@ static int vcodec_resume(struct platform_device *pDev)
  * to start after changing to is_entering_suspend state. This case will be
  * handled by suspend callback vcodec_suspend.
  **/
-static struct notifier_block vcodec_pm_nb;
-
 static int vcodec_suspend_notifier(struct notifier_block *nb,
 		unsigned long action, void *data)
 {
@@ -2728,6 +3046,13 @@ static int vcodec_suspend_notifier(struct notifier_block *nb,
 	}
 	return NOTIFY_DONE;
 }
+#endif
+
+#if USE_WAKELOCK == 0
+static struct notifier_block vcodec_pm_nb = {
+	.notifier_call = vcodec_suspend_notifier,
+};
+static bool vcodec_pm_notifier_registered;
 #endif
 
 #ifdef CONFIG_PM
@@ -2988,9 +3313,22 @@ static int vcodec_probe(struct platform_device *dev)
 	}
 
 #if USE_WAKELOCK == 0
-	vcodec_pm_nb.notifier_call = vcodec_suspend_notifier;
-	vcodec_pm_nb.priority = 0;
-	register_pm_notifier(&vcodec_pm_nb);
+	{
+		struct notifier_block stale = {
+			.notifier_call = vcodec_suspend_notifier,
+		};
+
+		/* Drop a notifier left behind by an older unload of this module. */
+		unregister_pm_notifier(&stale);
+	}
+	if (!vcodec_pm_notifier_registered) {
+		int nret = register_pm_notifier(&vcodec_pm_nb);
+
+		if (!nret)
+			vcodec_pm_notifier_registered = true;
+		else
+			pr_info("[VCODEC] register_pm_notifier: %d\n", nret);
+	}
 #endif
 
 	pr_debug("-%s Done\n", __func__);
@@ -3037,7 +3375,10 @@ static void vcodec_remove(struct platform_device *pDev)
 {
 	pr_debug("%s\n", __func__);
 #if USE_WAKELOCK == 0
-	unregister_pm_notifier(&vcodec_pm_nb);
+	if (vcodec_pm_notifier_registered) {
+		unregister_pm_notifier(&vcodec_pm_nb);
+		vcodec_pm_notifier_registered = false;
+	}
 #endif
 }
 
@@ -3225,6 +3566,8 @@ static int __init vcodec_driver_init(void)
 		clk_MT_CG_LARB1 ? "ok" : "missing",
 		clk_MT_CG_VENC_VENC ? "ok" : "missing");
 
+	vcodec_find_vdec_device();
+
 	spin_lock_irqsave(&LockDecHWCountLock, ulFlagsLockHW);
 	gu4LockDecHWCount = 0;
 	spin_unlock_irqrestore(&LockDecHWCountLock, ulFlagsLockHW);
@@ -3370,6 +3713,7 @@ static void __exit vcodec_driver_exit(void)
 	enum VAL_RESULT_T  eValHWLockRet;
 
 	pr_debug("%s\n", __func__);
+	vcodec_nc_free_all();
 #if USE_WAKELOCK == 1
 	mutex_lock(&DriverOpenCountLock);
 	wake_lock_destroy(&vcodec_wake_lock);
@@ -3441,11 +3785,24 @@ static void __exit vcodec_driver_exit(void)
 	unregister_swsusp_restore_noirq_func(ID_M_VCODEC);
 #endif
 
+#if USE_WAKELOCK == 0
+	if (vcodec_pm_notifier_registered) {
+		unregister_pm_notifier(&vcodec_pm_nb);
+		vcodec_pm_notifier_registered = false;
+	}
+#endif
+
 #ifdef VCODEC_DEBUG_SYS
 	if (vcodec_debug_kobject)
 		kobject_put(vcodec_debug_kobject);
 #endif
 
+	if (vcodec_vdec_genpd_on)
+		vcodec_vdec_genpd_put();
+	if (vcodec_vdec_pdev) {
+		platform_device_put(vcodec_vdec_pdev);
+		vcodec_vdec_pdev = NULL;
+	}
 	if (vcodec_pdev)
 		platform_device_unregister(vcodec_pdev);
 	platform_driver_unregister(&vcodec_driver);

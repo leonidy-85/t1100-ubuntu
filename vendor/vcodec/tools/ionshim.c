@@ -15,19 +15,19 @@
  *                               sys_cmd=1 GET_PHYS -> PA from pagemap
  *                               cmd=1 (multimedia): buffer config, no-op
  *
- * Physical address: mmap the dma-buf, walk /proc/self/pagemap (needs
- * CAP_SYS_ADMIN), verify the pages are sequential, return first_pfn<<12.
- * If the pages are not contiguous (system heap / memfd) PA is reported as 0
- * rather than a misleading first-page address.
+ * Physical address: first try DMA_HEAP_IOCTL_PHYS (0xc0184801) on the heap fd
+ * that produced the buffer.  That ioctl is implemented by the kernel CMA
+ * ("reserved") heap, is root-only and returns the exact address of the
+ * contiguous cma_alloc() range.  If the heap/ioctl is unavailable (system
+ * heap, memfd, older kernel), fall back to mmap + /proc/self/pagemap
+ * (needs CAP_SYS_ADMIN), verifying the pages are sequential.  For dma-bufs
+ * the pagemap path normally fails because the VMA is VM_PFNMAP, so PA is
+ * reported as 0 rather than a misleading first-page address.
  *
- * 2026-11-20, kernel 6.12.114-wifi1: this does NOT work for dma-buf because
- * dma-buf mappings are VM_PFNMAP (VMA shown as "/dmabuf:" rw-s) and pagemap
- * returns an all-zero entry for them (present bit clear), while anonymous
- * pages in the same process report PFNs normally. Reproduced for both the
- * cma and system heaps, from 32-bit bionic and 64-bit readers. So GET_PHYS
- * logs "pagemap-unavailable" and PA stays 0. A kernel-side PA source is
- * required, e.g. a DMA_HEAP/DMA_BUF ioctl returning the first sg_table
- * address (valid for contiguous CMA buffers); wire it into do_custom().
+ * 2026-11-20, kernel 6.12.114-wifi1: the pagemap fallback does NOT work for
+ * dma-buf (VMA "/dmabuf:" rw-s, pagemap returns an all-zero entry) while
+ * anonymous pages in the same process report PFNs normally; that is why the
+ * kernel-side ioctl above was added.
  *
  * Limitation: alignment above 4 KiB is not honoured (logged); the observed
  * HAL requests 0x1000.
@@ -61,6 +61,9 @@ extern int strcmp(const char *, const char *);
 #define ION_IOC_SHARE 0xc0084904UL
 #define ION_IOC_CUSTOM 0xc0084906UL
 #define DMA_HEAP_IOCTL_ALLOC 0xc0184800UL
+/* DMA_HEAP_IOC_MAGIC 'H', nr 1, _IOWR, struct dma_heap_phys_data (24 bytes) */
+#define DMA_HEAP_IOCTL_PHYS 0xc0184801UL
+#define DMA_HEAP_PHYS_F_CONTIG 1U
 
 #define MAXH 256
 #define MAXD 16
@@ -80,11 +83,20 @@ struct dma_heap_alloc {
 	unsigned long long heap_flags;
 };
 
+struct dma_heap_phys {
+	unsigned int fd;
+	unsigned int flags;
+	unsigned long long pa;
+	unsigned long long size;
+};
+
 /* ABI guards: a broken struct size silently corrupts the ioctl */
 typedef char _chk_alloc20[(sizeof(struct ion_alloc_data) == 20) ? 1 : -1];
 typedef char _chk_heap24[(sizeof(struct dma_heap_alloc) == 24) ? 1 : -1];
+typedef char _chk_phys24[(sizeof(struct dma_heap_phys) == 24) ? 1 : -1];
 
 static int g_hfd[MAXH];
+static int g_hheap[MAXH];   /* heap fd behind g_hfd, -1 for memfd */
 static unsigned int g_hlen[MAXH];
 static int g_huse[MAXH];
 static int g_dev[MAXD];
@@ -132,12 +144,13 @@ static int is_dev(int fd)
 			return 1;
 	return 0;
 }
-static int new_slot(int fd, unsigned int len)
+static int new_slot(int fd, int heapfd, unsigned int len)
 {
 	for (int i = 0; i < MAXH; i++) {
 		if (!g_huse[i]) {
 			g_huse[i] = 1;
 			g_hfd[i] = fd;
+			g_hheap[i] = heapfd;
 			g_hlen[i] = len;
 			return i;
 		}
@@ -161,6 +174,27 @@ static int path_open(const char *path)
 }
 
 /* ---------- dma-buf physical address ---------- */
+/* Kernel CMA-heap ioctl: exact PA for a contiguous cma_alloc() buffer.
+ * status: 1 = PA found, 0 = ioctl unavailable/rejected */
+static unsigned long long heap_pa(int heapfd, int dmabuf_fd, int *ok)
+{
+	struct dma_heap_phys d;
+
+	*ok = 0;
+	if (heapfd < 0 || dmabuf_fd < 0)
+		return 0;
+	d.fd = (unsigned int)dmabuf_fd;
+	d.flags = 0;
+	d.pa = 0;
+	d.size = 0;
+	if (syscall(SYS_ioctl, heapfd, DMA_HEAP_IOCTL_PHYS, &d) < 0)
+		return 0;
+	if (!(d.flags & DMA_HEAP_PHYS_F_CONTIG) || !d.pa)
+		return 0;
+	*ok = 1;
+	return d.pa;
+}
+
 /* status: 1 = contiguous PA found, 0 = non-contiguous, -1 = unavailable */
 static unsigned long long buf_pa(int fd, unsigned int len, int *contig)
 {
@@ -229,8 +263,20 @@ static int do_custom(void *arg)
 		for (int i = 1; i <= 3; i++) {
 			int h = (int)p[i];
 			if (h > 0 && h <= MAXH && g_huse[h - 1]) {
-				int st = -1;
-				unsigned long long pa = buf_pa(g_hfd[h - 1], g_hlen[h - 1], &st);
+				int st = -1, kok = 0;
+				unsigned long long pa;
+
+				pa = heap_pa(g_hheap[h - 1], g_hfd[h - 1], &kok);
+				if (kok) {
+					p[i + 1] = (unsigned int)pa;
+					lstr("ion-shim: GET_PHYS h=");
+					lnum((unsigned long)h);
+					lstr(" pa=");
+					lhex(pa);
+					lstr(" cma-ioctl\n");
+					return 0;
+				}
+				pa = buf_pa(g_hfd[h - 1], g_hlen[h - 1], &st);
 				p[i + 1] = (unsigned int)pa;
 				lstr("ion-shim: GET_PHYS h=");
 				lnum((unsigned long)h);
@@ -254,7 +300,7 @@ int ioctl(int fd, unsigned long req, void *arg)
 		case ION_IOC_ALLOC: {
 			struct ion_alloc_data *a = (struct ion_alloc_data *)arg;
 			unsigned int len = a->len;
-			int nf = -1, s;
+			int heapfd = fd, nf = -1, s;
 			struct dma_heap_alloc ha;
 
 			if (len < PAGE)
@@ -273,11 +319,14 @@ int ioctl(int fd, unsigned long req, void *arg)
 					nf = mk_memfd(len);
 					if (nf < 0)
 						return -1;
+					heapfd = -1;
+				} else {
+					heapfd = g_sysfd;
 				}
 			}
 			if (nf < 0)
 				nf = (int)ha.fd;
-			s = new_slot(nf, len);
+			s = new_slot(nf, heapfd, len);
 			if (s < 0) {
 				syscall(SYS_close, nf);
 				return -1;
@@ -331,6 +380,10 @@ static int shim_open(const char *path)
 		const char *be = "cma";
 		int fd = path_open("/dev/dma_heap/cma");
 
+		if (fd < 0) {
+			be = "reserved";
+			fd = path_open("/dev/dma_heap/reserved");
+		}
 		if (fd < 0) {
 			be = "system";
 			fd = path_open("/dev/dma_heap/system");
