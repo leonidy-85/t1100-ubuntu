@@ -43,6 +43,8 @@
   записывается;
 - SSH: `/etc/ssh` перенесён из старого rootfs, `PermitRootLogin yes`,
   `PasswordAuthentication yes`;
+- Wi-Fi: после первого запуска подключена сеть `home`, планшет получил
+  `192.168.2.52/24`; SSH — `root@192.168.2.52`.
 - USB-RNDIS: `usb0` получает `10.42.66.66/29`, хост — `10.42.66.67/29`.
   Имя USB-интерфейса на хосте меняется при каждой загрузке, поэтому профиль
   NetworkManager `t1100` надо привязывать к текущему `enx...`:
@@ -154,9 +156,10 @@ ln -sf /usr/bin/phosh-osk-stevia /usr/bin/osk-wayland
 - `t1100-phosh`, `dbus`, `systemd-logind`, `sshd`, `t1100-wifi` — active;
 - `systemctl --failed` — 0;
 - `grim` снимает Phosh 2176×1600, верхняя панель и OSK работают;
-- Wi-Fi-драйвер загружен (`wlan0` существует), но профиль сети не перенесён:
-  `wlan0` DOWN. Подключение — через Phosh → Настройки → Wi-Fi или
-  `nmcli device wifi connect <ssid> password <...>`.
+- Wi-Fi подключён к сети `home`: `wlan0` UP, адрес `192.168.2.52/24`,
+  интернет проверен (`ping 1.1.1.1`); профиль сохранён в NetworkManager и
+  должен подниматься автоматически. Адрес может измениться по DHCP —
+  смотреть `ip -br addr show wlan0`.
 
 ## Ограничения
 
