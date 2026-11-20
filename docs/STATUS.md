@@ -5639,3 +5639,25 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `&scp` и `&vcodec_dec` теперь в исходниках; DTB собирается (61 521 Б)
   и семантически совпадает с рабочим DTB из p29. На плату новый DTB пока
   не прошит.
+
+### 21.11 (3): Phosh установлен и работает как оболочка
+
+- Установлены `phosh 0.54.0-1`, `phoc 0.54.0-1`, `squeekboard 1.43.1-2`,
+  `phosh-mobile-settings 0.53.0-2`, `gnome-backgrounds 50.0-1`, `grim`.
+- SDDM оставлен display manager'ом; автологин переключён на
+  `Session=phosh.desktop` в `/etc/sddm.conf.d/10-t1100-autologin.conf`.
+  Прежний конфиг с `plasma.desktop` — в
+  `/root/sddm-autologin-plasma.conf.bak`.
+- Сессия проверена: `phoc`, `gnome-session --session=phosh`,
+  `/usr/libexec/phosh`, `phosh-osk-stevia`; `grim` даёт PNG 2176×1600,
+  верхняя панель, quick settings, приложения и OSK отрисованы, клавиатура
+  работает.
+- Экран не блокируется (`lock-enabled=false`, `idle-activation-enabled=false`,
+  `idle-delay=0`), обои — `blobs-d.svg`. Причина один раз возникшей
+  cgroup-ошибки SDDM после `systemctl restart sddm` —
+  `systemctl daemon-reexec`; после обычной загрузки не повторяется.
+- Тач T1100 не готов: для Phosh нужен USB-ввод. Возврат на Plasma —
+  восстановить бэкап SDDM и перезапустить `sddm`. Подробности —
+  `docs/phosh.md`.
+- p29 не менялся: `build/boot_pa.img` (md5 `d7c12647…`). Работа по
+  аппаратному H.264 поставлена на паузу.
