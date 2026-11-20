@@ -180,3 +180,25 @@ H.264-декод внутри Waydroid не гарантирован (vendor-п�
   размораживает его (это нормальное поведение, не сбой).
 - Аппаратный H.264-декод внутри Android не гарантирован: vendor-путь на
   паузе, используется программное декодирование.
+
+### Автозапуск и сеть: грабли после ребута (21.11)
+
+- `dev-binderfs.mount` должен монтироваться после создания `/dev/binderfs`
+  сервисом `systemd-tmpfiles`: в юните нужен
+  `After=systemd-tmpfiles-setup.service`, иначе в части загрузок mount
+  падает (`failed`), контейнер остаётся `STOPPED`, а `waydroid status`
+  показывает `Session: STOPPED`. Признак — `systemctl is-active
+  dev-binderfs.mount` = `failed`; лечится `systemctl start
+  dev-binderfs.mount waydroid-container`.
+- Android после старта не всегда получает default route, хотя
+  `192.168.240.1` доступен: внутри `ip route` только
+  `192.168.240.0/24`, ping наружу — `Network is unreachable`.
+  Юнит `waydroid-route.service` ждёт `sys.boot_completed=1` и выполняет
+  `waydroid shell -- ip route replace default via 192.168.240.1 dev eth0`;
+  после этого ping `8.8.8.8` проходит.
+- Полноэкранный UI: пункт «Waydroid» (`waydroid show-full-ui`) поднимает
+  контейнер, но домашний экран Android может не появиться — только
+  уведомление. Окна приложений при этом работают: `waydroid app launch
+  com.android.settings` открывает Settings на весь экран. Для повседневного
+  запуска используйте иконки приложений/`waydroid app launch`; вывод
+  лаунчера на экран — отдельная задача.
