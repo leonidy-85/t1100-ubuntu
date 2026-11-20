@@ -1265,10 +1265,8 @@ void vcodec_venc_pmqos(struct codec_job *enc_cur_job)
 #endif
 }
 
-static long vcodec_lockhw(unsigned long arg)
+static long vcodec_lockhw_kernel(struct VAL_HW_LOCK_T *rHWLock)
 {
-	unsigned char *user_data_addr;
-	struct VAL_HW_LOCK_T rHWLock;
 	enum VAL_RESULT_T eValRet;
 	long ret;
 	char bLockedHW = VAL_FALSE;
@@ -1289,29 +1287,22 @@ static long vcodec_lockhw(unsigned long arg)
 
 	pr_debug("VCODEC_LOCKHW + tid = %d\n", current->pid);
 
-	user_data_addr = (unsigned char *)arg;
-	ret = copy_from_user(&rHWLock,
-		user_data_addr, sizeof(struct VAL_HW_LOCK_T));
-	if (ret) {
-		pr_debug("[ERROR] copy_from_user failed: %lu\n", ret);
-		return -EFAULT;
-	}
 
-	pr_debug("[VCODEC] LOCKHW eDriverType = %d\n", rHWLock.eDriverType);
+	pr_debug("[VCODEC] LOCKHW eDriverType = %d\n", rHWLock->eDriverType);
 	eValRet = VAL_RESULT_INVALID_ISR;
-	if (rHWLock.eDriverType == VAL_DRIVER_TYPE_MP4_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_HEVC_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_H264_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_MP1_MP2_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_VC1_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_VC1_ADV_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_VP8_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_VP9_DEC) {
+	if (rHWLock->eDriverType == VAL_DRIVER_TYPE_MP4_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_HEVC_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_H264_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_MP1_MP2_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_VC1_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_VC1_ADV_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_VP8_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_VP9_DEC) {
 
 #ifdef VCODEC_DVFS_V2
 		mutex_lock(&VdecDVFSLock);
 		dec_cur_job = add_job((void *)pmem_user_v2p_video(
-			(unsigned long)rHWLock.pvHandle), &dec_jobs);
+			(unsigned long)rHWLock->pvHandle), &dec_jobs);
 		DVFS_DEBUG("dec_cur_job's handle %p", dec_cur_job->handle);
 		mutex_unlock(&VdecDVFSLock);
 #endif
@@ -1343,7 +1334,7 @@ static long vcodec_lockhw(unsigned long arg)
 			/* one process try to lock twice */
 			if (grVcodecDecHWLock.pvHandle ==
 				(void *)pmem_user_v2p_video(
-					(unsigned long)rHWLock.pvHandle)) {
+					(unsigned long)rHWLock->pvHandle)) {
 				pr_debug("[WARNING] VCODEC_LOCKHW, one decoder instance try to lock twice\n");
 				pr_debug("may cause lock HW timeout!! instance = 0x%lx, CurrentTID = %d\n",
 				(unsigned long)grVcodecDecHWLock.pvHandle,
@@ -1359,7 +1350,7 @@ static long vcodec_lockhw(unsigned long arg)
 			}
 
 			if (eValRet == VAL_RESULT_INVALID_ISR) {
-				ret = vcodec_lockhw_dec_fail(rHWLock,
+				ret = vcodec_lockhw_dec_fail(*rHWLock,
 					FirstUseDecHW);
 				if (ret) {
 					pr_debug("[ERROR] lockhw_dec_fail failed %lu\n",
@@ -1391,9 +1382,9 @@ static long vcodec_lockhw(unsigned long arg)
 				gu4VdecLockThreadId = current->pid;
 				grVcodecDecHWLock.pvHandle =
 					(void *)pmem_user_v2p_video(
-					(unsigned long)rHWLock.pvHandle);
+					(unsigned long)rHWLock->pvHandle);
 				grVcodecDecHWLock.eDriverType =
-					rHWLock.eDriverType;
+					rHWLock->eDriverType;
 				eVideoGetTimeOfDay(
 					&grVcodecDecHWLock.rLockedTime,
 					sizeof(struct VAL_TIME_T));
@@ -1443,7 +1434,7 @@ static long vcodec_lockhw(unsigned long arg)
 				vdec_power_on();
 #endif
 #endif
-				if (rHWLock.bSecureInst == VAL_FALSE)
+				if (rHWLock->bSecureInst == VAL_FALSE)
 					VCODEC_IRQ_ENABLE(VDEC_IRQ_ID);
 
 #ifdef ENABLE_MMDVFS_VDEC
@@ -1465,7 +1456,7 @@ static long vcodec_lockhw(unsigned long arg)
 
 				pr_debug("VCODEC_LOCKHW, someone use dec HW, and check timeout value\n");
 				pr_debug("TimeInterval(ms) = %d, TimeOutValue(ms)) = %d\n",
-					 u4TimeInterval, rHWLock.u4TimeoutMs);
+					 u4TimeInterval, rHWLock->u4TimeoutMs);
 				pr_debug("Lock Instance = 0x%lx, Lock TID = %d, CurrentTID = %d\n",
 					 (unsigned long)
 					 grVcodecDecHWLock.pvHandle,
@@ -1483,12 +1474,12 @@ static long vcodec_lockhw(unsigned long arg)
 			spin_unlock_irqrestore(&LockDecHWCountLock,
 				ulFlagsLockHW);
 		}
-	} else if (rHWLock.eDriverType == VAL_DRIVER_TYPE_H264_ENC ||
-		   rHWLock.eDriverType == VAL_DRIVER_TYPE_HEVC_ENC ||
-		   rHWLock.eDriverType == VAL_DRIVER_TYPE_JPEG_ENC) {
+	} else if (rHWLock->eDriverType == VAL_DRIVER_TYPE_H264_ENC ||
+		   rHWLock->eDriverType == VAL_DRIVER_TYPE_HEVC_ENC ||
+		   rHWLock->eDriverType == VAL_DRIVER_TYPE_JPEG_ENC) {
 		while (bLockedHW == VAL_FALSE) {
 			/* Early break for JPEG VENC */
-			if (rHWLock.u4TimeoutMs == 0) {
+			if (rHWLock->u4TimeoutMs == 0) {
 				if (grVcodecEncHWLock.pvHandle != 0)
 					break;
 			}
@@ -1497,7 +1488,7 @@ static long vcodec_lockhw(unsigned long arg)
 			mutex_lock(&EncHWLockEventTimeoutLock);
 			if (EncHWLockEvent.u4TimeoutMs == 1) {
 				pr_debug("VCODEC_LOCKHW, First Use Enc HW %d!!\n",
-					rHWLock.eDriverType);
+					rHWLock->eDriverType);
 				FirstUseEncHW = 1;
 			} else {
 				FirstUseEncHW = 0;
@@ -1513,7 +1504,7 @@ static long vcodec_lockhw(unsigned long arg)
 				FirstUseEncHW = 1;
 			} else {
 				FirstUseEncHW = 0;
-				if (rHWLock.u4TimeoutMs == 0)
+				if (rHWLock->u4TimeoutMs == 0)
 					EncHWLockEvent.u4TimeoutMs = 0;
 				else
 					EncHWLockEvent.u4TimeoutMs = 1000;
@@ -1525,12 +1516,12 @@ static long vcodec_lockhw(unsigned long arg)
 			/* one process try to lock twice */
 			if (grVcodecEncHWLock.pvHandle ==
 			    (void *)pmem_user_v2p_video(
-				(unsigned long)rHWLock.pvHandle)) {
+				(unsigned long)rHWLock->pvHandle)) {
 				pr_debug("[WARNING] VCODEC_LOCKHW, one encoder instance try to lock twice\n");
 				pr_debug("may cause lock HW timeout!! instance=0x%lx, CurrentTID=%d, type:%d\n",
 					(unsigned long)
 					grVcodecEncHWLock.pvHandle,
-					current->pid, rHWLock.eDriverType);
+					current->pid, rHWLock->eDriverType);
 			}
 			mutex_unlock(&VencHWLock);
 
@@ -1539,7 +1530,7 @@ static long vcodec_lockhw(unsigned long arg)
 					sizeof(struct VAL_EVENT_T));
 
 			if (eValRet == VAL_RESULT_INVALID_ISR) {
-				ret = vcodec_lockhw_enc_fail(rHWLock,
+				ret = vcodec_lockhw_enc_fail(*rHWLock,
 					FirstUseEncHW);
 				if (ret) {
 					pr_debug("[ERROR] lockhw_enc_fail failed %lu\n",
@@ -1553,18 +1544,18 @@ static long vcodec_lockhw(unsigned long arg)
 			mutex_lock(&VencHWLock);
 			/* No process use HW, so current process can use HW */
 			if (grVcodecEncHWLock.pvHandle == 0) {
-				if (rHWLock.eDriverType ==
+				if (rHWLock->eDriverType ==
 						VAL_DRIVER_TYPE_H264_ENC ||
-					rHWLock.eDriverType ==
+					rHWLock->eDriverType ==
 						VAL_DRIVER_TYPE_HEVC_ENC ||
-					rHWLock.eDriverType ==
+					rHWLock->eDriverType ==
 						VAL_DRIVER_TYPE_JPEG_ENC) {
 #ifdef VCODEC_DVFS_V2
 					mutex_lock(&VencDVFSLock);
 					enc_cur_job =
 					add_job(
 					(void *)pmem_user_v2p_video(
-					(unsigned long)rHWLock.pvHandle),
+					(unsigned long)rHWLock->pvHandle),
 					&enc_jobs);
 					DVFS_DEBUG("enc_cur_job's handle %p",
 						enc_cur_job->handle);
@@ -1580,9 +1571,9 @@ static long vcodec_lockhw(unsigned long arg)
 #endif
 					grVcodecEncHWLock.pvHandle =
 					(void *)pmem_user_v2p_video(
-					(unsigned long)rHWLock.pvHandle);
+					(unsigned long)rHWLock->pvHandle);
 					grVcodecEncHWLock.eDriverType =
-						rHWLock.eDriverType;
+						rHWLock->eDriverType;
 					eVideoGetTimeOfDay(
 						&grVcodecEncHWLock.rLockedTime,
 						sizeof(struct VAL_TIME_T));
@@ -1599,9 +1590,9 @@ static long vcodec_lockhw(unsigned long arg)
 					grVcodecEncHWLock.rLockedTime.u4uSec);
 
 					bLockedHW = VAL_TRUE;
-					if (rHWLock.eDriverType ==
+					if (rHWLock->eDriverType ==
 						VAL_DRIVER_TYPE_H264_ENC ||
-						rHWLock.eDriverType ==
+						rHWLock->eDriverType ==
 						VAL_DRIVER_TYPE_HEVC_ENC) {
 						vcodec_venc_pmqos(enc_cur_job);
 #ifdef CONFIG_PM
@@ -1616,7 +1607,7 @@ static long vcodec_lockhw(unsigned long arg)
 					}
 				}
 			} else { /* someone use HW, and check timeout value */
-				if (rHWLock.u4TimeoutMs == 0) {
+				if (rHWLock->u4TimeoutMs == 0) {
 					bLockedHW = VAL_FALSE;
 					mutex_unlock(&VencHWLock);
 					break;
@@ -1634,7 +1625,7 @@ static long vcodec_lockhw(unsigned long arg)
 
 				pr_debug("VCODEC_LOCKHW, someone use enc HW, and check timeout value\n");
 				pr_debug("TimeInterval(ms) = %d, TimeOutValue(ms) = %d\n",
-					 u4TimeInterval, rHWLock.u4TimeoutMs);
+					 u4TimeInterval, rHWLock->u4TimeoutMs);
 				pr_debug("rLockedTime(s, us) = %d, %d, rCurTime(s, us) = %d, %d\n",
 					 grVcodecEncHWLock.rLockedTime.u4Sec,
 					 grVcodecEncHWLock.rLockedTime.u4uSec,
@@ -1643,7 +1634,7 @@ static long vcodec_lockhw(unsigned long arg)
 					 (unsigned long)
 					 grVcodecEncHWLock.pvHandle,
 					 pmem_user_v2p_video(
-					 (unsigned long)rHWLock.pvHandle),
+					 (unsigned long)rHWLock->pvHandle),
 					 current->pid);
 
 				++gLockTimeOutCount;
@@ -1655,10 +1646,10 @@ static long vcodec_lockhw(unsigned long arg)
 						grVcodecEncHWLock.pvHandle,
 						pmem_user_v2p_video(
 						(unsigned long)
-						rHWLock.pvHandle),
+						rHWLock->pvHandle),
 						(unsigned long)
-						rHWLock.pvHandle,
-						rHWLock.eDriverType);
+						rHWLock->pvHandle,
+						rHWLock->eDriverType);
 					gLockTimeOutCount = 0;
 					mutex_unlock(&VencHWLock);
 					return -EFAULT;
@@ -1669,8 +1660,8 @@ static long vcodec_lockhw(unsigned long arg)
 				pr_debug("VCODEC_LOCKHW, Lock ok grVcodecEncHWLock.pvHandle = 0x%lx, va:%lx, type:%d\n",
 					 (unsigned long)
 					 grVcodecEncHWLock.pvHandle,
-					 (unsigned long)rHWLock.pvHandle,
-					 rHWLock.eDriverType);
+					 (unsigned long)rHWLock->pvHandle,
+					 rHWLock->eDriverType);
 				gLockTimeOutCount = 0;
 			}
 			mutex_unlock(&VencHWLock);
@@ -1681,9 +1672,9 @@ static long vcodec_lockhw(unsigned long arg)
 				 current->pid,
 				 (unsigned long)grVcodecEncHWLock.pvHandle,
 				 pmem_user_v2p_video(
-				 (unsigned long)rHWLock.pvHandle),
-				 (unsigned long)rHWLock.pvHandle,
-				 rHWLock.eDriverType);
+				 (unsigned long)rHWLock->pvHandle),
+				 (unsigned long)rHWLock->pvHandle,
+				 rHWLock->eDriverType);
 			gLockTimeOutCount = 0;
 			return -EFAULT;
 		}
@@ -1704,13 +1695,20 @@ static long vcodec_lockhw(unsigned long arg)
 
 	return 0;
 }
-
-static long vcodec_unlockhw(unsigned long arg)
+static long vcodec_lockhw(unsigned long arg)
 {
-	unsigned char *user_data_addr;
 	struct VAL_HW_LOCK_T rHWLock;
+
+	if (copy_from_user(&rHWLock, (void __user *)arg, sizeof(rHWLock)))
+		return -EFAULT;
+
+	return vcodec_lockhw_kernel(&rHWLock);
+}
+
+
+static long vcodec_unlockhw_kernel(struct VAL_HW_LOCK_T *rHWLock)
+{
 	enum VAL_RESULT_T eValRet;
-	long ret;
 #ifdef VCODEC_DVFS_V2
 	struct codec_job *dec_cur_job;
 	struct codec_job *enc_cur_job;
@@ -1718,29 +1716,22 @@ static long vcodec_unlockhw(unsigned long arg)
 
 	pr_debug("VCODEC_UNLOCKHW + tid = %d\n", current->pid);
 
-	user_data_addr = (unsigned char *)arg;
-	ret = copy_from_user(&rHWLock,
-		user_data_addr, sizeof(struct VAL_HW_LOCK_T));
-	if (ret) {
-		pr_debug("[ERROR] copy_from_user failed: %lu\n", ret);
-		return -EFAULT;
-	}
 
-	pr_debug("VCODEC_UNLOCKHW eDriverType = %d\n", rHWLock.eDriverType);
+	pr_debug("VCODEC_UNLOCKHW eDriverType = %d\n", rHWLock->eDriverType);
 	eValRet = VAL_RESULT_INVALID_ISR;
-	if (rHWLock.eDriverType == VAL_DRIVER_TYPE_MP4_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_HEVC_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_H264_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_MP1_MP2_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_VC1_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_VC1_ADV_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_VP8_DEC ||
-		rHWLock.eDriverType == VAL_DRIVER_TYPE_VP9_DEC) {
+	if (rHWLock->eDriverType == VAL_DRIVER_TYPE_MP4_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_HEVC_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_H264_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_MP1_MP2_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_VC1_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_VC1_ADV_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_VP8_DEC ||
+		rHWLock->eDriverType == VAL_DRIVER_TYPE_VP9_DEC) {
 		mutex_lock(&VdecHWLock);
 		/* Current owner give up hw lock */
 		if (grVcodecDecHWLock.pvHandle ==
 			(void *)pmem_user_v2p_video(
-			(unsigned long)rHWLock.pvHandle)) {
+			(unsigned long)rHWLock->pvHandle)) {
 #ifdef VCODEC_DVFS_V2
 			mutex_lock(&VdecDVFSLock);
 			dec_cur_job = dec_jobs;
@@ -1757,7 +1748,7 @@ static long vcodec_unlockhw(unsigned long arg)
 			}
 			mutex_unlock(&VdecDVFSLock);
 #endif
-			if (rHWLock.bSecureInst == VAL_FALSE)
+			if (rHWLock->bSecureInst == VAL_FALSE)
 				VCODEC_IRQ_DISABLE(VDEC_IRQ_ID);
 
 			/* TODO: check if turning power off is ok */
@@ -1778,7 +1769,7 @@ static long vcodec_unlockhw(unsigned long arg)
 			pr_debug("[ERROR] VCODEC_UNLOCKHW\n");
 			pr_debug("Not owner trying to unlock dec hardware 0x%lx\n",
 				 pmem_user_v2p_video(
-				 (unsigned long)rHWLock.pvHandle));
+				 (unsigned long)rHWLock->pvHandle));
 			mutex_unlock(&VdecHWLock);
 			return -EFAULT;
 		}
@@ -1790,14 +1781,14 @@ static long vcodec_unlockhw(unsigned long arg)
 		mutex_unlock(&VdecHWLock);
 		eValRet = eVideoSetEvent(&DecHWLockEvent,
 			sizeof(struct VAL_EVENT_T));
-	} else if (rHWLock.eDriverType == VAL_DRIVER_TYPE_H264_ENC ||
-			 rHWLock.eDriverType == VAL_DRIVER_TYPE_HEVC_ENC ||
-			 rHWLock.eDriverType == VAL_DRIVER_TYPE_JPEG_ENC) {
+	} else if (rHWLock->eDriverType == VAL_DRIVER_TYPE_H264_ENC ||
+			 rHWLock->eDriverType == VAL_DRIVER_TYPE_HEVC_ENC ||
+			 rHWLock->eDriverType == VAL_DRIVER_TYPE_JPEG_ENC) {
 		mutex_lock(&VencHWLock);
 		/* Current owner give up hw lock */
 		if (grVcodecEncHWLock.pvHandle ==
 			(void *)pmem_user_v2p_video(
-			(unsigned long)rHWLock.pvHandle)) {
+			(unsigned long)rHWLock->pvHandle)) {
 #ifdef VCODEC_DVFS_V2
 			mutex_lock(&VencDVFSLock);
 			enc_cur_job = enc_jobs;
@@ -1814,9 +1805,9 @@ static long vcodec_unlockhw(unsigned long arg)
 			}
 			mutex_unlock(&VencDVFSLock);
 #endif
-			if (rHWLock.eDriverType ==
+			if (rHWLock->eDriverType ==
 					VAL_DRIVER_TYPE_H264_ENC ||
-				rHWLock.eDriverType ==
+				rHWLock->eDriverType ==
 					VAL_DRIVER_TYPE_HEVC_ENC) {
 				VCODEC_IRQ_DISABLE(VENC_IRQ_ID);
 				/* turn venc power off */
@@ -1836,9 +1827,9 @@ static long vcodec_unlockhw(unsigned long arg)
 			pr_debug("Not owner trying to unlock enc hardware 0x%lx, pa:%lx, va:%lx type:%d\n",
 				 (unsigned long)grVcodecEncHWLock.pvHandle,
 				 pmem_user_v2p_video(
-				 (unsigned long)rHWLock.pvHandle),
-				 (unsigned long)rHWLock.pvHandle,
-				 rHWLock.eDriverType);
+				 (unsigned long)rHWLock->pvHandle),
+				 (unsigned long)rHWLock->pvHandle,
+				 rHWLock->eDriverType);
 			mutex_unlock(&VencHWLock);
 			return -EFAULT;
 			}
@@ -1859,38 +1850,39 @@ static long vcodec_unlockhw(unsigned long arg)
 
 	return 0;
 }
-
-static long vcodec_waitisr(unsigned long arg)
+static long vcodec_unlockhw(unsigned long arg)
 {
-	unsigned char *user_data_addr;
-	struct VAL_ISR_T val_isr;
+	struct VAL_HW_LOCK_T rHWLock;
+
+	if (copy_from_user(&rHWLock, (void __user *)arg, sizeof(rHWLock)))
+		return -EFAULT;
+
+	return vcodec_unlockhw_kernel(&rHWLock);
+}
+
+
+static long vcodec_waitisr_kernel(struct VAL_ISR_T *val_isr,
+		unsigned char __user *user_data_addr)
+{
 	char bLockedHW = VAL_FALSE;
 	unsigned long ulFlags;
-	long ret;
 	enum VAL_RESULT_T eValRet;
 
 	pr_debug("VCODEC_WAITISR + tid = %d\n", current->pid);
 
-	user_data_addr = (unsigned char *)arg;
-	ret = copy_from_user(&val_isr,
-		user_data_addr, sizeof(struct VAL_ISR_T));
-	if (ret) {
-		pr_debug("[ERROR] copy_from_user failed: %lu\n", ret);
-		return -EFAULT;
-	}
 
-	if (val_isr.eDriverType == VAL_DRIVER_TYPE_MP4_DEC ||
-		val_isr.eDriverType == VAL_DRIVER_TYPE_HEVC_DEC ||
-		val_isr.eDriverType == VAL_DRIVER_TYPE_H264_DEC ||
-		val_isr.eDriverType == VAL_DRIVER_TYPE_MP1_MP2_DEC ||
-		val_isr.eDriverType == VAL_DRIVER_TYPE_VC1_DEC ||
-		val_isr.eDriverType == VAL_DRIVER_TYPE_VC1_ADV_DEC ||
-		val_isr.eDriverType == VAL_DRIVER_TYPE_VP8_DEC ||
-		val_isr.eDriverType == VAL_DRIVER_TYPE_VP9_DEC) {
+	if (val_isr->eDriverType == VAL_DRIVER_TYPE_MP4_DEC ||
+		val_isr->eDriverType == VAL_DRIVER_TYPE_HEVC_DEC ||
+		val_isr->eDriverType == VAL_DRIVER_TYPE_H264_DEC ||
+		val_isr->eDriverType == VAL_DRIVER_TYPE_MP1_MP2_DEC ||
+		val_isr->eDriverType == VAL_DRIVER_TYPE_VC1_DEC ||
+		val_isr->eDriverType == VAL_DRIVER_TYPE_VC1_ADV_DEC ||
+		val_isr->eDriverType == VAL_DRIVER_TYPE_VP8_DEC ||
+		val_isr->eDriverType == VAL_DRIVER_TYPE_VP9_DEC) {
 		mutex_lock(&VdecHWLock);
 		if (grVcodecDecHWLock.pvHandle ==
 			(void *)pmem_user_v2p_video(
-				(unsigned long)val_isr.pvHandle))
+				(unsigned long)val_isr->pvHandle))
 			bLockedHW = VAL_TRUE;
 
 		mutex_unlock(&VdecHWLock);
@@ -1901,7 +1893,7 @@ static long vcodec_waitisr(unsigned long arg)
 		}
 
 		spin_lock_irqsave(&DecIsrLock, ulFlags);
-		DecIsrEvent.u4TimeoutMs = val_isr.u4TimeoutMs;
+		DecIsrEvent.u4TimeoutMs = val_isr->u4TimeoutMs;
 		spin_unlock_irqrestore(&DecIsrLock, ulFlags);
 
 		eValRet = eVideoWaitEvent(&DecIsrEvent,
@@ -1912,12 +1904,12 @@ static long vcodec_waitisr(unsigned long arg)
 			pr_debug("[WARNING] VCODEC_WAITISR, VAL_RESULT_RESTARTSYS return when WAITISR!!\n");
 			return -ERESTARTSYS;
 		}
-	} else if (val_isr.eDriverType == VAL_DRIVER_TYPE_H264_ENC ||
-		   val_isr.eDriverType == VAL_DRIVER_TYPE_HEVC_ENC) {
+	} else if (val_isr->eDriverType == VAL_DRIVER_TYPE_H264_ENC ||
+		   val_isr->eDriverType == VAL_DRIVER_TYPE_HEVC_ENC) {
 		mutex_lock(&VencHWLock);
 		if (grVcodecEncHWLock.pvHandle ==
 			(void *)pmem_user_v2p_video(
-				(unsigned long)val_isr.pvHandle))
+				(unsigned long)val_isr->pvHandle))
 			bLockedHW = VAL_TRUE;
 
 		mutex_unlock(&VencHWLock);
@@ -1925,13 +1917,13 @@ static long vcodec_waitisr(unsigned long arg)
 		if (bLockedHW == VAL_FALSE) {
 			pr_debug("[ERROR] VCODEC_WAITISR, DO NOT have enc HWLock, so return fail pa:%lx, va:%lx\n",
 				 pmem_user_v2p_video(
-				 (unsigned long)val_isr.pvHandle),
-				 (unsigned long)val_isr.pvHandle);
+				 (unsigned long)val_isr->pvHandle),
+				 (unsigned long)val_isr->pvHandle);
 			return -EFAULT;
 		}
 
 		spin_lock_irqsave(&EncIsrLock, ulFlags);
-		EncIsrEvent.u4TimeoutMs = val_isr.u4TimeoutMs;
+		EncIsrEvent.u4TimeoutMs = val_isr->u4TimeoutMs;
 		spin_unlock_irqrestore(&EncIsrLock, ulFlags);
 
 		eValRet = eVideoWaitEvent(&EncIsrEvent,
@@ -1943,15 +1935,12 @@ static long vcodec_waitisr(unsigned long arg)
 			return -ERESTARTSYS;
 		}
 
-		if (val_isr.u4IrqStatusNum > 0) {
-			val_isr.u4IrqStatus[0] = gu4HwVencIrqStatus;
-			ret = copy_to_user(user_data_addr,
-				&val_isr, sizeof(struct VAL_ISR_T));
-			if (ret) {
-				pr_debug("[ERROR] copy_to_user failed %lu\n",
-					ret);
+		if (val_isr->u4IrqStatusNum > 0) {
+			val_isr->u4IrqStatus[0] = gu4HwVencIrqStatus;
+			if (user_data_addr &&
+			    copy_to_user(user_data_addr, val_isr,
+					 sizeof(*val_isr)))
 				return -EFAULT;
-			}
 		}
 	} else {
 		pr_debug("[WARNING] VCODEC_WAITISR Unknown instance\n");
@@ -1962,34 +1951,34 @@ static long vcodec_waitisr(unsigned long arg)
 
 	return 0;
 }
-
-static long vcodec_set_frame_info(unsigned long arg)
+static long vcodec_waitisr(unsigned long arg)
 {
-	unsigned char *user_data_addr;
-	long ret;
-	struct VAL_FRAME_INFO_T rFrameInfo;
+	struct VAL_ISR_T val_isr;
+
+	if (copy_from_user(&val_isr, (void __user *)arg, sizeof(val_isr)))
+		return -EFAULT;
+
+	return vcodec_waitisr_kernel(&val_isr,
+				     (unsigned char __user *)arg);
+}
+
+
+static long vcodec_set_frame_info_kernel(struct VAL_FRAME_INFO_T *rFrameInfo)
+{
 	int frame_type = 0;
 	int b_freq_idx = 0;
 	long emi_bw = 0;
 
 	pr_debug("VCODEC_SET_FRAME_INFO + tid = %d\n", current->pid);
-	user_data_addr = (unsigned char *)arg;
-	ret = copy_from_user(&rFrameInfo,
-		user_data_addr, sizeof(struct VAL_FRAME_INFO_T));
-	if (ret) {
-		pr_debug("[ERROR] copy_from_user failed: %lu\n", ret);
-		mutex_unlock(&LogCountLock);
-		return -EFAULT;
-	}
 
-	if (rFrameInfo.driver_type == VAL_DRIVER_TYPE_H264_DEC ||
-		rFrameInfo.driver_type == VAL_DRIVER_TYPE_HEVC_DEC ||
-		rFrameInfo.driver_type == VAL_DRIVER_TYPE_MP4_DEC ||
-		rFrameInfo.driver_type == VAL_DRIVER_TYPE_MP1_MP2_DEC) {
+	if (rFrameInfo->driver_type == VAL_DRIVER_TYPE_H264_DEC ||
+		rFrameInfo->driver_type == VAL_DRIVER_TYPE_HEVC_DEC ||
+		rFrameInfo->driver_type == VAL_DRIVER_TYPE_MP4_DEC ||
+		rFrameInfo->driver_type == VAL_DRIVER_TYPE_MP1_MP2_DEC) {
 		mutex_lock(&DecPMQoSLock);
 		/* Request BW after lock hw, this should always be true */
 		if (gVDECBWRequested == 0) {
-			frame_type = rFrameInfo.frame_type;
+			frame_type = rFrameInfo->frame_type;
 			if (frame_type > 3 || frame_type < 0)
 				frame_type = 0;
 
@@ -2000,7 +1989,7 @@ static long vcodec_set_frame_info(unsigned long arg)
 			/* freq ratio * decoding time relative to 1080p */
 			emi_bw = 8L * 3 * g_dec_freq_steps[gVDECLevel]
 				* 100 * 1920 * 1088;
-			switch (rFrameInfo.driver_type) {
+			switch (rFrameInfo->driver_type) {
 			case VAL_DRIVER_TYPE_H264_DEC:
 				emi_bw = emi_bw * gVDECFrmTRAVC[frame_type] /
 					(2 * 3 * gVDECFreq[b_freq_idx]);
@@ -2027,20 +2016,20 @@ static long vcodec_set_frame_info(unsigned long arg)
 				QOS_DEBUG("[PMQoS] Unsupported decoder type");
 			}
 
-			if (rFrameInfo.is_compressed != 0)
+			if (rFrameInfo->is_compressed != 0)
 				emi_bw = emi_bw * 6 / 10;
 			QOS_DEBUG("[PMQoS Kernel] UFO %d, emi_bw %ld",
-				rFrameInfo.is_compressed, emi_bw);
+				rFrameInfo->is_compressed, emi_bw);
 
 			/* input size */
 			emi_bw +=
-				8 * rFrameInfo.input_size * 100 * 1920 * 1088 /
-				(rFrameInfo.frame_width *
-				rFrameInfo.frame_height);
+				8 * rFrameInfo->input_size * 100 * 1920 * 1088 /
+				(rFrameInfo->frame_width *
+				rFrameInfo->frame_height);
 
 			QOS_DEBUG("[PMQoS] input_size %d, w %d h %d bw %ld",
-				rFrameInfo.input_size, rFrameInfo.frame_width,
-				rFrameInfo.frame_height, emi_bw);
+				rFrameInfo->input_size, rFrameInfo->frame_width,
+				rFrameInfo->frame_height, emi_bw);
 
 			emi_bw = emi_bw / (1024*1024) / 8;
 			/* bits/s to mbytes/s */
@@ -2051,12 +2040,12 @@ static long vcodec_set_frame_info(unsigned long arg)
 			gVDECBWRequested = 1;
 		}
 		mutex_unlock(&DecPMQoSLock);
-	} else if (rFrameInfo.driver_type == VAL_DRIVER_TYPE_H264_ENC) {
+	} else if (rFrameInfo->driver_type == VAL_DRIVER_TYPE_H264_ENC) {
 		mutex_lock(&EncPMQoSLock);
 		{
-		if (rFrameInfo.frame_width * rFrameInfo.frame_height <
+		if (rFrameInfo->frame_width * rFrameInfo->frame_height <
 			1920*1088) {
-			switch (rFrameInfo.frame_type) {
+			switch (rFrameInfo->frame_type) {
 			case 1:
 				emi_bw = 560; /* MB/s */
 			break;
@@ -2066,7 +2055,7 @@ static long vcodec_set_frame_info(unsigned long arg)
 			break;
 			}
 		} else {
-			switch (rFrameInfo.frame_type) {
+			switch (rFrameInfo->frame_type) {
 			case 1:
 				emi_bw = 1000; /* MB/s */
 			break;
@@ -2088,6 +2077,17 @@ static long vcodec_set_frame_info(unsigned long arg)
 
 	return 0;
 }
+static long vcodec_set_frame_info(unsigned long arg)
+{
+	struct VAL_FRAME_INFO_T rFrameInfo;
+
+	if (copy_from_user(&rFrameInfo, (void __user *)arg,
+			   sizeof(rFrameInfo)))
+		return -EFAULT;
+
+	return vcodec_set_frame_info_kernel(&rFrameInfo);
+}
+
 
 static long vcodec_pwr_user_kernel(struct VAL_POWER_T *p, int inc)
 {
@@ -2654,6 +2654,39 @@ struct COMPAT_VAL_POWER_T {
 	compat_uint_t	u4ReservedSize;
 };
 
+struct COMPAT_VAL_HW_LOCK_T {
+	compat_uptr_t	pvHandle;
+	compat_uint_t	u4HandleSize;
+	compat_uptr_t	pvLock;
+	compat_uint_t	u4TimeoutMs;
+	compat_uptr_t	pvReserved;
+	compat_uint_t	u4ReservedSize;
+	compat_uint_t	eDriverType;
+	char		bSecureInst;
+};
+
+struct COMPAT_VAL_ISR_T {
+	compat_uptr_t	pvHandle;
+	compat_uint_t	u4HandleSize;
+	compat_uint_t	eDriverType;
+	compat_uptr_t	pvIsrFunction;
+	compat_uptr_t	pvReserved;
+	compat_uint_t	u4ReservedSize;
+	compat_uint_t	u4TimeoutMs;
+	compat_uint_t	u4IrqStatusNum;
+	compat_uint_t	u4IrqStatus[IRQ_STATUS_MAX_NUM];
+};
+
+struct COMPAT_VAL_FRAME_INFO_T {
+	compat_uptr_t	handle;
+	compat_uint_t	driver_type;
+	compat_uint_t	input_size;
+	compat_uint_t	frame_width;
+	compat_uint_t	frame_height;
+	compat_uint_t	frame_type;
+	compat_uint_t	is_compressed;
+};
+
 static long vcodec_compat_pwr_user(unsigned long arg, int inc)
 {
 	struct COMPAT_VAL_POWER_T cp;
@@ -2671,6 +2704,77 @@ static long vcodec_compat_pwr_user(unsigned long arg, int inc)
 	p.u4ReservedSize = cp.u4ReservedSize;
 
 	return vcodec_pwr_user_kernel(&p, inc);
+}
+
+static long vcodec_compat_lockhw(unsigned long arg, int unlock)
+{
+	struct COMPAT_VAL_HW_LOCK_T cp;
+	struct VAL_HW_LOCK_T rHWLock;
+
+	if (copy_from_user(&cp, compat_ptr(arg), sizeof(cp)))
+		return -EFAULT;
+
+	memset(&rHWLock, 0, sizeof(rHWLock));
+	rHWLock.pvHandle = compat_ptr(cp.pvHandle);
+	rHWLock.u4HandleSize = cp.u4HandleSize;
+	rHWLock.pvLock = compat_ptr(cp.pvLock);
+	rHWLock.u4TimeoutMs = cp.u4TimeoutMs;
+	rHWLock.pvReserved = compat_ptr(cp.pvReserved);
+	rHWLock.u4ReservedSize = cp.u4ReservedSize;
+	rHWLock.eDriverType = cp.eDriverType;
+	rHWLock.bSecureInst = cp.bSecureInst;
+
+	return unlock ? vcodec_unlockhw_kernel(&rHWLock)
+		      : vcodec_lockhw_kernel(&rHWLock);
+}
+
+static long vcodec_compat_waitisr(unsigned long arg)
+{
+	struct COMPAT_VAL_ISR_T cp;
+	struct VAL_ISR_T val_isr;
+	long ret;
+
+	if (copy_from_user(&cp, compat_ptr(arg), sizeof(cp)))
+		return -EFAULT;
+
+	memset(&val_isr, 0, sizeof(val_isr));
+	val_isr.pvHandle = compat_ptr(cp.pvHandle);
+	val_isr.u4HandleSize = cp.u4HandleSize;
+	val_isr.eDriverType = cp.eDriverType;
+	val_isr.pvIsrFunction = compat_ptr(cp.pvIsrFunction);
+	val_isr.pvReserved = compat_ptr(cp.pvReserved);
+	val_isr.u4ReservedSize = cp.u4ReservedSize;
+	val_isr.u4TimeoutMs = cp.u4TimeoutMs;
+	val_isr.u4IrqStatusNum = cp.u4IrqStatusNum;
+
+	ret = vcodec_waitisr_kernel(&val_isr, NULL);
+	if (!ret && cp.u4IrqStatusNum > 0 && val_isr.u4IrqStatusNum > 0) {
+		cp.u4IrqStatus[0] = val_isr.u4IrqStatus[0];
+		if (copy_to_user(compat_ptr(arg), &cp, sizeof(cp)))
+			return -EFAULT;
+	}
+
+	return ret;
+}
+
+static long vcodec_compat_frame_info(unsigned long arg)
+{
+	struct COMPAT_VAL_FRAME_INFO_T cp;
+	struct VAL_FRAME_INFO_T rFrameInfo;
+
+	if (copy_from_user(&cp, compat_ptr(arg), sizeof(cp)))
+		return -EFAULT;
+
+	memset(&rFrameInfo, 0, sizeof(rFrameInfo));
+	rFrameInfo.handle = compat_ptr(cp.handle);
+	rFrameInfo.driver_type = cp.driver_type;
+	rFrameInfo.input_size = cp.input_size;
+	rFrameInfo.frame_width = cp.frame_width;
+	rFrameInfo.frame_height = cp.frame_height;
+	rFrameInfo.frame_type = cp.frame_type;
+	rFrameInfo.is_compressed = cp.is_compressed;
+
+	return vcodec_set_frame_info_kernel(&rFrameInfo);
 }
 
 /*
@@ -2712,6 +2816,15 @@ static long vcodec_unlocked_compat_ioctl(struct file *file,
 	case VCODEC_ALLOC_NON_CACHE_BUFFER:
 	case VCODEC_FREE_NON_CACHE_BUFFER:
 		return vcodec_unlocked_ioctl(file, cmd, arg);
+
+	case VCODEC_LOCKHW:
+		return vcodec_compat_lockhw(arg, 0);
+	case VCODEC_UNLOCKHW:
+		return vcodec_compat_lockhw(arg, 1);
+	case VCODEC_WAITISR:
+		return vcodec_compat_waitisr(arg);
+	case VCODEC_SET_FRAME_INFO:
+		return vcodec_compat_frame_info(arg);
 
 	default:
 		pr_info_ratelimited("[VCODEC] compat ioctl 0x%x not ported yet\n",

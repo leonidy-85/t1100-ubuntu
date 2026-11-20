@@ -5618,3 +5618,19 @@ BTIF/STP-транспорт (включая исправленную поляр�
   нужен ION/DMA-BUF шим. p29 не менялась: `build/scp/boot_vcodec2.img`
   (md5 `bc48aedf…`), откат `boot_scp2.img` (`57ac8b08…`).
 - Детали: `docs/vdec-plan.md` §7, `docs/vcodec-bringup.md`.
+
+### 21.11 (2): 32-битный compat Vcodec — PASS
+
+- `compat_alloc_user_space` в 6.12 отсутствует, поэтому нативные
+  обработчики `VCODEC_LOCKHW`/`UNLOCKHW`/`WAITISR`/`SET_FRAME_INFO`
+  переписаны на kernel-структуры `VAL_HW_LOCK_T`/`VAL_ISR_T`/
+  `VAL_FRAME_INFO_T`; user-обёртки и compat-слой делают
+  `copy_from_user`/`copy_to_user`.
+- В `vcodec_unlocked_compat_ioctl` добавлены 0x0d, 0x33, 0x0b, 0x37.
+- Тест `vcodec_compat2` (ELF32 ARM static, H.264_DEC=6): `MFV_INIT`,
+  `SET_PWR(1)`, `LOCKHW`, `SET_FRAME_INFO`, `UNLOCKHW`, `SET_PWR(0)`,
+  `DEINIT` — 0; `WAITISR` без IRQ — `-1/errno=2`; `ENOTTY` нет.
+- IRQ 398 у `Vcodec`, модуль загружен с `hw_power=1`;
+  `vcodec_lockisr_test` PASS. Полный H.264 decode через 32-битный HAL
+  ещё не подтверждён. p29 `build/boot_pa.img` (`d7c12647…`), откат
+  `build/scp/boot_vcodec2.img` (`bc48aedf…`).
