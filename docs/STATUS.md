@@ -5699,7 +5699,8 @@ BTIF/STP-транспорт (включая исправленную поляр�
   открывается без ввода пароля. `ready-set` замаскирован, OSK —
   `/usr/bin/osk-wayland -> phosh-osk-stevia`.
 - Проверено: ALT 2026.09, Phosh 0.58, `grim` 2176×1600, `systemctl --failed`
-  — 0, SSH root по USB-RNDIS работает, `t1100-wifi` active. Wi-Fi-профиль
-  не перенесён (`wlan0` DOWN); тач не готов; декод H.264 не возобновлялся.
+  — 0, SSH root по USB-RNDIS и Wi-Fi работает; Wi-Fi `home` подключён,
+  `wlan0` — `192.168.2.52/24`, интернет есть. Тач не готов; декод H.264
+  не возобновлялся.
 - Детали, команды и откат — `docs/alt-mobile.md`. `build/` в gitignore;
   образ ALT в репозиторий не коммитится.
