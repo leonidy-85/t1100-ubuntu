@@ -167,7 +167,13 @@ ln -sf /usr/bin/phosh-osk-stevia /usr/bin/osk-wayland
 - Phosh после загрузки разблокируется сервисом; это не замена нормальному
   logind-автологину.
 - Аппаратное H.264-декодирование не возобновлялось; текущая rootfs не меняет
-  состояние `Vcodec`/SCP.
+  состояние `Vcodec`/SCP. Прежняя среда vendor-декода была в старом Ubuntu
+  rootfs и на ALT отсутствует, но не потеряна: в архиве
+  `build/rootfs-backup/t1100-rootfs-20261120-1452.tar.zst` есть
+  `root/android32-chroot.tgz`, дерево `root/kbuild/linux-6.12.114` и
+  `root/vcodec-port/`. Для возобновления их можно распаковать в ALT (или во
+  временный каталог), собрать модуль под `6.12.114-wifi1 #2` и загрузить без
+  прошивки p29.
 - `build/` в gitignore; образ ALT, gzip и overlay не коммитятся.
 
 ## Откат
