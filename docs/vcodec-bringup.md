@@ -290,3 +290,25 @@ ion-shim: GET_PHYS h=2..4 pa=0xfe18… cma-ioctl
 p29: `build/boot_pa.img` (md5 `d7c12647…`); бэкап
 `build/recovery/boot_a_heaps_2026-11-20.img` (`6bc3c35e…`); откат —
 `build/scp/boot_vcodec2.img` (`bc48aedf…`) или бэкап.
+
+### Артефакты и грабли перепаковки
+
+- **DTB в p29 отличается от собранного из исходников.** В `mt6771*.dts`
+  узлов `scp@10500000` и `video-codec@16020000` нет — они были добавлены в
+  DTB через `fdtput` (20.11). При перепаковке `boot_pa.img` поэтому взят
+  **DTB из текущего p29** (`build/recovery/dtb_p29_boot_heaps.fdt`,
+  61 545 Б FDT), иначе SCP/VDEC-узлы исчезли бы. Ramdisk и DTB в новом
+  образе побайтово равны прежним, отличается только `Image.gz`
+  (15 600 280 → 15 600 603 Б). Это расхождение DTS↔DTB надо закрыть
+  отдельным патчем.
+- **32-битный chroot** (`/tmp/android32-chroot`, bionic + vendor libs с
+  T800) живёт в tmpfs и пропадает при перезагрузке. Копия сохранена на
+  плате: `/root/android32-chroot.tgz` (8.7 МБ, без `/proc`, `/sys`,
+  `/dev`). Восстановление:
+  `mkdir -p /tmp/android32-chroot && tar -C /tmp/android32-chroot -xzf
+  /root/android32-chroot.tgz && mkdir -p /tmp/android32-chroot/{dev,proc,sys}
+  && mount -t proc proc /tmp/android32-chroot/proc &&
+  mount --bind /dev /tmp/android32-chroot/dev &&
+  mount --bind /sys /tmp/android32-chroot/sys`.
+  Шим и тесты пересобираются из `vendor/vcodec/tools/` на самой плате
+  (`arm-linux-gnueabihf-gcc`, команды в шапках файлов).
