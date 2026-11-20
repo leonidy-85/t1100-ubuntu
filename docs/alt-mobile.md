@@ -70,7 +70,7 @@ ALT использует `greetd` + `phrog`. Штатный `[initial_session]` 
 замаскирован:
 
 ```sh
-ln -sf /dev/null /etc/systemd/system/user/ready-set-existing-user.service
+ln -sf /dev/null /etc/systemd/user/ready-set-existing-user.service
 ```
 
 (в образе это `/etc/systemd/user/ready-set-existing-user.service`).
