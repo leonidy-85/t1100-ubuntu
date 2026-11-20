@@ -5661,3 +5661,15 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `docs/phosh.md`.
 - p29 не менялся: `build/boot_pa.img` (md5 `d7c12647…`). Работа по
   аппаратному H.264 поставлена на паузу.
+
+### 21.11 (4): локальный бэкап rootfs
+
+- По USB-RNDIS снят полный rootfs: `build/rootfs-backup/t1100-rootfs-20261120-1452.tar.zst`,
+  20 738 170 880 Б (7,0 ГиБ), sha256 `42a78197…8674a`; `zstd -t` и
+  `sha256sum -c` — OK. Первая попытка по Wi-Fi оборвалась на 2,5 ГБ.
+- Перед снятием очищены `/root/Videos` (~11 ГБ) и `/root/Music` (оставлена
+  только `mp3`, 227 МБ); манифест удалённого — в `build/rootfs-backup/`.
+- Архив содержит только rootfs, без boot-раздела p29; для полного
+  восстановления нужен отдельно `build/boot_pa.img` (md5 `d7c12647…`).
+  Инструкции — `docs/rootfs-backup.md`; каталог `build/rootfs-backup/`
+  в gitignore.
