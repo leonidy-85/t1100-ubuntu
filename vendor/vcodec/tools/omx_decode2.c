@@ -1,9 +1,25 @@
-/* 32-bit bionic OMX H.264 one-frame decode with port reconfiguration. */
+/* 32-bit bionic OMX H.264 one-frame decode with port reconfiguration.
+ * Knobs: -DIN_FLAGS=0x10  -DCSD_SPLIT=1  -DAU_PATH=\"/tmp/frame.h264\"
+ *        -DDUMP_PATH=\"/data/out.yuv\"
+ */
 #include <OMX_Core.h>
 #include <OMX_Component.h>
 #include <OMX_Video.h>
 #include <OMX_IVCommon.h>
 #include <string.h>
+#include <OMX_Core.h>
+#ifndef IN_FLAGS
+#define IN_FLAGS 0x1u   /* OMX_BUFFERFLAG_EOS */
+#endif
+#ifndef CSD_SPLIT
+#define CSD_SPLIT 0
+#endif
+#ifndef AU_PATH
+#define AU_PATH "/data/frame320.h264"
+#endif
+#ifndef DUMP_PATH
+#define DUMP_PATH "/data/out.yuv"
+#endif
 
 extern void *dlopen(const char *, int);
 extern void *dlsym(void *, const char *);
@@ -13,6 +29,7 @@ extern long read(int, void *, unsigned long);
 extern int close(int);
 extern int usleep(unsigned int);
 extern void _exit(int);
+extern long syscall(long, ...);
 
 static void ps(const char *s) { unsigned long n = 0; while (s[n]) n++; write(1, s, n); }
 static void pn(long v)
@@ -38,20 +55,45 @@ static OMX_U32 g_au_len;
 static unsigned char g_csd[65536], g_frame[262144];
 static OMX_U32 g_csd_len, g_frame_len;
 static int g_csd_sent, g_frame_sent;
+static void raw_submit(OMX_BUFFERHEADERTYPE *b, const void *data, OMX_U32 len, OMX_U32 flags)
+{
+	if (!b || !data || !len) return;
+	memset(b->pBuffer, 0, b->nAllocLen);
+	memcpy(b->pBuffer, data, len);
+	b->nFilledLen = len;
+	b->nFlags = flags;
+	b->nOffset = 0;
+	((OMX_COMPONENTTYPE *)g_h)->EmptyThisBuffer(g_h, b);
+}
+
 static void submit_au(void)
 {
-	if (!g_h || !g_in || !g_au_len) return;
-	memset(g_in->pBuffer, 0, g_in->nAllocLen);   /* no stale bytes past the AU */
+	if (!g_h || !g_in) return;
+	memset(g_in->pBuffer, 0, g_in->nAllocLen);
+#if CSD_SPLIT
+	if (!g_csd_sent && g_csd_len) {
+		memcpy(g_in->pBuffer, g_csd, g_csd_len);
+		g_in->nFilledLen = g_csd_len;
+		g_in->nFlags = OMX_BUFFERFLAG_CODECCONFIG;
+		g_in->nOffset = 0;
+		((OMX_COMPONENTTYPE *)g_h)->EmptyThisBuffer(g_h, g_in);
+		g_csd_sent = 1;
+		ps("  [csd submitted] len="); pn((long)g_csd_len); ps("\n");
+		return;
+	}
+	if (!g_frame_len) { ps("  [no frame data]\n"); return; }
+	memcpy(g_in->pBuffer, g_frame, g_frame_len);
+	g_in->nFilledLen = g_frame_len;
+	ps("  [frame submitted] len="); pn((long)g_frame_len); ps("\n");
+#else
+	if (!g_au_len) return;
 	memcpy(g_in->pBuffer, g_au, g_au_len);
 	g_in->nFilledLen = g_au_len;
-#ifdef NO_EOS
-	g_in->nFlags = 0;
-#else
-	g_in->nFlags = OMX_BUFFERFLAG_EOS;
+	ps("  [au submitted] len="); pn((long)g_au_len); ps("\n");
 #endif
+	g_in->nFlags = (OMX_U32)IN_FLAGS;
 	g_in->nOffset = 0;
 	((OMX_COMPONENTTYPE *)g_h)->EmptyThisBuffer(g_h, g_in);
-	ps("  [au submitted]\n");
 }
 static OMX_U32 g_filled, g_chg_port;
 static OMX_BUFFERHEADERTYPE *g_fill_buf;
@@ -81,7 +123,14 @@ static OMX_ERRORTYPE ev(OMX_HANDLETYPE h, OMX_PTR a, OMX_EVENTTYPE e, OMX_U32 d1
 static OMX_ERRORTYPE ebd(OMX_HANDLETYPE h, OMX_PTR a, OMX_BUFFERHEADERTYPE *b)
 {
 	(void)h;(void)a;(void)b; g_ebd++; ps("  [ebd]\n");
-	if (g_resend_on_ebd) { g_resend_on_ebd = 0; submit_au(); }
+	if (g_resend_on_ebd) {
+		g_resend_on_ebd = 0;
+#if CSD_SPLIT
+		raw_submit(b, g_frame, g_frame_len, (OMX_U32)IN_FLAGS);
+#else
+		raw_submit(b, g_au, g_au_len, (OMX_U32)IN_FLAGS);
+#endif
+	}
 	return OMX_ErrorNone;
 }
 static OMX_ERRORTYPE fbd(OMX_HANDLETYPE h, OMX_PTR a, OMX_BUFFERHEADERTYPE *b)
@@ -138,8 +187,10 @@ void _start(void)
 	r = c->SetParameter(h, OMX_IndexParamVideoPortFormat, &pf);
 	ps("set NV12 r="); pn((long)r); ps("\n");
 
+#ifndef NO_SET_SIZE
 	pd_out.format.video.nFrameWidth = 320;
 	pd_out.format.video.nFrameHeight = 240;
+#endif
 	pd_out.format.video.nStride = 320;
 	pd_out.format.video.nSliceHeight = 240;
 	pd_out.format.video.eColorFormat = OMX_COLOR_FormatYUV420SemiPlanar;
@@ -160,7 +211,7 @@ void _start(void)
 
 	/* load AU */
 	{
-		int fd = open("/data/frame320.h264", 0);
+		int fd = open(AU_PATH, 0);
 		if (fd < 0) { ps("no frame\n"); _exit(5); }
 		g_au_len = (OMX_U32)read(fd, g_au, sizeof(g_au));
 		close(fd);
@@ -208,11 +259,20 @@ void _start(void)
 	ps("Executing ok\n");
 
 	g_h = h; g_in = inb[0];
+#if CSD_SPLIT
+	raw_submit(inb[0], g_csd, g_csd_len, OMX_BUFFERFLAG_CODECCONFIG);
+	if (nin > 1) raw_submit(inb[1], g_frame, g_frame_len, (OMX_U32)IN_FLAGS);
+	ps("  [csd+frame submitted]\n");
+#else
+	submit_au();
+#endif
 	ps("in[0].pBuffer="); ph((unsigned long)inb[0]->pBuffer);
 	ps(" nAllocLen="); pn((long)inb[0]->nAllocLen);
 	ps(" out[0].pBuffer="); ph((unsigned long)outb[0]->pBuffer);
 	ps("\n");
+#if !CSD_SPLIT
 	submit_au();
+#endif
 	{
 		unsigned char *q = (unsigned char *)inb[0]->pBuffer;
 		ps("buf after copy:");
@@ -230,6 +290,10 @@ void _start(void)
 		if (g_pchg) {
 			OMX_U32 port = g_chg_port;
 			g_pchg = 0;
+#ifdef NO_RECONFIG
+			ps(">> PSC ignored (NO_RECONFIG)\n");
+			continue;
+#endif
 			ps(">> reconfig port "); pn((long)port); ps("\n");
 			g_pdis = 0;
 			c->SendCommand(h, OMX_CommandPortDisable, port, 0);
@@ -273,7 +337,7 @@ void _start(void)
 		if (g_filled) {
 			unsigned char *p = (unsigned char *)g_fill_buf->pBuffer;
 			ps("first16:"); for (int i = 0; i < 16; i++) { ps(" "); ph(p[i]); } ps("\n");
-			int ofd = open("/data/out.yuv", 0x41, 0644);
+			int ofd = open(DUMP_PATH, 0x41, 0644);
 			if (ofd >= 0) { write(ofd, p, g_filled); close(ofd); ps("saved /data/out.yuv\n"); }
 		}
 	} else {
