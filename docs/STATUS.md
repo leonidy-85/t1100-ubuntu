@@ -5765,3 +5765,18 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Детали, команды и откат — `docs/waydroid.md`. p29 можно откатить на
   `build/recovery/boot_a_pre_waydroid.img` (md5 `d7c12647…`) или
   `build/scp/boot_vcodec2.img` (md5 `bc48aedf…`).
+
+### 21.11 (2): Waydroid — сеть и binderfs после ребута
+
+- `dev-binderfs.mount` получил `After=systemd-tmpfiles-setup.service`
+  (иначе гонка: mount падал, контейнер оставался `STOPPED`).
+  `waydroid-route.service` ждёт `sys.boot_completed=1` и восстанавливает
+  `default via 192.168.240.1 dev eth0`; проверено `ping 8.8.8.8` (28.8 ms).
+- `waydroid status`: Session/Container RUNNING, Android 13 LineageOS 20,
+  IP `192.168.240.112`; приложения открываются
+  (`waydroid app launch com.android.settings` — полноэкранный Settings).
+  Пункт «Waydroid» (`waydroid show-full-ui`) поднимает контейнер, но
+  домашний экран Android может не выйти — известное ограничение UI.
+- p29 не менялся: `build/waydroid/boot_waydroid.img` md5
+  `a8812124…`; откат `build/recovery/boot_a_pre_waydroid.img`
+  (`d7c12647…`). Детали — `docs/waydroid.md`.
