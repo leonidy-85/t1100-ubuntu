@@ -41,6 +41,19 @@
 - добавлен в `wheel, video, render, audio, input, networkops, users`;
 - root и `user` имеют пароль, заданный при сборке; в репозиторий он не
   записывается;
+- ALT проверяет пароли через **tcb**, а не только `/etc/shadow`. Поэтому
+  после создания пользователя нужно создать
+  `/etc/tcb/user/shadow` (и `/etc/tcb/root/shadow`) из соответствующих строк
+  `/etc/shadow`; иначе `passwd -S` показывает пароль, но Phosh и sshd его не
+  принимают:
+
+```sh
+install -d -m 2755 -o root -g root /etc/tcb/user
+grep '^user:' /etc/shadow > /etc/tcb/user/shadow
+chown root:root /etc/tcb/user/shadow
+chmod 640 /etc/tcb/user/shadow
+```
+
 - SSH: `/etc/ssh` перенесён из старого rootfs, `PermitRootLogin yes`,
   `PasswordAuthentication yes`;
 - Wi-Fi: после первого запуска подключена сеть `home`, планшет получил
@@ -148,6 +161,12 @@ d /var/lib/greeter/.cache 0700 _greeter _greeter -
 ```sh
 ln -sf /usr/bin/phosh-osk-stevia /usr/bin/osk-wayland
 ```
+
+6. **Пароль не принимается при разблокировке.** Причина — tcb: запись в
+   `/etc/shadow` без `/etc/tcb/user/shadow` не работает для PAM/Phosh. После
+   создания tcb-файла пароль `user` проверен через SSH
+   (`ssh user@10.42.66.66`, `LOGIN_OK`); `su - user` и Phosh используют тот
+   же `pam_tcb`.
 
 ## Проверка
 
