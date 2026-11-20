@@ -5709,6 +5709,13 @@ BTIF/STP-транспорт (включая исправленную поляр�
   запускался; выставлен `4755` и добавлено правило tmpfiles
   `z /usr/bin/su 4755 root root -`. Проверено: `sudo -S id` и `su -c id`
   из-под `user` дают root.
+- Звук: в ALT не было UCM/PipeWire-настроек, WirePlumber показывал только
+  «Холостой выход». Из старого rootfs возвращены UCM
+  `mt6771-mt6358`, `51-alsa-sink.conf`, `52-alsa-mic.conf`,
+  `52-auto-profile.conf`, `t1100-audio-mixer.sh` (+`ctlroute`/`ctlenum`)
+  и `t1100-audio-mixer.service`. После restart PipeWire/WirePlumber в
+  `wpctl status` появились `MT6358 speaker` и default `Internal speaker`;
+  `speaker-test -D hw:0,0` и `pw-play` проходят.
 - Проверено: ALT 2026.09, Phosh 0.58, `grim` 2176×1600, `systemctl --failed`
   — 0, SSH root по USB-RNDIS и Wi-Fi работает; Wi-Fi `home` подключён,
   `wlan0` — `192.168.2.52/24`, интернет есть. Тач не готов; декод H.264
