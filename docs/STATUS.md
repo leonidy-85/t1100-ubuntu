@@ -5741,3 +5741,27 @@ BTIF/STP-транспорт (включая исправленную поляр�
   порт 22 — `Connection refused`); нужен физический power-cycle.
   Прошивка p29 не выполнялась, p29 прежний: `build/boot_pa.img`
   (md5 `d7c12647…`). Инструкция — `docs/waydroid.md`.
+
+### 21.11 (1): Waydroid запущен
+
+- Собран и прошит p29 `build/waydroid/boot_waydroid.img` (md5
+  `a8812124946e93c4414efafc345cbab9`, sha256 `2184b560…`); ядро
+  `6.12.114-wifi1 #3`, конфиг подтверждён `extract-ikconfig`:
+  binderfs/binder IPC, PSI, uinput, uhid, nf_tables/nft_nat/nft_masq.
+- Модули netfilter/veth/bridge/uhid собраны в
+  `build/waydroid/waydroid-modules.tar.zst` (sha256 `5bd87237…`, 45 `.ko`),
+  распакованы в `/lib/modules/6.12.114-wifi1`, `depmod -a`.
+- Образы: system.img ~1,99 ГБ и vendor-mainline.img ~422 МБ; `waydroid
+  init -i /usr/share/waydroid-extra/images` → MAINLINE.
+- `waydroid status`: Session/Container RUNNING, Android 13 LineageOS 20,
+  `sys.boot_completed=1`, IP `192.168.240.112`; проверено скриншотом
+  `grim` (рабочий стол, шторка, Settings → About phone).
+- Автозапуск: `waydroid-container.service` + пользовательский
+  `waydroid-session.service`; UI намеренно не автостартует, в меню
+  приложений добавлен `Waydroid` (`waydroid show-full-ui`), который также
+  размораживает контейнер после гашения экрана.
+- При гашении экрана контейнер переходит в `FROZEN` — это штатное
+  энергосбережение; открытие Waydroid возвращает `RUNNING`.
+- Детали, команды и откат — `docs/waydroid.md`. p29 можно откатить на
+  `build/recovery/boot_a_pre_waydroid.img` (md5 `d7c12647…`) или
+  `build/scp/boot_vcodec2.img` (md5 `bc48aedf…`).
