@@ -1,8 +1,9 @@
 # Waydroid на Fplus T1100 (ALT Mobile + Phosh)
 
-Состояние: **подготовка ядра и образов**, запуск ещё не подтверждён.
-Устройство переведено на ALT Mobile Sisyphus (см. `docs/alt-mobile.md`),
-оболочка — Phosh 0.58, GPU — Panfrost (Mali-G72 MC3).
+Состояние: **работает**. Android 13 (LineageOS 20, MAINLINE vendor) запущен
+в контейнере, UI открывается из Phosh. Устройство переведено на ALT Mobile
+Sisyphus (см. `docs/alt-mobile.md`), оболочка — Phosh 0.58, GPU — Panfrost
+(Mali-G72 MC3).
 
 ## Что требует Waydroid от ядра
 
@@ -145,9 +146,37 @@ ps aux | grep -E 'waydroid|binder'
 Android-окно в Phosh. GPU используется через host Panfrost/Mesa; аппаратный
 H.264-декод внутри Waydroid не гарантирован (vendor-путь на паузе).
 
+## Результат на T1100 (20.11.2026)
+
+- Ядро `6.12.114-wifi1 #3` (сборка 22:08 MSK), p29
+  `build/waydroid/boot_waydroid.img`, md5 `a8812124946e93c4414efafc345cbab9`.
+  Проверено: `CONFIG_ANDROID_BINDER_IPC=y`, `CONFIG_ANDROID_BINDERFS=y`,
+  `CONFIG_PSI=y`, `CONFIG_INPUT_UINPUT=y`, `CONFIG_UHID=m`,
+  `CONFIG_NF_TABLES=m`, `CONFIG_NFT_NAT=m`, `CONFIG_NFT_MASQ=m`.
+- `/dev/binderfs` монтируется юнитом `dev-binderfs.mount`, `/dev/uinput`
+  создан; модули `bridge`, `veth`, `nf_tables`, `nft_nat`, `nft_masq`,
+  `nft_chain_nat`, `uhid` грузятся через `/etc/modules-load.d/waydroid.conf`.
+- `waydroid status`: `Session: RUNNING`, `Container: RUNNING` (или `FROZEN`
+  после гашения экрана — это штатное энергосбережение), `Vendor type:
+  MAINLINE`, IP `192.168.240.112`, `waydroid0` = `192.168.240.1/24`.
+- Android: LineageOS 20 (Android 13), `sys.boot_completed=1`, модель
+  `MT6771V/CT`; проверено скриншотом `grim` — рабочий стол, шторка,
+  Settings → About phone.
+- Автозапуск: `waydroid-container.service` и пользовательский
+  `waydroid-session.service` включены. UI **не** стартует автоматически,
+  чтобы не спорить с восстановленными окнами Phosh: в меню приложений есть
+  `Waydroid` (`waydroid show-full-ui`), он же поднимает замороженный
+  контейнер. Старый `waydroid-ui.service` отключён.
+- Сеть: nftables-правила `inet lxc` + `ip lxc` (masquerade для
+  `192.168.240.0/24`) создаются `waydroid-net.sh`; проверено `nft list ruleset`.
+
 ## Ограничения
 
 - Тач T1100 в mainline не готов — для Android-окна нужен USB-ввод.
 - RAM 3.4 ГБ, Android-контейнеру может не хватить; следить за zram/swap.
 - Binderfs/PSI нельзя включить модулями — только новым ядром.
 - nftables обязателен для штатного `waydroid-net.sh`; iptables — только fallback.
+- При погашенном экране контейнер замораживается; открытие `Waydroid`
+  размораживает его (это нормальное поведение, не сбой).
+- Аппаратный H.264-декод внутри Android не гарантирован: vendor-путь на
+  паузе, используется программное декодирование.
