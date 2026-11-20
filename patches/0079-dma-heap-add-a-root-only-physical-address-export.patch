@@ -63,8 +63,7 @@ touching dma-buf core, and one entry to the dma_heap ioctl table.
  #endif /* _UAPI_LINUX_DMABUF_POOL_H */
 --- a/include/linux/dma-heap.h
 +++ b/include/linux/dma-heap.h
-@@ -26,6 +26,14 @@ struct dma_heap_ops {
- 	struct dma_buf *(*allocate)(struct dma_heap *heap,
+@@ -24,6 +24,13 @@
  				    unsigned long len,
  				    u32 fd_flags,
  				    u64 heap_flags);
@@ -80,14 +79,15 @@ touching dma-buf core, and one entry to the dma_heap ioctl table.
  /**
 --- a/drivers/dma-buf/dma-heap.c
 +++ b/drivers/dma-buf/dma-heap.c
-@@ -106,6 +106,7 @@ static struct dma_buf *dma_heap_ioctl_allocate(struct file *file, void *data)
+@@ -105,6 +105,7 @@
+ 
  static unsigned int dma_heap_ioctl_cmds[] = {
  	DMA_HEAP_IOCTL_ALLOC,
 +	DMA_HEAP_IOCTL_PHYS,
  };
  
  static long dma_heap_ioctl(struct file *file, unsigned int ucmd,
-@@ -115,6 +116,7 @@ static long dma_heap_ioctl(struct file *file, unsigned int ucmd,
+@@ -114,6 +115,7 @@
  	char *kdata = stack_kdata;
  	unsigned int kcmd;
  	unsigned int in_size, out_size, drv_size, ksize;
@@ -95,7 +95,9 @@ touching dma-buf core, and one entry to the dma_heap ioctl table.
  	int nr = _IOC_NR(ucmd);
  	int ret = 0;
  	int fd;
-@@ -158,6 +160,15 @@ static long dma_heap_ioctl(struct file *file, unsigned int ucmd,
+@@ -171,6 +173,15 @@
+ 		}
+ 
  		break;
 +	case DMA_HEAP_IOCTL_PHYS:
 +		if (!heap->ops->ioctl) {
@@ -111,7 +113,9 @@ touching dma-buf core, and one entry to the dma_heap ioctl table.
  		goto err;
 --- a/drivers/dma-buf/heaps/cma_heap.c
 +++ b/drivers/dma-buf/heaps/cma_heap.c
-@@ -12,6 +12,7 @@
+@@ -10,6 +10,7 @@
+  *	Andrew F. Davis <afd@ti.com>
+  */
  #include <linux/cma.h>
 +#include <linux/capability.h>
  #include <linux/dma-buf.h>
@@ -125,7 +129,7 @@ touching dma-buf core, and one entry to the dma_heap ioctl table.
  
  
  struct cma_heap {
-@@ -252,6 +254,65 @@ static const struct dma_buf_ops cma_heap_buf_ops = {
+@@ -272,6 +274,69 @@
  	.release = cma_heap_dma_buf_release,
  };
  
@@ -195,10 +199,11 @@ touching dma-buf core, and one entry to the dma_heap ioctl table.
  static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
  					 unsigned long len,
  					 u32 fd_flags,
-@@ -356,6 +417,7 @@ static struct dma_buf *cma_heap_allocate(struct dma_heap *heap,
+@@ -364,6 +429,7 @@
+ 
  static const struct dma_heap_ops cma_heap_ops = {
  	.allocate = cma_heap_allocate,
 +	.ioctl = cma_heap_ioctl,
  };
  
- static int cma_heap_init(void)
+ static int __add_cma_heap(struct cma *cma, void *data)
