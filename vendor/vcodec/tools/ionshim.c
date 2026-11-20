@@ -20,6 +20,15 @@
  * If the pages are not contiguous (system heap / memfd) PA is reported as 0
  * rather than a misleading first-page address.
  *
+ * 2026-11-20, kernel 6.12.114-wifi1: this does NOT work for dma-buf because
+ * dma-buf mappings are VM_PFNMAP (VMA shown as "/dmabuf:" rw-s) and pagemap
+ * returns an all-zero entry for them (present bit clear), while anonymous
+ * pages in the same process report PFNs normally. Reproduced for both the
+ * cma and system heaps, from 32-bit bionic and 64-bit readers. So GET_PHYS
+ * logs "pagemap-unavailable" and PA stays 0. A kernel-side PA source is
+ * required, e.g. a DMA_HEAP/DMA_BUF ioctl returning the first sg_table
+ * address (valid for contiguous CMA buffers); wire it into do_custom().
+ *
  * Limitation: alignment above 4 KiB is not honoured (logged); the observed
  * HAL requests 0x1000.
  */

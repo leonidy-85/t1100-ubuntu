@@ -43,10 +43,17 @@ chroot <chroot> /system/bin/sh -c \
   "LD_PRELOAD=/vendor/lib/libionshim.so /vendor/bin/ion_test32"
 ```
 
-Проверено на memfd-бэкенде: `ion_alloc_mm` / `ion_alloc_camera` /
-`ion_alloc_syscontig`, share, mmap, free, а также `eVDecDrvCreate/Init`
-вендорного HAL. dma-heap-бэкенд собран, но на устройстве ещё не проверялся
-(нужен kernel с `CONFIG_DMABUF_HEAPS`).
+Проверено: memfd-бэкенд (alloc/share/mmap/free, `eVDecDrvCreate/Init`) и
+dma-heap-бэкенд на kernel 6.12.114-wifi1 с `CONFIG_DMABUF_HEAPS`:
+`/dev/dma_heap/cma` работает, `ion_test32` проходит, буфер пишется/читается.
+
+**PA через pagemap не работает**: dma-buf маппится как `VM_PFNMAP`
+(`/dmabuf:` `rw-s`), и `/proc/self/pagemap` отдаёт для него полностью нулевую
+запись (бит present = 0), тогда как анонимные страницы в том же процессе
+показывают PFN. Воспроизведено для heaps cma и system, из 32-битного bionic и
+64-битного процесса. Поэтому `GET_PHYS` логирует `pagemap-unavailable`, а PA
+остаётся 0. Нужен kernel-side источник PA (например ioctl дамап-хеапа,
+возвращающий первый адрес sg_table) — точка вставки в `do_custom()`.
 
 ## `ion_test.c`
 
