@@ -77,6 +77,36 @@ VERDICT: FAIL (PA==0 or not writable; memfd/non-contiguous backend)
 С `/dev/dma_heap/cma` ожидается `PASS`; на memfd-бэкенде — `FAIL` с `PA=0`
 (это и есть зафиксированный до dma-heap дефект).
 
+## OMX-путь (`omx_probe.c`, `omx_decode2.c`, `logshim.c`)
+
+32-битный bionic OMX-харнесс для вендорного компонента
+`OMX.MTK.VIDEO.DECODER.AVC` (`libMtkOmxCore.so` + `libMtkOmxVdecEx.so`,
+ядро OMX читает `/vendor/etc/mtk_omx_core.cfg`, он тоже нужен в chroot).
+
+- `omx_probe.c` — `Mtk_OMX_Init`, `Mtk_OMX_ComponentNameEnum`, `GetHandle`,
+  опрос портов. Важно: MTK-компонент принимает только **OMX 1.0.0.0**
+  (`nVersion.nVersion = 1`, не 1.1.2) и `nSize = 96` для
+  `OMX_PARAM_PORTDEFINITIONTYPE`, иначе `OMX_ErrorBadParameter`.
+- `omx_decode2.c` — полный цикл: NV12 320x240, буферы, Idle/Executing,
+  `EmptyThisBuffer` + `FillThisBuffer`, обработка `PortSettingsChanged`
+  (disable/free/realloc/enable) и повторная отправка AU.
+- `logshim.c` — `LD_PRELOAD`, уводит `__android_log_print` в stderr (в chroot
+  нет logd); без него ошибки вендорного кода не видны.
+
+Запуск:
+
+```sh
+chroot $C /system/bin/sh -c   "LD_PRELOAD=\"/vendor/lib/libionshim.so /vendor/lib/liblogshim.so\" /vendor/bin/omx_decode2_32"
+```
+
+Состояние: OMX доходит до `InitHW OK` (SPS разобран, разрешение верное),
+`OMX_EventPortSettingsChanged`, реконфигурация порта проходит; буферы
+получают реальные PA/MVA. Далее вендорный парсер выдаёт
+`[Err] Fail to parse Slice header data structure!!` на любом валидном
+потоке (x264 baseline CAVLC 176x144/320x240, High 640x640 с Aurora,
+Annex B с AUD/SEI/без, CSD отдельным буфером) — кадр не выдаётся.
+IRQ VDEC (398) при этом ни разу не срабатывает.
+
 ## `v4l2_expbuf.c`
 
 Тест `VIDIOC_EXPBUF` на `/dev/video0` (`mtk-vcodec-dec`): проверяет, что
