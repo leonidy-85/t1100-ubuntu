@@ -68,11 +68,22 @@ T1100_HOST=10.42.66.66 tools/host/flash-ssh.sh \
   build/waydroid/boot_waydroid.img /dev/mmcblk0p29 --reboot
 ```
 
+Готовый образ: `build/waydroid/boot_waydroid.img`, 33 554 432 Б,
+md5 `a8812124946e93c4414efafc345cbab9`,
+sha256 `2184b560c120067af9f414299b54ca7cf6b0ede8e51fc9376c4c6626513ecfd1`;
+внутри `Image.gz` 15 664 760 Б (sha256 `2bf0dfc8…9058`), ramdisk и DTB
+из текущего p29. `extract-ikconfig` подтверждает binderfs/PSI/uinput/uhid/nftables.
+
 Откат: `build/scp/boot_vcodec2.img` (md5 `bc48aedf5cee38cab0c8fb11cdd11e5a`)
 или `build/recovery/boot_a_heaps_2026-11-20.img` (md5 `6bc3c35e…`).
 Прошивать только при доступном SSH/recovery и после проверки md5.
 
 ## Модули nftables/uhid
+
+Готовый архив: `build/waydroid/waydroid-modules.tar.zst` (340 КБ, 35 `.ko`,
+sha256 `4b29712a170e3ca2173365a1234f3a0433e7e13a8c5dd25d40da391a6be927b2`):
+netfilter (nf_tables/nf_conntrack/nf_nat/nft_*), ipv4/ipv6 netfilter,
+`libcrc32c.ko` и `uhid.ko`. На планшете распаковать в `/` и `depmod -a`.
 
 Из staging-каталога скопировать на планшет:
 
