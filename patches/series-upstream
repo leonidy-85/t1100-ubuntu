@@ -55,3 +55,4 @@
 0074-drm-panel-it6112-recover-the-bridge-after-the-dsi-st.patch
 0077-bluetooth-l2cap-restore-the-old-getsockopt-abi.patch
 0078-arm64-dts-mediatek-add-HDMI-output.patch
+0079-dma-heap-add-a-root-only-physical-address-export.patch
