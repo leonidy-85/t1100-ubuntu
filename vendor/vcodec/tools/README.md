@@ -99,6 +99,13 @@ VERDICT: FAIL (PA==0 or not writable; memfd/non-contiguous backend)
 chroot $C /system/bin/sh -c   "LD_PRELOAD=\"/vendor/lib/libionshim.so /vendor/lib/liblogshim.so\" /vendor/bin/omx_decode2_32"
 ```
 
+Кнобы сборки: `-DIN_FLAGS=0x10|0x11|0` (флаги входного буфера),
+`-DCSD_SPLIT=1` (SPS/PPS отдельным буфером с `OMX_BUFFERFLAG_CODECCONFIG=0x80`),
+`-DNO_RECONFIG=1`, `-DAU_PATH=...`.
+
+`ioctltrace.c` — LD_PRELOAD-трейсер Vcodec-ioctl (magic 'M'), чтобы снимать
+последовательность на эталонном T800 без strace.
+
 Состояние: OMX доходит до `InitHW OK` (SPS разобран, разрешение верное),
 `OMX_EventPortSettingsChanged`, реконфигурация порта проходит; буферы
 получают реальные PA/MVA. Далее вендорный парсер выдаёт
