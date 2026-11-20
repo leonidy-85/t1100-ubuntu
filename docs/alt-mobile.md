@@ -187,6 +187,44 @@ ln -sf /usr/bin/phosh-osk-stevia /usr/bin/osk-wayland
    (`ssh user@10.42.66.66`, `LOGIN_OK`); `su - user` и Phosh используют тот
    же `pam_tcb`.
 
+## Звук
+
+В ALT не хватало UCM/PipeWire-настроек, поэтому WirePlumber показывал только
+«Холостой выход». В образ добавлены файлы из старого Ubuntu-rootfs, где звук
+уже был отлажен:
+
+- `/usr/share/alsa/ucm2/conf.d/mt6771-mt6358/` — UCM-профиль динамика;
+- `/etc/pipewire/pipewire.conf.d/51-alsa-sink.conf` — sink `MT6358 speaker`;
+- `/etc/pipewire/pipewire.conf.d/52-alsa-mic.conf` — микрофон;
+- `/etc/wireplumber/wireplumber.conf.d/52-auto-profile.conf`;
+- `/usr/local/bin/t1100-audio-mixer.sh` + `ctlroute`/`ctlenum` + systemd
+  `t1100-audio-mixer.service`.
+
+После копирования:
+
+```sh
+systemctl daemon-reload
+systemctl enable --now t1100-audio-mixer.service
+# для уже запущенной сессии:
+su - user -c 'XDG_RUNTIME_DIR=/run/user/1000 \
+  systemctl --user restart pipewire pipewire-pulse wireplumber'
+```
+
+Проверка:
+
+```sh
+su - user -c 'XDG_RUNTIME_DIR=/run/user/1000 wpctl status'
+# Audio -> Sinks: MT6358 speaker и Internal speaker (default)
+su - user -c 'XDG_RUNTIME_DIR=/run/user/1000 pw-play /usr/share/sounds/alsa/Front_Center.wav'
+speaker-test -D hw:0,0 -c 2 -r 48000 -t sine -l 1
+```
+
+`t1100-audio-mixer.sh` выставляет `ADDA_DL_CH1 DL1_CH1`,
+`ADDA_DL_CH2 DL1_CH2`, `DAC In Mux = Normal Path`,
+`HPL/HPR Mux = LoudSPK Playback`; UCM делает то же при открытии потока.
+Микрофон и переключение «динамик/наушники» — через `t1100-audio-ui` или
+`amixer`/`alsaucm`.
+
 ## Проверка
 
 - ядро `6.12.114-wifi1 #2`, ALT `2026.09` (phoenix);
