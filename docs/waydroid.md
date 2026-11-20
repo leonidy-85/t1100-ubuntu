@@ -202,3 +202,23 @@ H.264-декод внутри Waydroid не гарантирован (vendor-п�
   com.android.settings` открывает Settings на весь экран. Для повседневного
   запуска используйте иконки приложений/`waydroid app launch`; вывод
   лаунчера на экран — отдельная задача.
+
+### Ярлык запуска: один, от пользователя (21.11)
+
+- В ALT было два ярлыка «Waydroid»: системный
+  `/usr/share/applications/Waydroid.desktop` с `Exec=waydroid` (без
+  аргументов — только справка) и добавленный вручную
+  `~/.local/share/applications/waydroid-full-ui.desktop` с
+  `Exec=waydroid show-full-ui`. В меню Phosh они выглядели одинаково.
+- Оставлен один пользовательский ярлык с тем же именем файла, что у
+  системного: `~/.local/share/applications/Waydroid.desktop`,
+  `Exec=waydroid show-full-ui`; файл перекрывает системный.
+  `waydroid-full-ui.desktop` удалён, бэкап — в
+  `/root/waydroid-desktop-backup-*`. После правки:
+  `update-desktop-database ~/.local/share/applications`.
+- Запуск ярлыка из сессии Phosh (пользователь `user`, не root) показывает
+  домашний экран Android; проверено `gtk-launch Waydroid` под `user` с
+  `XDG_RUNTIME_DIR=/run/user/1000`, `WAYLAND_DISPLAY=wayland-0`.
+- Важно: `waydroid show-full-ui` от root ищет Wayland-сокет
+  `/run/user/0/wayland-0` и падает; запускать только из пользовательской
+  сессии (ярлык так и делает).

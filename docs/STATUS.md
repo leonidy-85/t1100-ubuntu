@@ -5780,3 +5780,17 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - p29 не менялся: `build/waydroid/boot_waydroid.img` md5
   `a8812124…`; откат `build/recovery/boot_a_pre_waydroid.img`
   (`d7c12647…`). Детали — `docs/waydroid.md`.
+
+### 21.11 (3): Waydroid — один рабочий ярлык и домашний экран
+
+- Убрал дубль ярлыка «Waydroid»: системный `Waydroid.desktop` имел
+  `Exec=waydroid` (без аргументов), ручной `waydroid-full-ui.desktop` —
+  `waydroid show-full-ui`. Оставлен один пользовательский
+  `~/.local/share/applications/Waydroid.desktop` с рабочим
+  `Exec=waydroid show-full-ui`; он перекрывает системный, дубль удалён.
+  Бэкап — `/root/waydroid-desktop-backup-20261120-195042`.
+- `gtk-launch Waydroid` из сессии `user` (`XDG_RUNTIME_DIR=/run/user/1000`,
+  `WAYLAND_DISPLAY=wayland-0`) выводит домашний экран Android; проверено
+  скриншотом `grim`. Из root `show-full-ui` не работает — ищет
+  `/run/user/0/wayland-0`.
+- p29 не менялся; детали — `docs/waydroid.md`.
