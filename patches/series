@@ -73,3 +73,4 @@
 0076-drm-panfrost-bound-the-job-irq-drain-loop.patch
 0077-bluetooth-l2cap-restore-the-old-getsockopt-abi.patch
 0078-arm64-dts-mediatek-add-HDMI-output.patch
+0079-dma-heap-add-a-root-only-physical-address-export.patch
