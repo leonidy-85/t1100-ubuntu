@@ -152,6 +152,7 @@ static int path_open(const char *path)
 }
 
 /* ---------- dma-buf physical address ---------- */
+/* status: 1 = contiguous PA found, 0 = non-contiguous, -1 = unavailable */
 static unsigned long long buf_pa(int fd, unsigned int len, int *contig)
 {
 	void *p;
@@ -161,7 +162,7 @@ static unsigned long long buf_pa(int fd, unsigned int len, int *contig)
 
 	if (len == 0)
 		len = PAGE;
-	*contig = 1;
+	*contig = -1;
 	p = (void *)syscall(SYS_mmap2, 0, (unsigned long)len, PROT_READ, MAP_SHARED, fd, 0);
 	if ((long)p < 0 || !p)
 		return 0;
@@ -192,10 +193,13 @@ static unsigned long long buf_pa(int fd, unsigned int len, int *contig)
 	if (pf >= 0)
 		syscall(SYS_close, pf);
 	syscall(SYS_munmap, p, (unsigned long)len);
-	if (ok && first)
+	if (ok && first) {
 		ret = (first << 12) | ((unsigned long)p & (PAGE - 1));
-	if (!*contig)
-		ret = 0;
+		if (*contig == 0)
+			ret = 0;   /* non-contiguous: never hand out a bogus PA */
+		else
+			*contig = 1;
+	}
 	return ret;
 }
 
@@ -216,14 +220,15 @@ static int do_custom(void *arg)
 		for (int i = 1; i <= 3; i++) {
 			int h = (int)p[i];
 			if (h > 0 && h <= MAXH && g_huse[h - 1]) {
-				int contig = 1;
-				unsigned long long pa = buf_pa(g_hfd[h - 1], g_hlen[h - 1], &contig);
+				int st = -1;
+				unsigned long long pa = buf_pa(g_hfd[h - 1], g_hlen[h - 1], &st);
 				p[i + 1] = (unsigned int)pa;
 				lstr("ion-shim: GET_PHYS h=");
 				lnum((unsigned long)h);
 				lstr(" pa=");
 				lhex(pa);
-				lstr(contig ? " contig\n" : " NONCONTIG\n");
+				lstr(st == 1 ? " contig\n" : st == 0 ? " NONCONTIG\n" :
+				     " pagemap-unavailable\n");
 				return 0;
 			}
 		}
