@@ -5673,3 +5673,33 @@ BTIF/STP-транспорт (включая исправленную поляр�
   восстановления нужен отдельно `build/boot_pa.img` (md5 `d7c12647…`).
   Инструкции — `docs/rootfs-backup.md`; каталог `build/rootfs-backup/`
   в gitignore.
+
+### 20.11 (5): rootfs заменён на ALT Mobile Sisyphus + Phosh
+
+- Исходный `alt-mobile-phosh-def-20261012-aarch64.img.xz` распакован; ALT
+  rootfs был на f2fs (p3), а ядро p29 без `CONFIG_F2FS_FS`. Содержимое
+  перенесено в ext4-образ `build/alt-mobile/alt-root.img` (12 ГиБ, UUID
+  `b7f4c2d1-6a3e-4f5b-9c8d-1e2f3a4b5c6d`,
+  sha256 `b5442e52...335b9d`; gzip sha256 `20bf3701...97a042`).
+- В образ перенесены firmware и модули `6.12.114-wifi1`, SSH, Wi-Fi/BT
+  сервисы, USB-RNDIS и `wmt-loader`; создан `user` UID 1000, `/etc/fstab`
+  переписан на ext4-root, `t1100-grow-root.service` расширил p54 до 50 ГиБ.
+- p54 прошит из recovery (Vol+ + Power): recovery SSH `root/recovery`,
+  `gzip -dc | dd of=/dev/mmcblk0p54 bs=1M conv=fsync`; sha256 первых 12 ГиБ
+  совпал с образом. p29 не менялся: `build/boot_pa.img`
+  (md5 `d7c12647...`).
+- Первый запуск выявил владельца `/`, `/etc`, `/usr` UID 1000 после
+  `cp -a overlay` (dbus/phoc падали); исправлено `chown root:root` и
+  `chmod` в `build/alt-mobile/setup-rootfs.sh`. Добавлен
+  `/etc/tmpfiles.d/t1100-alt.conf` (`/run/dbus/users` и каталоги
+  `_greeter`).
+- Штатный `greetd`/`phrog` не запускал `initial_session`; Phosh поднят
+  отдельным `t1100-phosh.service` (PAM-сессия, tty1). `t1100-unlock.service`
+  в первую минуту вызывает `loginctl unlock-sessions` — десктоп
+  открывается без ввода пароля. `ready-set` замаскирован, OSK —
+  `/usr/bin/osk-wayland -> phosh-osk-stevia`.
+- Проверено: ALT 2026.09, Phosh 0.58, `grim` 2176×1600, `systemctl --failed`
+  — 0, SSH root по USB-RNDIS работает, `t1100-wifi` active. Wi-Fi-профиль
+  не перенесён (`wlan0` DOWN); тач не готов; декод H.264 не возобновлялся.
+- Детали, команды и откат — `docs/alt-mobile.md`. `build/` в gitignore;
+  образ ALT в репозиторий не коммитится.
