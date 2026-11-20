@@ -54,6 +54,25 @@ chown root:root /etc/tcb/user/shadow
 chmod 640 /etc/tcb/user/shadow
 ```
 
+- `sudo` в ALT не установлен по умолчанию. Поставлен и разрешён группе
+  `wheel`:
+
+```sh
+apt-get install -y sudo
+printf '%s\n' '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/10-wheel
+chmod 440 /etc/sudoers.d/10-wheel
+```
+
+- `su` в пакете ALT имеет режим `0710` (без setuid), поэтому из-под
+  пользователя не запускался. Исправлено:
+
+```sh
+chmod 4755 /usr/bin/su
+# чтобы режим восстанавливался после перезагрузки:
+printf '%s\n' 'z /usr/bin/su 4755 root root -' \
+    >> /etc/tmpfiles.d/t1100-alt.conf
+```
+
 - SSH: `/etc/ssh` перенесён из старого rootfs, `PermitRootLogin yes`,
   `PasswordAuthentication yes`;
 - Wi-Fi: после первого запуска подключена сеть `home`, планшет получил
