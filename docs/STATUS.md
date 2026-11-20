@@ -5703,6 +5703,12 @@ BTIF/STP-транспорт (включая исправленную поляр�
   `/etc/tcb/user/shadow` (и tcb-root), после чего `ssh user@10.42.66.66`
   с паролем проходит (`LOGIN_OK`). В `build/alt-mobile/setup-rootfs.sh`
   добавлено создание tcb-файлов.
+- `sudo` в ALT не был установлен; поставлен `sudo`, добавлен
+  `/etc/sudoers.d/10-wheel` с `%wheel ALL=(ALL:ALL) ALL`. Пакет `su` в ALT
+  имеет режим `0710` без setuid, поэтому `su` из-под пользователя не
+  запускался; выставлен `4755` и добавлено правило tmpfiles
+  `z /usr/bin/su 4755 root root -`. Проверено: `sudo -S id` и `su -c id`
+  из-под `user` дают root.
 - Проверено: ALT 2026.09, Phosh 0.58, `grim` 2176×1600, `systemctl --failed`
   — 0, SSH root по USB-RNDIS и Wi-Fi работает; Wi-Fi `home` подключён,
   `wlan0` — `192.168.2.52/24`, интернет есть. Тач не готов; декод H.264
