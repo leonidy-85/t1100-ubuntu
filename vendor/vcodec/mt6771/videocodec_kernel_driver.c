@@ -2697,6 +2697,8 @@ static int vcodec_resume(struct platform_device *pDev)
  * to start after changing to is_entering_suspend state. This case will be
  * handled by suspend callback vcodec_suspend.
  **/
+static struct notifier_block vcodec_pm_nb;
+
 static int vcodec_suspend_notifier(struct notifier_block *nb,
 		unsigned long action, void *data)
 {
@@ -2986,7 +2988,9 @@ static int vcodec_probe(struct platform_device *dev)
 	}
 
 #if USE_WAKELOCK == 0
-	pm_notifier(vcodec_suspend_notifier, 0);
+	vcodec_pm_nb.notifier_call = vcodec_suspend_notifier;
+	vcodec_pm_nb.priority = 0;
+	register_pm_notifier(&vcodec_pm_nb);
 #endif
 
 	pr_debug("-%s Done\n", __func__);
@@ -3032,6 +3036,9 @@ static int vcodec_probe(struct platform_device *dev)
 static void vcodec_remove(struct platform_device *pDev)
 {
 	pr_debug("%s\n", __func__);
+#if USE_WAKELOCK == 0
+	unregister_pm_notifier(&vcodec_pm_nb);
+#endif
 }
 
 #ifdef CONFIG_MTK_HIBERNATION
