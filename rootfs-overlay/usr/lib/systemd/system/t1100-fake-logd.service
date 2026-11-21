@@ -1,0 +1,13 @@
+[Unit]
+Description=T1100 fake logd sockets for the vendor GPS HAL
+After=local-fs.target
+Before=t1100-internal-gps.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/t1100-fake-logd
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

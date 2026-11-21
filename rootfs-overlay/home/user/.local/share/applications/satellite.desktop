@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Satellite
-Comment=Display data from navigation satellites (T1100 NMEA bridge)
+Comment=Display data from the internal T1100 GPS
 Exec=/usr/local/sbin/t1100-satellite-socket
 Terminal=false
 Categories=Utility;Science;

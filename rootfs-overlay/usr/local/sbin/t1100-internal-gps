@@ -1,0 +1,23 @@
+#!/bin/sh
+# Internal MT6771 GPS: vendor mnld + gps.default HAL + NMEA socket bridge.
+set -u
+modprobe gps_drv
+
+mkdir -p /data/vendor/gps /data/vendor/log/gps /data/agps_supl
+mkdir -p /opt/bionic/data /opt/bionic/dev/socket
+
+mountpoint -q /opt/bionic/dev || mount --bind /dev /opt/bionic/dev
+mountpoint -q /opt/bionic/proc || mount --bind /proc /opt/bionic/proc
+mountpoint -q /opt/bionic/sys || mount --bind /sys /opt/bionic/sys
+mountpoint -q /opt/bionic/data || mount --bind /data /opt/bionic/data
+
+if ! pgrep -f '^/system/bin/mnld' >/dev/null 2>&1; then
+    chroot /opt/bionic /system/bin/sh -c \
+        'export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; exec /system/bin/mnld' \
+        >/tmp/mnld-internal.log 2>&1 &
+    sleep 2
+fi
+
+chroot /opt/bionic /system/bin/sh -c \
+    'export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; exec /system/bin/gps_hal_test' \
+    | exec /usr/local/sbin/t1100-nmea-socket-batch
