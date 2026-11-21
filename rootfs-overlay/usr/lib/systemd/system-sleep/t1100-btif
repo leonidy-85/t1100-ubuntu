@@ -1,0 +1,24 @@
+#!/bin/sh
+# t1100-btif-sleep: mtk_btif returns -ENOENT from its suspend callback
+# when BT/STP is not open, which aborts the whole system suspend.
+# Detach the platform device before sleep and attach it back on resume.
+set -u
+
+case "${1:-}" in
+    pre)
+        if [ -w /sys/bus/platform/drivers/mtk_btif/unbind ]; then
+            echo mtk_btif > /sys/bus/platform/drivers/mtk_btif/unbind 2>/dev/null || true
+        fi
+        ;;
+    post)
+        if [ -w /sys/bus/platform/drivers/mtk_btif/bind ]; then
+            echo mtk_btif > /sys/bus/platform/drivers/mtk_btif/bind 2>/dev/null || true
+        fi
+        # Give wmt/wlan a moment, then make sure NM manages the interface.
+        sleep 1
+        nmcli device set wlan0 managed yes 2>/dev/null || true
+        nmcli connection up home 2>/dev/null || true
+        ;;
+esac
+
+exit 0
