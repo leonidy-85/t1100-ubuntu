@@ -78,5 +78,24 @@ shell (`tee` в обе стороны) дал и запросы, и ответы
 значит протокол принят. Дальше идут keepalive; поток измерений в помещении
 не появляется (нужен обзор неба) — это следующий тест.
 
+## T1100: config принят после холодной перезагрузки
+
+Снятый с Android T1100 config отличается от варианта AYYA T1 в средней части
+(`9d 00 6f 3c 88 89 a2 04 … dc 00 c1 00 … 5c 4a … 5c 4a … 4e 4f 5c 15`).
+После замены `CONFIG` в `t1100-gps` на этот вариант и **холодной** перезагрузки
+(свежий CONSYS) при активных Wi-Fi/BT получен ответ:
+
+```
+opened /dev/stpgps
+sent config (116 bytes)
+   0.001 frame id=0x31 len=14 31 fe 00 00 46 15 ... 98 01
+frames: 1
+```
+
+`GPS_open: WMT turn on GPS OK!`, `STP speed rx:20 tx:493`. Значит транспорт и
+протокол на T1100 рабочие; в помещении после `0x31` идут только keepalive.
+Следующий тест — на улице/у окна, с `t1100-gps --seconds 60 --raw`, и отдельно
+LNA pinctrl (`get consys pinctrl fail`, pin -1).
+
 Клиент: `rootfs-overlay/usr/local/sbin/t1100-gps`
 (`--power-cycle`, `--seconds`, `--keepalive`, `--raw`).
