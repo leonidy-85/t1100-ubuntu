@@ -1,0 +1,12 @@
+[Unit]
+Description=T1100 internal MT6771 GPS (vendor HAL to NMEA socket)
+After=t1100-fake-logd.service local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/t1100-internal-gps
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
