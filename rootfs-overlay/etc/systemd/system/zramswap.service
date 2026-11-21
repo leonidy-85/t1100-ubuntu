@@ -1,0 +1,11 @@
+[Unit]
+Description=ZRAM swap (lzo-rle, 1.5G)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/zramswap-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

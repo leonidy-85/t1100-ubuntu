@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+if swapon --show=NAME --noheadings 2>/dev/null | grep -q "^/dev/zram0$"; then
+    exit 0
+fi
+modprobe zram
+zramctl /dev/zram0 --algorithm lzo-rle --size 1536M
+mkswap /dev/zram0 >/dev/null
+swapon -p 100 /dev/zram0

@@ -5794,3 +5794,9 @@ BTIF/STP-транспорт (включая исправленную поляр�
   скриншотом `grim`. Из root `show-full-ui` не работает — ищет
   `/run/user/0/wayland-0`.
 - p29 не менялся; детали — `docs/waydroid.md`.
+
+### 21.11 (1): zram-swap в rootfs-overlay
+
+- Причина зависания 21.11: после 23:21 Waydroid + phosh заняли память, swap был 0; OOM убивал `phosh-osk-stevi`, к 06:58 система деградировала (touch lag 473 ms), suspend не прошёл из-за `mtk_btif` -1. Kernel panic/oops нет.
+- На планшете включён zram: `/dev/zram0` 1,5 ГиБ, `lzo-rle`, prio 100; `zramswap.service` enabled/active.
+- В rootfs-overlay добавлены `usr/local/sbin/zramswap-setup`, `etc/systemd/system/zramswap.service` и symlink `multi-user.target.wants/zramswap.service`; после перепрошивки swap поднимется автоматически.
