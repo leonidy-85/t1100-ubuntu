@@ -1,18 +1,49 @@
 #!/bin/sh
-# Re-probe the WLAN function if wlan0 disappeared.
+# Re-probe the WLAN function if wlan0 disappeared or the firmware reset it.
 #
-# The MT6631 firmware can assert and trigger a "whole chip reset"; wlan_drv_gen3
-# then unregisters wlan0 and does not create a new netdev by itself.  A new
-# WMT_OPID_WLAN_PROBE (t1100-wifi-func-on) brings it back, so restart the
-# bring-up unit while the module is still loaded.
+# The MT6631 firmware can assert and trigger a "whole chip reset".  Depending
+# on timing, wlan_drv_gen3 either unregisters wlan0 (no new netdev is created)
+# or leaves the netdev in place with no carrier and a default MAC.  A new
+# WMT_OPID_WLAN_PROBE (t1100-wifi-func-on) brings the function back, so restart
+# the bring-up unit while the module is still loaded.
+#
+# The reset is detected through the driver message "wifi_reset_end(1) ignored";
+# a counter in /run makes sure each reset is handled exactly once.  The counter
+# is only advanced after a successful recovery, so a failed re-probe is retried
+# on the next timer tick.
 set -u
 
-[ -e /sys/class/net/wlan0 ] && exit 0
+STATE=/run/t1100-wifi-reset.count
+NETDEV=/sys/class/net/wlan0
 
-logger -t t1100-wifi-watch "wlan0 is missing, re-probing WLAN function"
+resets=$(dmesg 2>/dev/null | grep -c 'wifi_reset_end(1) ignored')
+last=$(cat "$STATE" 2>/dev/null || echo 0)
+case "$last" in
+    ''|*[!0-9]*) last=0 ;;
+esac
+
+if [ "$resets" -lt "$last" ]; then
+    # dmesg ring buffer wrapped; start counting from the current value
+    last=0
+fi
+
+if [ -e "$NETDEV" ] && [ "$resets" -le "$last" ]; then
+    exit 0
+fi
+
+if [ ! -e "$NETDEV" ]; then
+    why="wlan0 is missing"
+else
+    why="whole-chip reset seen ($last -> $resets)"
+fi
+
+logger -t t1100-wifi-watch "$why, re-probing WLAN function"
 systemctl restart t1100-wifi.service
 
-[ -e /sys/class/net/wlan0 ] || {
-    logger -t t1100-wifi-watch "wlan0 still missing after re-probe"
-    exit 1
-}
+if [ -e "$NETDEV" ]; then
+    printf '%s\n' "$resets" > "$STATE"
+    exit 0
+fi
+
+logger -t t1100-wifi-watch "wlan0 still missing after re-probe"
+exit 1
