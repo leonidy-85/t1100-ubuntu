@@ -104,3 +104,19 @@ LNA pinctrl (`get consys pinctrl fail`, pin -1).
 
 Клиент: `rootfs-overlay/usr/local/sbin/t1100-gps`
 (`--power-cycle`, `--seconds`, `--keepalive`, `--raw`).
+
+## 21.11: assert-петля CONSYS и порядок запуска
+
+При старте GPS одновременно с Wi-Fi (`23:31:00`) прошивка WMT ушла в
+assert через 11 с (`read HOST_AWAKE_EVT fail`), затем whole chip reset
+снял `wlan0`. Повторные `mnld`/`gps_hal_test` после этого открывали
+`/dev/stpgps`, но NMEA не шло: chip coredump → host trigger FW assert
+(`reason:2`) каждые ~6 с. После остановки GPS assert-ы прекратились.
+
+Вывод: CONSYS нельзя поднимать одновременно с Wi-Fi; сервис GPS получил
+`After=t1100-wifi.service` и `ExecStartPre=/bin/sleep 15`. После серии
+assert-ов нужен холодный power-cycle (тёплый ребут CONSYS не выключает).
+
+Дополнительно: `/dev/socket` живёт на devtmpfs и после ребута исчезает —
+`t1100-fake-logd` создаёт его сам, `t1100-internal-gps` — после bind-mount
+`/dev`; иначе `mnld` не стартует, а HAL остаётся без NMEA.

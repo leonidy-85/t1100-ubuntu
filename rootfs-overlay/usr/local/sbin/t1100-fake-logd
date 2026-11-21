@@ -5,6 +5,10 @@ import socket
 
 PATHS = ("/dev/socket/logdw", "/dev/socket/logd")
 
+# The vendor GPS HAL talks to logd through /dev/socket; after a reboot the
+# directory may not exist (it lives on the devtmpfs), so create it here.
+os.makedirs("/dev/socket", exist_ok=True)
+
 sockets = []
 for p in PATHS:
     try:

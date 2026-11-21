@@ -3,13 +3,25 @@
 set -u
 modprobe gps_drv
 
-mkdir -p /data/vendor/gps /data/vendor/log/gps /data/agps_supl
-mkdir -p /opt/bionic/data /opt/bionic/dev/socket
+# Drop a stray HAL client from a previous manual run; two clients fight over
+# mnld and make the GPS firmware assert.
+pkill -f '^/system/bin/gps_hal_test' 2>/dev/null || true
+
+mkdir -p /data/vendor/gps /data/vendor/log/gps /data/agps_supl /opt/bionic/data
 
 mountpoint -q /opt/bionic/dev || mount --bind /dev /opt/bionic/dev
 mountpoint -q /opt/bionic/proc || mount --bind /proc /opt/bionic/proc
 mountpoint -q /opt/bionic/sys || mount --bind /sys /opt/bionic/sys
 mountpoint -q /opt/bionic/data || mount --bind /data /opt/bionic/data
+
+# After the bind mount /dev is devtmpfs again, so recreate the Android
+# socket directory there (fake logd listens on /dev/socket/logd*).
+mkdir -p /dev/socket
+
+for _ in $(seq 1 25); do
+    [ -S /dev/socket/logdw ] && break
+    sleep 0.2
+done
 
 if ! pgrep -f '^/system/bin/mnld' >/dev/null 2>&1; then
     chroot /opt/bionic /system/bin/sh -c \

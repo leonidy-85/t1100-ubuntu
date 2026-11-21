@@ -1,0 +1,7 @@
+[Unit]
+Description=Recover T1100 wlan0 after a WMT whole-chip reset
+After=t1100-wifi.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/t1100-wifi-watch

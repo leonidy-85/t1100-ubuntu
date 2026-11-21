@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch that T1100 wlan0 still exists
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+Unit=t1100-wifi-recover.service
+
+[Install]
+WantedBy=timers.target

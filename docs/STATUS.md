@@ -1,6 +1,6 @@
 # STATUS — t1100-ubuntu
 
-Обновлено: 17.11.2026.
+Обновлено: 21.11.2026.
 
 ## Фаза
 
@@ -5800,3 +5800,23 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Причина зависания 21.11: после 23:21 Waydroid + phosh заняли память, swap был 0; OOM убивал `phosh-osk-stevi`, к 06:58 система деградировала (touch lag 473 ms), suspend не прошёл из-за `mtk_btif` -1. Kernel panic/oops нет.
 - На планшете включён zram: `/dev/zram0` 1,5 ГиБ, `lzo-rle`, prio 100; `zramswap.service` enabled/active.
 - В rootfs-overlay добавлены `usr/local/sbin/zramswap-setup`, `etc/systemd/system/zramswap.service` и symlink `multi-user.target.wants/zramswap.service`; после перепрошивки swap поднимется автоматически.
+
+### 21.11 (5): Wi-Fi переживает whole-chip reset, GPS-автозапуск исправлен
+
+- После ребута 23:31 пропал Wi-Fi: на 39.9 с WMT-прошивка ушла в assert
+  (`read HOST_AWAKE_EVT fail`, STP tx timeout), на 75 с — whole chip reset;
+  `wlan_drv_gen3` снял `wlan0` и сам netdev не создаёт. Причина гонки —
+  `t1100-internal-gps` и `t1100-wifi` стартовали в одну секунду.
+- Добавлен `t1100-wifi-recover.timer` (каждые 60 с) +
+  `usr/local/sbin/t1100-wifi-watch`: если `/sys/class/net/wlan0` нет,
+  перезапускается `t1100-wifi` (повторный `WMT_OPID_WLAN_PROBE` создаёт
+  netdev). Проверено трижды: `wlan0` и `192.168.2.77` возвращаются.
+- `t1100-fake-logd` теперь сам создаёт `/dev/socket` (после ребута его нет
+  на devtmpfs — сервис падал в рестарт-цикл, mnld не стартовал);
+  `t1100-internal-gps` создаёт каталог после bind-mount `/dev`, ждёт
+  `logdw`, убирает stray `gps_hal_test`. Сервис GPS стартует через 15 с
+  после Wi-Fi (`After=t1100-wifi.service`), а не одновременно с ним.
+- `t1100-nmea-socket-batch` пишет не-NMEA строки HAL в journal — теперь
+  видно, где застрял `gps_hal_test` (`A`…`F`, `started`).
+- Текущее: Wi-Fi на `.77` работает; GPS-сервис остановлен — после серии
+  assert-ов CONSYS нужен холодный power-cycle, затем проверка NMEA.

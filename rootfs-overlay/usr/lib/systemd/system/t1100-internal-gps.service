@@ -1,9 +1,12 @@
 [Unit]
 Description=T1100 internal MT6771 GPS (vendor HAL to NMEA socket)
-After=t1100-fake-logd.service local-fs.target
+After=t1100-fake-logd.service t1100-wifi.service local-fs.target
 
 [Service]
 Type=simple
+# CONSYS must be powered and stable before mnld opens the GPS function;
+# starting both at once lets the WMT firmware assert at boot.
+ExecStartPre=/bin/sleep 15
 ExecStart=/usr/local/sbin/t1100-internal-gps
 Restart=always
 RestartSec=5

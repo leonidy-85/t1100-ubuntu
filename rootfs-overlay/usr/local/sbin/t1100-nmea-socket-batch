@@ -62,6 +62,11 @@ def main():
                 m = NMEA.search(line)
                 if m:
                     pending.append(m.group(1).strip() + "\r\n")
+                else:
+                    # HAL diagnostics ("A".."F", "started", init errors) go to
+                    # the journal so a stuck GPS bring-up is visible.
+                    sys.stderr.write("hal: " + line)
+                    sys.stderr.flush()
                 continue
             try:
                 if not obj.recv(1):
