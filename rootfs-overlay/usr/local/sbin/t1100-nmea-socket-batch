@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Serve batched NMEA lines from stdin on a Unix socket for satellite(1)."""
+import os
+import re
+import select
+import socket
+import sys
+import time
+
+SOCK = "/run/t1100-nmea.sock"
+NMEA = re.compile(r"(\$[A-Z]{2}[A-Z]{3},.*)")
+
+
+def main():
+    try:
+        os.unlink(SOCK)
+    except FileNotFoundError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(SOCK)
+    os.chmod(SOCK, 0o666)
+    srv.listen(4)
+    clients = []
+    pending = []
+    last_flush = time.monotonic()
+
+    def drop(c):
+        if c in clients:
+            clients.remove(c)
+        try:
+            c.close()
+        except OSError:
+            pass
+
+    def flush():
+        nonlocal pending, last_flush
+        if not pending:
+            last_flush = time.monotonic()
+            return
+        data = "".join(pending).encode()
+        pending = []
+        last_flush = time.monotonic()
+        for c in list(clients):
+            try:
+                c.sendall(data)
+            except OSError:
+                drop(c)
+
+    while True:
+        rlist = [sys.stdin, srv] + clients
+        r, _, _ = select.select(rlist, [], [], 0.2)
+        for obj in r:
+            if obj is srv:
+                c, _ = srv.accept()
+                clients.append(c)
+                continue
+            if obj is sys.stdin:
+                line = sys.stdin.readline()
+                if not line:
+                    flush()
+                    return
+                m = NMEA.search(line)
+                if m:
+                    pending.append(m.group(1).strip() + "\r\n")
+                continue
+            try:
+                if not obj.recv(1):
+                    drop(obj)
+            except OSError:
+                drop(obj)
+        if pending and time.monotonic() - last_flush >= 0.8:
+            flush()
+
+
+if __name__ == "__main__":
+    main()
