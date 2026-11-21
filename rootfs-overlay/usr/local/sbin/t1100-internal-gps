@@ -52,6 +52,17 @@ for _ in $(seq 1 60); do
     fi
 done
 
+# mnld publishes its HAL socket (@mtk_hal2mnl) only after its own bring-up.
+# The vendor HAL does not retry, so wait for the socket before starting it.
+for _ in $(seq 1 120); do
+    if grep -q 'mtk_hal2mnl' /proc/net/unix; then
+        ready=1
+        break
+    fi
+    sleep 1
+done
+logger -t t1100-internal-gps "mnld HAL socket ready=${ready:-0}"
+
 chroot /opt/bionic /system/bin/sh -c \
     'export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; exec /system/bin/gps_hal_test' \
     | exec /usr/local/sbin/t1100-nmea-socket-batch

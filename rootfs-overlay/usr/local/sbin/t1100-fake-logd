@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
+"""Minimal fake logd for the vendor GPS HAL.
+
+Bionic's liblog writes logger records to /dev/socket/logdw.  On this vendor
+build the 12-byte header ends with the priority byte, followed by tag\\0 and
+message\\0 (the timestamp/pid fields do not match classic logger_entry, so we
+log the receive time instead).  We decode the records into a plain-text file
+so mnld/HAL diagnostics are visible on ALT (no real logd here).
+"""
 import os
 import select
 import socket
+import time
 
 PATHS = ("/dev/socket/logdw", "/dev/socket/logd")
+LOG = os.environ.get("T1100_LOGD_FILE", "/run/t1100-logd.log")
+MAX_SIZE = 1 << 20
 
 # The vendor GPS HAL talks to logd through /dev/socket; after a reboot the
 # directory may not exist (it lives on the devtmpfs), so create it here.
@@ -20,10 +31,29 @@ for p in PATHS:
     os.chmod(p, 0o666)
     sockets.append(s)
 
+
+def dump(data):
+    if len(data) <= 12:
+        return
+    prio = data[11] & 7
+    tag, _, text = data[12:].partition(b"\0")
+    line = "%s %s/%d: %s\n" % (
+        time.strftime("%H:%M:%S"),
+        tag.decode(errors="replace"), prio,
+        text.split(b"\0", 1)[0].decode(errors="replace"))
+    try:
+        if os.path.getsize(LOG) > MAX_SIZE:
+            os.replace(LOG, LOG + ".1")
+    except OSError:
+        pass
+    with open(LOG, "a") as f:
+        f.write(line)
+
+
 while True:
     ready, _, _ = select.select(sockets, [], [], 5)
     for s in ready:
         try:
-            s.recv(8192)
+            dump(s.recv(8192))
         except OSError:
             pass
