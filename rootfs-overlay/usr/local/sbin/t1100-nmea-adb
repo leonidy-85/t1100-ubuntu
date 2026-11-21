@@ -1,0 +1,18 @@
+#!/bin/sh
+# Connect to the Android tablet and stream its NMEA into the Unix socket.
+set -u
+ADB=/bin/adb
+TARGET=192.168.2.100:41147
+
+i=0
+while [ "$i" -lt 30 ]; do
+    "$ADB" connect "$TARGET" >/dev/null 2>&1 || true
+    if "$ADB" -s "$TARGET" get-state 2>/dev/null | grep -q '^device$'; then
+        break
+    fi
+    i=$((i + 1))
+    sleep 2
+done
+
+"$ADB" -s "$TARGET" logcat -s GpsOutputNmea:D 2>/dev/null \
+    | exec /usr/local/sbin/t1100-nmea-socket-batch
