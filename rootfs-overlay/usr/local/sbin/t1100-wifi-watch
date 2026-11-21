@@ -8,7 +8,6 @@
 set -u
 
 [ -e /sys/class/net/wlan0 ] && exit 0
-systemctl is-active --quiet t1100-wifi.service || exit 0
 
 logger -t t1100-wifi-watch "wlan0 is missing, re-probing WLAN function"
 systemctl restart t1100-wifi.service
