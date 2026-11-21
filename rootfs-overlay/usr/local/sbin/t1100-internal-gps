@@ -23,12 +23,34 @@ for _ in $(seq 1 25); do
     sleep 0.2
 done
 
-if ! pgrep -f '^/system/bin/mnld' >/dev/null 2>&1; then
+start_mnld() {
+    pgrep -f '^/system/bin/mnld' >/dev/null 2>&1 && return 0
     chroot /opt/bionic /system/bin/sh -c \
         'export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; exec /system/bin/mnld' \
-        >/tmp/mnld-internal.log 2>&1 &
-    sleep 2
-fi
+        >>/tmp/mnld-internal.log 2>&1 &
+}
+
+start_mnld
+
+# mnld can exit while CONSYS is still powering up after a cold boot; keep a
+# supervisor so one early exit does not leave the HAL hanging forever.
+(
+    while :; do
+        start_mnld
+        sleep 5
+    done
+) &
+
+# Wait until mnld survives a few seconds before starting the HAL.
+for _ in $(seq 1 60); do
+    if pgrep -f '^/system/bin/mnld' >/dev/null 2>&1; then
+        pid=$(pgrep -f '^/system/bin/mnld' | head -n 1)
+        sleep 3
+        [ "$pid" = "$(pgrep -f '^/system/bin/mnld' | head -n 1)" ] && break
+    else
+        sleep 1
+    fi
+done
 
 chroot /opt/bionic /system/bin/sh -c \
     'export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; exec /system/bin/gps_hal_test' \
