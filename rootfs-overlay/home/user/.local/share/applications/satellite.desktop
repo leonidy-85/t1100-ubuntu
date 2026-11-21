@@ -1,7 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Satellite
+GenericName=Navigation satellite information
 Comment=Display data from the internal T1100 GPS
 Exec=/usr/local/sbin/t1100-satellite-socket
+Icon=page.codeberg.tpikonen.satellite
 Terminal=false
 Categories=Utility;Science;
+StartupWMClass=satellite
+X-Purism-FormFactor=Workstation;Mobile;
