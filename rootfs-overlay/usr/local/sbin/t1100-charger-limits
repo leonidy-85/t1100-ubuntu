@@ -1,0 +1,16 @@
+#!/bin/sh
+# T1100: the mt6370 charger defaults to a 500 mA input limit, which makes
+# charging look broken.  Apply the known-good 1.5 A limits after boot.
+set -eu
+
+CHG=/sys/class/power_supply/mt6370-charger
+
+i=0
+while [ ! -w "$CHG/input_current_limit" ]; do
+    i=$((i + 1))
+    [ "$i" -ge 30 ] && exit 0
+    sleep 1
+done
+
+echo 1500000 > "$CHG/input_current_limit"
+echo 1500000 > "$CHG/constant_charge_current"
