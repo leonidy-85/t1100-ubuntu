@@ -1,9 +1,16 @@
 #!/bin/sh
 set -e
-if swapon --show=NAME --noheadings 2>/dev/null | grep -q "^/dev/zram0$"; then
+if swapon --show=NAME --noheadings 2>/dev/null | grep -q '^/dev/zram'; then
     exit 0
 fi
 modprobe zram
-zramctl /dev/zram0 --algorithm lzo-rle --size 1536M
-mkswap /dev/zram0 >/dev/null
-swapon -p 100 /dev/zram0
+# zram0 may already exist from the module's default num_devices=1 and
+# refuse a direct reset while it is in an intermediate state.  Let
+# zramctl pick the device and configure it from scratch instead.
+if [ -e /dev/zram0 ] && [ "$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)" = "0" ]; then
+    zramctl --reset /dev/zram0 2>/dev/null || true
+fi
+DEV="$(zramctl --find --size 1536M --algorithm lzo-rle)"
+[ -n "$DEV" ] || exit 1
+mkswap "$DEV" >/dev/null
+swapon -p 100 "$DEV"
