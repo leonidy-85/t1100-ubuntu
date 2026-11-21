@@ -1,0 +1,13 @@
+[Unit]
+Description=T1100 Android NMEA bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/t1100-nmea-adb
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
