@@ -1,0 +1,11 @@
+[Unit]
+Description=T1100 charger current limits
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/t1100-charger-limits
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
