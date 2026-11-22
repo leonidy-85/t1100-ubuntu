@@ -5838,3 +5838,23 @@ BTIF/STP-транспорт (включая исправленную поляр�
   (в стоке `-1`, выставляет `wmt_launcher` → `0x788`). В bionic-chroot
   property-сервиса нет, `property_get()` пуст — возможен generic-образ
   (`libmnl` offset `0x1680fc`) вместо `MT6771_DSP_0064_B183/C189`.
+
+### 22.11 (3): GPS — полный поток mnld снят pty-релеем, измерений нет
+
+- `tools/device/gps-capture.py`: pty-пара + raw-режим, symlink
+  `/dev/stpgps` → `/dev/pts/N`; FIFO-метод был неверен (общая очередь
+  при `O_RDWR` с двух сторон). Нужны `--start-mnld --start-hal`.
+- Полный поток mnld: 39 721 Б, 30 кадров (config `0x08` seq 26 →
+  28 фрагментов DSP `0x0C` seq 1..28 → keepalive `0x05` seq 50).
+  Чип: `0x31` + 28 ACK `0x32`; ACK-поле = seq + `0x136`.
+- Границы кадров — по `AA 0F AA F0`; поле len у `0x0C` всегда 1406 и
+  не соответствует длине кадра. Стаффинг: `DE E0`→`DE`, `DE DF`→`AA`.
+  Тело = 1400-Б запись `libmnl.so` по offset `1474812 + (seq-1)*1400`.
+- Replay точным потоком: 29 кадров, все ACK, **0 измерений и NMEA**
+  за 45–120 с. Причина не в последовательности MNL.
+- Драйвер: `t1100_trace`, чистая трасса WRITE/READ, ioctl 6 включён;
+  `chip_detector` использует свойство `persist.vendor.connsys.chipid`,
+  не ioctl. `vendor.service.nvram_init` в Ubuntu нет (`err = 2`).
+- Дальше: DTS pinctrl GPS LNA (GPIO155), property-шим (chipid `0x788`,
+  nvram Ready), проверка DSP boot по `fw_log_gps`. Подробности —
+  `docs/gps-handoff.md`.

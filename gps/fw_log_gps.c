@@ -34,6 +34,7 @@
 #include <asm/memblock.h>
 #endif
 #include <linux/wait.h>
+#include <linux/poll.h>
 #include "gps.h"
 #include "connsys_debug_utility.h"
 #ifdef pr_fmt
@@ -190,7 +191,7 @@ static int __init gps_fw_log_init(void)
 		pr_err("cdev_add fail: %d\n", err);
 		goto err_out;
 	}
-	logdevobj->cls = class_create(THIS_MODULE, "gpsfwlog");
+	logdevobj->cls = class_create("gpsfwlog");
 	if (IS_ERR(logdevobj->cls)) {
 		pr_err("Unable to create class, err = %d\n", (int)PTR_ERR(logdevobj->cls));
 	goto err_out;

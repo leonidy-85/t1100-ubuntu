@@ -71,6 +71,7 @@ typedef VOID (*PF_WMT_CB)(ENUM_WMTDRV_TYPE_T src, ENUM_WMTDRV_TYPE_T dst,
 extern MTK_WCN_BOOL mtk_wcn_wmt_func_on(ENUM_WMTDRV_TYPE_T type);
 extern MTK_WCN_BOOL mtk_wcn_wmt_func_off(ENUM_WMTDRV_TYPE_T type);
 extern UINT32 mtk_wcn_wmt_ic_info_get(ENUM_WMT_CHIPINFO_TYPE_T type);
+extern ENUM_WMTHWVER_TYPE_T mtk_wcn_wmt_hwver_get(VOID);
 extern UINT32 mtk_wcn_wmt_chipid_query(VOID);
 extern INT32 mtk_wcn_wmt_msgcb_reg(ENUM_WMTDRV_TYPE_T type, PF_WMT_CB cb);
 extern INT32 mtk_wcn_wmt_msgcb_unreg(ENUM_WMTDRV_TYPE_T type);

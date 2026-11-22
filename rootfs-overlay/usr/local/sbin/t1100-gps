@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 """t1100-gps — minimal MediaTek GNSS client for the mainline gps_drv.
 
-Talks the MNL framing captured from the vendor mnld on AYYA T1:
+Talks the MNL framing captured from the vendor mnld:
 
     aa f0 <len le16> <payload> aa 0f
 
 Payload[0] is the message id:
 
     0x08  config request (110 bytes, sent on every fresh GPS power-on)
-    0x05  keepalive (4 bytes: 05 fe 04 00 0d 01)
+    0x05  keepalive
+    0x0c  one fragment of the GNSS DSP image: 28 fragments covering a
+          1400-byte record area in libmnl.so .rodata (file offset
+          1474812); the chip acks every fragment with 0x32
     0x31  chip status/version, answers 0x08
     0x32  chip ack (seq in payload[2..3])
-    0x0c  vendor assistance data (EPO), not used here
+
+The wire stream is not plain framed payloads: the length field of 0x0c
+frames stays 1406 while the frame is longer, and bytes are stuffed
+(DE E0 -> DE, DE DF -> AA).  A captured mnld stream therefore has to be
+replayed verbatim, splitting at the AA 0F AA F0 pairs:
+
+    /usr/local/sbin/t1100-gps --replay /root/gpscap-real2.mnld.bin
 
 Opening /dev/stpgps powers the GNSS domain on through WMT; the chip only
 answers the config frame on a fresh power-on, so run the WMT func-off first:
@@ -33,13 +42,13 @@ WMT_GPS_ON = 0xBEEF0002
 WMT_GPS_OFF = 0xDEAD0002
 
 CONFIG = bytes.fromhex(
-    "08 fe 1a 00 00 00 00 00 c3 01 a5 02 00 00 00 00 00 78 00 80 04 80 7b 00 "
-    "31 00 00 00 00 00 05 00 9d 00 6f 3c 88 89 a2 04 00 00 dc 00 c1 00 28 00 "
-    "5c 4a 1e 00 c5 37 28 00 5c 4a 8f 65 07 00 01 00 28 00 ff 00 80 00 47 00 "
+    "08 fe 1a 00 00 00 00 00 c3 01 a5 02 00 00 00 00 8c 4c 00 80 04 80 00 00 "
+    "1c 00 00 00 00 00 05 00 9d 00 6f 3c 88 89 a2 04 00 00 dc 00 c1 00 28 00 "
+    "5c 4a 1e 00 c5 37 28 00 5c 4a 8f 65 03 00 00 00 28 00 ff 00 80 00 47 00 "
     "64 00 50 00 d8 00 50 00 bb 00 03 00 3c 00 6f 00 89 00 88 00 02 00 fb 00 "
-    "01 00 00 00 00 08 00 00 01 00 4e 4f 5c 15"
+    "01 00 00 00 48 49 00 00 01 00 4e 4f b0 15"
 )
-KEEPALIVE = bytes.fromhex("05 fe 04 00 0d 01")
+KEEPALIVE = bytes.fromhex("05 fe 32 00 00 01 00 3f 01")
 
 
 def frame(payload):
@@ -79,12 +88,39 @@ def parse(buf):
     return out, buf[i:]
 
 
+def split_stream(data):
+    """Split a captured mnld stream into raw wire frames.
+
+    The length field cannot be trusted for 0x0c fragments (it stays 1406)
+    and the payload is byte-stuffed, so use the AA 0F AA F0 pairs as the
+    only frame boundary.
+    """
+    if not data.startswith(b"\xaa\xf0"):
+        raise ValueError("stream does not start with aa f0")
+    parts = data.split(b"\xaa\x0f\xaa\xf0")
+    frames = []
+    for i, p in enumerate(parts):
+        fr = p
+        if i:
+            fr = b"\xaa\xf0" + fr
+        if i < len(parts) - 1:
+            fr += b"\xaa\x0f"
+        frames.append(fr)
+    if not frames[-1].endswith(b"\xaa\x0f"):
+        raise ValueError("stream does not end with aa 0f")
+    return frames
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--power-cycle", action="store_true", help="WMT func-off GPS before opening")
     ap.add_argument("--seconds", type=int, default=120)
     ap.add_argument("--keepalive", type=float, default=1.0)
     ap.add_argument("--raw", action="store_true", help="hexdump every frame")
+    ap.add_argument("--replay", metavar="FILE",
+                    help="send a captured mnld stream verbatim instead of CONFIG")
+    ap.add_argument("--replay-pause", type=float, default=0.05,
+                    help="pause between replayed frames, seconds")
     args = ap.parse_args()
 
     if args.power_cycle:
@@ -94,12 +130,24 @@ def main():
     fd = os.open(DEV, os.O_RDWR | os.O_NONBLOCK)
     print("opened", DEV)
     time.sleep(2.0)
-    os.write(fd, frame(CONFIG))
-    print("sent config (%d bytes)" % (len(CONFIG) + 6))
+    if args.replay:
+        with open(args.replay, "rb") as f:
+            stream = f.read()
+        out = split_stream(stream)
+        print("replay %s: %d frames, %d bytes" % (args.replay, len(out), len(stream)))
+        for fr in out:
+            os.write(fd, fr)
+            if args.replay_pause:
+                time.sleep(args.replay_pause)
+        print("replay done")
+    else:
+        os.write(fd, frame(CONFIG))
+        print("sent config (%d bytes)" % (len(CONFIG) + 6))
 
     start = time.time()
     next_ka = start + args.keepalive
     buf = b""
+    text = b""
     frames = 0
 
     while time.time() - start < args.seconds:
@@ -120,6 +168,12 @@ def main():
             break
         if not chunk:
             continue
+        text += chunk
+        while b"\n" in text:
+            line, text = text.split(b"\n", 1)
+            line = line.strip()
+            if line.startswith(b"$"):
+                print(line.decode("ascii", "replace"), flush=True)
         buf += chunk
         got, buf = parse(buf)
         for f in got:

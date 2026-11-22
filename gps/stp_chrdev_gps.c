@@ -49,6 +49,30 @@ MODULE_LICENSE("GPL");
 #define GPS_DEBUG_TRACE_GPIO         0
 #define GPS_DEBUG_DUMP               0
 
+/*
+ * T1100 diagnostic: dump every STP transfer of the GPS channel (direction,
+ * length, first bytes). Off by default; enable with gps_drv.t1100_trace=1.
+ * Needed because the chip is otherwise silent and a "frame" seen by
+ * userspace may be generated locally by STP, not by the GNSS core.
+ */
+static int t1100_trace;
+module_param(t1100_trace, int, 0644);
+MODULE_PARM_DESC(t1100_trace, "T1100: dump GPS STP transfers (dir/len/head)");
+
+static void t1100_trace_dump(const char *tag, const unsigned char *p, int n)
+{
+	char line[3 * 16 + 1];
+	int i, lim;
+
+	if (!t1100_trace)
+		return;
+	lim = (n < 16) ? n : 16;
+	for (i = 0; i < lim; i++)
+		snprintf(line + i * 3, 4, "%02x ", p[i]);
+	line[lim * 3] = '\0';
+	pr_info("[GPS] %s len=%d %s%s\n", tag, n, line, n > lim ? "..." : "");
+}
+
 #define PFX                         "[GPS] "
 #define GPS_LOG_DBG                  3
 #define GPS_LOG_INFO                 2
@@ -238,6 +262,7 @@ ssize_t GPS_write(struct file *filp, const char __user *buf, size_t count, loff_
 			goto out;
 		}
 		/* pr_warn("%02x ", val); */
+		t1100_trace_dump("WRITE", &o_buf[0], copy_size);
 #if GPS_DEBUG_TRACE_GPIO
 		mtk_wcn_stp_debug_gpio_assert(IDX_GPS_TX, DBG_TIE_LOW);
 #endif
@@ -355,6 +380,7 @@ ssize_t GPS_read(struct file *filp, char __user *buf, size_t count, loff_t *f_po
 
 	if (retval > 0) {
 		/* we got something from STP driver */
+		t1100_trace_dump("READ", i_buf, retval);
 		if (copy_to_user(buf, i_buf, retval)) {
 			retval = -EFAULT;
 			goto OUT;
@@ -711,14 +737,13 @@ static int GPS_listen_wmt_rst(void)
 long GPS_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int retval = 0;
-	#if 0
 	ENUM_WMTHWVER_TYPE_T hw_ver_sym = WMTHWVER_INVALID;
-	#endif
 	UINT32 hw_version = 0;
 	UINT32 fw_version = 0;
 	UINT32 gps_lna_pin = 0;
 
-	pr_warn("GPS_ioctl(): cmd (%d)\n", cmd);
+	if (t1100_trace)
+		pr_info("GPS_ioctl(): cmd (%d)\n", cmd);
 
 	switch (cmd) {
 	case 0:		/* enable/disable STP */
@@ -736,7 +761,6 @@ long GPS_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		retval = -EINVAL;
 		break;
 
-	#if 0
 	case COMBO_IOC_GPS_HWVER:
 		/*get combo hw version */
 		hw_ver_sym = mtk_wcn_wmt_hwver_get();
@@ -747,7 +771,7 @@ long GPS_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			retval = -EFAULT;
 
 		break;
-	#endif
+
 	case COMBO_IOC_GPS_IC_HW_VERSION:
 		/*get combo hw version from ic,  without wmt mapping */
 		hw_version = mtk_wcn_wmt_ic_info_get(WMTCHIN_HWVER);
@@ -887,12 +911,7 @@ long GPS_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 long GPS_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	long ret;
-
-	pr_warn("%s: cmd (%d)\n", __func__, cmd);
-	ret = GPS_unlocked_ioctl(filp, cmd, arg);
-	pr_warn("%s: cmd (%d)\n", __func__, cmd);
-	return ret;
+	return GPS_unlocked_ioctl(filp, cmd, arg);
 }
 
 static void gps_cdev_rst_cb(ENUM_WMTDRV_TYPE_T src,

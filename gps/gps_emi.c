@@ -22,13 +22,14 @@
 #include <linux/fs.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
+#include <linux/of.h>
 #include <linux/cdev.h>
 #include <linux/errno.h>
 #include <linux/io.h>
 #include <linux/uaccess.h>
 #include <linux/printk.h>
 #include <linux/version.h>
-#include <asm/memblock.h>
+/* 6.12: no asm/memblock.h; the memblock_steal code below is #if 0 */
 #include "gps.h"
 
 #ifdef pr_fmt
@@ -110,6 +111,17 @@
 #endif
 #endif
 
+/* T1100 (MT6771): out-of-tree build without CONFIG_MACH_MT6771 and without
+ * the vendor <mt_emi_api.h>.  The CONNSYS reserved-memory block is 2 MiB and
+ * the vendor layout gives GPS its second MiB.  LK already configured the EMI
+ * MPU for the CONNSYS window, so do not program it from the AP side here. */
+#ifndef EMI_MPU_PROTECTION_IS_READY
+#define GPS_EMI_MPU_REGION           30
+#define GPS_EMI_BASE_ADDR_OFFSET     (SZ_1M)
+#define GPS_EMI_MPU_SIZE             (SZ_1M)
+#define EMI_MPU_PROTECTION_IS_READY  0
+#endif
+
 #define GPS_ADC_CAPTURE_BUFF_SIZE   0x50000
 /******************************************************************************
  * Debug configuration
@@ -142,21 +154,21 @@ static struct semaphore fw_dl_mtx;
 
 void mtk_wcn_consys_gps_memory_reserve(void)
 {
-#if 0
-#ifdef MTK_WCN_ARM64
-	gGpsEmiPhyBase = arm64_memblock_steal(SZ_1M, SZ_1M);
-#else
-	gGpsEmiPhyBase = arm_memblock_steal(SZ_1M, SZ_1M);
-#endif
-#else
-	#if EMI_MPU_PROTECTION_IS_READY
-	gGpsEmiPhyBase = gConEmiPhyBase + GPS_EMI_BASE_ADDR_OFFSET;
-	#endif
-#endif
 	if (gGpsEmiPhyBase)
-		GPS_DBG("Con:0x%zx, Gps:0x%zx\n", (size_t)gConEmiPhyBase, (size_t)gGpsEmiPhyBase);
+		return;
+
+	/* T1100: take the GPS window from the CONNSYS reserved-memory block
+	 * (2 MiB) owned by wmt_drv; the vendor layout puts GPS at +1 MiB. */
+	if (gConEmiPhyBase)
+		gGpsEmiPhyBase = gConEmiPhyBase + GPS_EMI_BASE_ADDR_OFFSET;
+
+	if (gGpsEmiPhyBase)
+		GPS_DBG("Con:0x%zx, Gps:0x%zx (size 0x%zx)\n",
+			(size_t)gConEmiPhyBase, (size_t)gGpsEmiPhyBase,
+			(size_t)GPS_EMI_MPU_SIZE);
 	else
-		GPS_DBG("memblock fail\n");
+		GPS_DBG("gps emi base invalid (gConEmiPhyBase=0x%zx)\n",
+			(size_t)gConEmiPhyBase);
 }
 
 INT32 gps_emi_mpu_set_region_protection(INT32 region)
@@ -246,10 +258,13 @@ INT32 mtk_wcn_consys_gps_emi_init(void)
 		GPS_DBG("GPS_EMI_MAPPING dump(0x%08x)\n",
 			CONSYS_REG_READ(conn_reg.topckgen_base + CONSYS_EMI_MAPPING_OFFSET));
 		#endif
-		#if EMI_MPU_PROTECTION_IS_READY
-		pGpsEmibaseaddr = ioremap_nocache(gGpsEmiPhyBase, GPS_EMI_MPU_SIZE);
-		#endif
-		iRet = 1;
+		pGpsEmibaseaddr = ioremap(gGpsEmiPhyBase, GPS_EMI_MPU_SIZE);
+		if (!pGpsEmibaseaddr) {
+			GPS_ERR("EMI mapping fail\n");
+			iRet = -1;
+		} else {
+			iRet = 1;
+		}
 		#if 0
 		if (pGpsEmibaseaddr != NULL) {
 			unsigned char *pFullPatchName = "MNL.bin";
@@ -322,8 +337,8 @@ long gps_emi_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long a
 
 	case IOCTL_ADC_CAPTURE_ADDR_GET:
 		tmp = (unsigned int *)&gGpsEmiPhyBase;
-		GPS_DBG("gps_emi:gGpsEmiPhyBase (%x)\n", &gGpsEmiPhyBase);
-		GPS_DBG("gps_emi:tmp  (%x)\n", tmp);
+		GPS_DBG("gps_emi:gGpsEmiPhyBase (0x%llx)\n",
+			(unsigned long long)gGpsEmiPhyBase);
 		if (copy_to_user((unsigned int __user *)arg, tmp, sizeof(unsigned int)))
 			retval = -1;
 		GPS_DBG("IOCTL_ADC_CAPTURE_ADDR_GET,(%d)\n", retval);
@@ -442,7 +457,7 @@ static int __init gps_emi_mod_init(void)
 		GPS_ERR("cdev_add fail: %d\n", err);
 		goto err_out;
 	}
-	devobj->cls = class_create(THIS_MODULE, "gpsemi");
+	devobj->cls = class_create("gpsemi");
 	if (IS_ERR(devobj->cls)) {
 		GPS_ERR("Unable to create class, err = %d\n", (int)PTR_ERR(devobj->cls));
 	goto err_out;
