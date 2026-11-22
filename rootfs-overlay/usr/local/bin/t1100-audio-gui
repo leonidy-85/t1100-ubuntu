@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""T1100 audio output: speaker or headphones (MT6358 mixer)."""
+
+import subprocess
+import sys
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, GLib, Gtk  # noqa: E402
+
+CARD = "0"
+HP_VOLUME_NUMID = "78"
+HP_VOLUME_DEFAULT = 12
+
+
+def amixer(*args):
+    try:
+        return subprocess.run(["amixer", "-c", CARD, *args],
+                              capture_output=True, text=True,
+                              timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def current_route():
+    out = amixer("cget", "name=HPL Mux")
+    if "values=2" in out:
+        return "hp"
+    if "values=1" in out:
+        return "spk"
+    return "?"
+
+
+def hp_volume():
+    out = amixer("cget", "numid=" + HP_VOLUME_NUMID)
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith(": values="):
+            try:
+                return int(line.split("=", 1)[1].split(",")[0])
+            except ValueError:
+                return HP_VOLUME_DEFAULT
+    return HP_VOLUME_DEFAULT
+
+
+def set_route(route):
+    if route == "hp":
+        amixer("cset", "name=HPL Mux", "2")
+        amixer("cset", "name=HPR Mux", "2")
+        amixer("cset", "name=Speaker Switch", "off")
+        if hp_volume() <= 0:
+            amixer("cset", "numid=" + HP_VOLUME_NUMID, str(HP_VOLUME_DEFAULT))
+    else:
+        amixer("cset", "name=Speaker Switch", "on")
+        amixer("cset", "name=HPL Mux", "1")
+        amixer("cset", "name=HPR Mux", "1")
+
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Аудиовыход")
+        self.set_default_size(420, 480)
+        self._updating = False
+
+        self.toasts = Adw.ToastOverlay()
+        view = Adw.ToolbarView()
+        self.toasts.set_child(view)
+        self.set_content(self.toasts)
+
+        header = Adw.HeaderBar()
+        refresh = Gtk.Button(icon_name="view-refresh-symbolic",
+                             tooltip_text="Обновить")
+        refresh.connect("clicked", lambda *_: self.refresh())
+        header.pack_end(refresh)
+        view.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        view.set_content(page)
+
+        route_group = Adw.PreferencesGroup(title="Куда выводить звук")
+        page.add(route_group)
+
+        self.spk_row = Adw.ActionRow(
+            title="Динамик", subtitle="Встроенный динамик")
+        self.spk_check = Gtk.Image(icon_name="object-select-symbolic")
+        self.spk_row.add_suffix(self.spk_check)
+        self.spk_row.set_activatable(True)
+        self.spk_row.connect("activated", lambda *_: self.apply("spk"))
+        route_group.add(self.spk_row)
+
+        self.hp_row = Adw.ActionRow(
+            title="Наушники", subtitle="Разъём 3.5 мм")
+        self.hp_check = Gtk.Image(icon_name="object-select-symbolic")
+        self.hp_row.add_suffix(self.hp_check)
+        self.hp_row.set_activatable(True)
+        self.hp_row.connect("activated", lambda *_: self.apply("hp"))
+        route_group.add(self.hp_row)
+
+        state_group = Adw.PreferencesGroup(title="Состояние")
+        page.add(state_group)
+        self.now_row = Adw.ActionRow(title="Текущий выход")
+        state_group.add(self.now_row)
+
+        volume_group = Adw.PreferencesGroup(title="Громкость наушников")
+        page.add(volume_group)
+        self.volume_row = Adw.ActionRow(title="Уровень")
+        self.scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,
+                                              0, 18, 1)
+        self.scale.set_size_request(220, -1)
+        self.scale.set_draw_value(True)
+        self.scale.set_value_pos(Gtk.PositionType.RIGHT)
+        self.scale.connect("value-changed", self.on_volume)
+        self.volume_row.add_suffix(self.scale)
+        volume_group.add(self.volume_row)
+
+        self.refresh()
+        GLib.timeout_add_seconds(2, self.refresh)
+
+    def toast(self, text):
+        self.toasts.add_toast(Adw.Toast.new(text))
+
+    def apply(self, route):
+        set_route(route)
+        self.toast("Динамик" if route == "spk" else "Наушники")
+        self.refresh()
+
+    def on_volume(self, scale):
+        if self._updating:
+            return
+        value = int(scale.get_value())
+        amixer("cset", "numid=" + HP_VOLUME_NUMID, str(value))
+
+    def refresh(self):
+        route = current_route()
+        self._updating = True
+        self.spk_check.set_visible(route == "spk")
+        self.hp_check.set_visible(route == "hp")
+        self.now_row.set_subtitle(
+            {"spk": "динамик", "hp": "наушники"}.get(route, "неизвестно"))
+        volume = max(0, min(18, hp_volume()))
+        if not self.scale.is_focus():
+            self.scale.set_value(volume)
+        self._updating = False
+        return GLib.SOURCE_CONTINUE
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="org.t1100.AudioOut")
+
+    def do_activate(self):
+        win = self.props.active_window
+        if not win:
+            win = Window(self)
+        win.present()
+
+
+if __name__ == "__main__":
+    sys.exit(App().run(sys.argv))

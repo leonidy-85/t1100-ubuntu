@@ -227,6 +227,7 @@ def daemon():
 
     notify_until = 0.0
     blink_on = False
+    lit = False
     next_toggle = 0.0
     last_poll = 0.0
     powered = None
@@ -246,6 +247,7 @@ def daemon():
             elif cmd and cmd[0] == "off":
                 notify_until = 0.0
                 led.off()
+                lit = False
                 powered = None
 
         if watcher and "notify" in watcher.poll():
@@ -266,15 +268,22 @@ def daemon():
                 blink_on = not blink_on
                 if blink_on:
                     led.on(notify_ch, notify_dim)
+                    lit = True
                 else:
                     led.off()
+                    lit = False
                 next_toggle = now + blink
         else:
             if blink_on:
                 blink_on = False
                 led.off()
-            if powered:
+                lit = False
+            if powered and not lit:
                 led.on(charge_ch, charge_dim)
+                lit = True
+            elif not powered and lit:
+                led.off()
+                lit = False
 
 
 def client(cmd):
