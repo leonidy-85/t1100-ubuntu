@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""T1100 USB-C port control: peripheral (RNDIS) or host (OTG)."""
+
+import glob
+import os
+import subprocess
+import sys
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, GLib, Gtk  # noqa: E402
+
+ROLE = "/sys/class/usb_role/11201000.usb-role-switch/role"
+CHARGER = "/sys/class/power_supply/mt6370-charger/online"
+OTG_VBUS = "mt6370-usb-otg-vbus"
+
+
+def read(path, default=""):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def read_vbus():
+    for d in glob.glob("/sys/class/regulator/*"):
+        if read(os.path.join(d, "name")) != OTG_VBUS:
+            continue
+        uv = read(os.path.join(d, "microvolts"), "0")
+        state = read(os.path.join(d, "state"), "unknown")
+        try:
+            return "%s, %.2f В" % (state, int(uv) / 1e6)
+        except ValueError:
+            return state
+    return "нет данных"
+
+
+def list_usb():
+    try:
+        out = subprocess.run(["lsusb"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+class Window(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="USB-порт")
+        self.set_default_size(420, 560)
+        self._updating = False
+
+        self.toasts = Adw.ToastOverlay()
+        view = Adw.ToolbarView()
+        self.toasts.set_child(view)
+        self.set_content(self.toasts)
+
+        header = Adw.HeaderBar()
+        refresh = Gtk.Button(icon_name="view-refresh-symbolic",
+                             tooltip_text="Обновить")
+        refresh.connect("clicked", lambda *_: self.refresh())
+        header.pack_end(refresh)
+        view.add_top_bar(header)
+
+        page = Adw.PreferencesPage()
+        view.set_content(page)
+
+        mode_group = Adw.PreferencesGroup(title="Режим порта")
+        page.add(mode_group)
+        self.mode_row = Adw.ActionRow(
+            title="USB host (OTG)",
+            subtitle="Питание 5 В на порт, внешние устройства")
+        self.switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.switch.connect("notify::active", self.on_switch)
+        self.mode_row.add_suffix(self.switch)
+        self.mode_row.set_activatable_widget(self.switch)
+        mode_group.add(self.mode_row)
+
+        state_group = Adw.PreferencesGroup(title="Состояние")
+        page.add(state_group)
+        self.role_row = Adw.ActionRow(title="Роль")
+        self.charge_row = Adw.ActionRow(title="Зарядка")
+        self.vbus_row = Adw.ActionRow(title="VBUS")
+        for row in (self.role_row, self.charge_row, self.vbus_row):
+            state_group.add(row)
+
+        self.dev_group = Adw.PreferencesGroup(title="USB-устройства")
+        page.add(self.dev_group)
+        self.dev_rows = []
+
+        self.refresh()
+        GLib.timeout_add_seconds(2, self.refresh)
+
+    def toast(self, text):
+        self.toasts.add_toast(Adw.Toast.new(text))
+
+    def refresh(self):
+        role = read(ROLE, "?")
+        charging = read(CHARGER) == "1"
+        self._updating = True
+        self.switch.set_active(role == "host")
+        self._updating = False
+        self.role_row.set_subtitle("host (OTG)" if role == "host"
+                                   else "peripheral (RNDIS)")
+        self.charge_row.set_subtitle("подключена" if charging else "нет")
+        self.vbus_row.set_subtitle(read_vbus())
+
+        self.switch.set_sensitive(not charging)
+        if charging:
+            self.mode_row.set_subtitle(
+                "Отключите зарядку, чтобы включить host")
+        else:
+            self.mode_row.set_subtitle(
+                "Питание 5 В на порт, внешние устройства")
+
+        for row in self.dev_rows:
+            self.dev_group.remove(row)
+        self.dev_rows = []
+        devices = list_usb()
+        if not devices:
+            row = Adw.ActionRow(title="Ничего не подключено")
+            row.set_sensitive(False)
+            self.dev_group.add(row)
+            self.dev_rows.append(row)
+        for line in devices:
+            row = Adw.ActionRow(title=line)
+            self.dev_group.add(row)
+            self.dev_rows.append(row)
+        return GLib.SOURCE_CONTINUE
+
+    def on_switch(self, switch, _pspec):
+        if self._updating:
+            return
+        want_host = switch.get_active()
+        if want_host and read(CHARGER) == "1":
+            self._updating = True
+            switch.set_active(False)
+            self._updating = False
+            self.toast("Сначала отключите зарядку")
+            return
+        try:
+            with open(ROLE, "w") as f:
+                f.write("host\n" if want_host else "device\n")
+        except OSError as exc:
+            self._updating = True
+            switch.set_active(not want_host)
+            self._updating = False
+            self.toast("Не удалось переключить: %s" % exc)
+            return
+        self.toast("Режим host включён" if want_host
+                   else "Режим peripheral (RNDIS)")
+        GLib.timeout_add(300, lambda: self.refresh() and False)
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="org.t1100.UsbHost")
+
+    def do_activate(self):
+        win = self.props.active_window
+        if not win:
+            win = Window(self)
+        win.present()
+
+
+if __name__ == "__main__":
+    sys.exit(App().run(sys.argv))

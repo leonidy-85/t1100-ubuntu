@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=USB-порт
+Comment=Режим USB host (OTG) и подключённые устройства
+Exec=t1100-usb-gui
+Icon=drive-harddisk-usb-symbolic
+Terminal=false
+Categories=System;Settings;
+Keywords=usb;otg;host;rndis;t1100;
+StartupNotify=true

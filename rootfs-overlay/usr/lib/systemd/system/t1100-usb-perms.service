@@ -1,0 +1,12 @@
+[Unit]
+Description=Make the T1100 USB-C role switch writable by the desktop user
+After=sysinit.target local-fs.target
+Before=graphical.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'p=/sys/class/usb_role/11201000.usb-role-switch/role; [ -e "$p" ] && chgrp wheel "$p" && chmod 664 "$p" || true'
+
+[Install]
+WantedBy=multi-user.target
