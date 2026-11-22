@@ -1,0 +1,9 @@
+# Hide factory MTK/Android partitions from udisks2, GNOME Disks and file
+# managers. Only "userdata" (our ALT Linux root) stays visible.
+#
+# The layout is the stock MTK GPT with A/B slots; those small partitions hold
+# the bootloader, TrustZone keys, modem firmware and calibration data.
+# They must not be deleted, but they also do not need to be shown in the UI.
+ACTION!="remove", SUBSYSTEM=="block", KERNEL=="mmcblk0p*", ENV{ID_PART_ENTRY_NAME}=="userdata", GOTO="t1100_part_visible"
+ACTION!="remove", SUBSYSTEM=="block", KERNEL=="mmcblk0p*", ENV{UDISKS_IGNORE}="1"
+LABEL="t1100_part_visible"
