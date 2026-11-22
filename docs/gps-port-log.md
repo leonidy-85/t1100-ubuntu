@@ -143,3 +143,50 @@ assert-ов нужен холодный power-cycle (тёплый ребут CON
 (выключение с отключённым зарядом), затем raw-клиент **до** запуска
 mnld/сервиса. Если NMEA пойдёт — делать штатный GPS на raw-клиенте,
 а mnld оставить отдельной веткой для разбора.
+
+## 22.11 (2): `gps_fw` — это log-канал, а не файл прошивки
+
+Проверка стока через `debugfs` по `/root/aurora-root.img`:
+
+- `/system/etc/firmware` в образе отсутствует; `/vendor/firmware`
+  содержит `ROMv4_be_patch_1_0_hdr.bin` (229 384), `ROMv4_be_patch_1_1_hdr.bin`
+  (314 120), `WIFI_RAM_CODE_6759`, `soc3_0_ram_mcu_1_1/1a_1/e1_hdr.bin`
+  (все три побайтово одинаковы, md5 `979369a4…`), BT RAM code, FM-тюнинг
+  и `Himax_firmware.bin`. Файла `gps_fw`/`*gps*fw*` нет.
+- Строка `gps_fw` в стоковом `wmt_drv.ko` — элемент массива имён
+  log-каналов (`common_main/debug_utility/connsys_debug_utility.c:115`):
+  `"wifi_fw", "bt_fw", "gps_fw", "mcu_fw"`, а не имя firmware-файла.
+- DSP-образ GPS лежит внутри `libmnl.so`: данные 28 кадров `0x0C` с
+  T1100 совпадают с образом по файловому offset `0x1680fc` (vaddr
+  `0x16a0fc`) до байта 346, дальше libmnl отдаёт на провод уже
+  преобразованный вариант (escape/упаковка) — реплей шлёт именно его.
+
+Вывод: гипотеза «в `/lib/firmware` не хватает `gps_fw`» закрыта.
+
+## 22.11 (3): LNA, VCN28 и EMI проверены на железе
+
+- GPIO155 (LNA): MODE-регистр `0x10005430` = `0x00880988`, поле pin155
+  (биты 12..15) = 0 — **GPIO mode**; DIR/DO = 1 (output high). VCN28
+  включён: `regulator_summary` — 1 consumer, 2800 mV. Ручной high
+  действительно доходит до пада; pinctrl в DTS нужен для штатного
+  управления, но это не блокер.
+- `/dev/mem`: `0xbfc00000` (CONSYS EMI) содержит ROMv4-патч (3524 из
+  4096 байт первого КБ ненулевые), `0xbfd00000` (GPS EMI) — нули.
+- `CONSYS_PMIC_CTRL_ENABLE=1`, `consys_hw_vcn28_ctrl()` реально включает
+  регулятор; `co_clock_flag=1` как в стоковом `WMT_SOC.cfg`.
+
+## 22.11 (4): mnld-последовательность без 1 Гц `0x05` не ассертит
+
+Реплей ровно той последовательности, что снята с mnld (config `0x08` →
+28 чанков `0x0C` с ожиданием ACK → **один** кадр `0x05`), затем только
+чтение 90 с:
+
+```
+records=30
+sequence ok (0x31 + 28 acks), 0x05 sent once
+done frames=0
+```
+
+`Host trigger FW assert` за прогон **нет**, Wi-Fi `.77` живой. Старый
+`gps-replay.py`/`t1100-gps` слали `0x05` раз в секунду — это, вероятно,
+и вызывало assert-петлю (`reason:2`), но NMEA не появляется и без неё.
