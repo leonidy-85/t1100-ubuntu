@@ -1,0 +1,50 @@
+#!/bin/sh
+# Switch the T1100 USB-C port between peripheral (gadget/RNDIS) and host (OTG).
+#
+# The port is a dual-role mtu3 controller behind MT6370 Type-C. By design
+# tcpm does not drive the role switch (see the comment in the DTS): keeping
+# the port peripheral is what gives us the RNDIS link, and a role flip on
+# every power-role change would kill it. So the role is switched manually.
+#
+# In host mode MT6370 enables its 5 V boost on VBUS, so a charger must not be
+# connected at the same time: this script refuses to switch while charging.
+#
+# Usage: t1100-usb-host [on|off|status]     (default: status)
+
+ROLE=/sys/class/usb_role/11201000.usb-role-switch/role
+CHARGER=/sys/class/power_supply/mt6370-charger/online
+
+usage() {
+    echo "usage: $0 [on|off|status]" >&2
+    exit 2
+}
+
+status() {
+    echo "role:    $(cat "$ROLE" 2>/dev/null)"
+    echo "charger: $(cat "$CHARGER" 2>/dev/null)"
+    if command -v lsusb >/dev/null 2>&1; then
+        echo "usb devices:"
+        lsusb | sed 's/^/  /'
+    fi
+}
+
+case "${1:-status}" in
+on)
+    if [ "$(cat "$CHARGER" 2>/dev/null)" = "1" ]; then
+        echo "$0: charger is connected; unplug it before enabling host mode" >&2
+        exit 1
+    fi
+    echo host > "$ROLE" || exit 1
+    echo "usb host mode on (VBUS 5V from MT6370)"
+    ;;
+off)
+    echo device > "$ROLE" || exit 1
+    echo "usb peripheral mode (gadget/RNDIS)"
+    ;;
+status)
+    status
+    ;;
+*)
+    usage
+    ;;
+esac
