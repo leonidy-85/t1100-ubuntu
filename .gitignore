@@ -19,3 +19,7 @@ __pycache__/
 # vendor reference blobs (Aurora RPM payloads: firmware, 4.14 modules)
 /vendor/*
 !/vendor/vcodec/
+
+# full eMMC dumps and the generated SP Flash Tool package (tens of GB)
+/dumps/
+/firmware/
