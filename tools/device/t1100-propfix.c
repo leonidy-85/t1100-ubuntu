@@ -47,7 +47,7 @@ struct prop {
 };
 
 static const struct prop props[] = {
-	{ "persist.vendor.connsys.chipid", "0x0788" },
+	{ "persist.vendor.connsys.chipid", "0x6771" },
 	{ "vendor.service.nvram_init", "Ready" },
 	{ "ro.property_service.version", "2" },
 };

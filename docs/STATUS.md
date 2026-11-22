@@ -5858,3 +5858,14 @@ BTIF/STP-транспорт (включая исправленную поляр�
 - Дальше: DTS pinctrl GPS LNA (GPIO155), property-шим (chipid `0x788`,
   nvram Ready), проверка DSP boot по `fw_log_gps`. Подробности —
   `docs/gps-handoff.md`.
+
+### GPS — работает (22.11, вечер)
+
+Корень тишины — неверный `persist.vendor.connsys.chipid` в шиме:
+`0x0788` вместо `0x6771`, из-за чего libmnl выбирала generic DSP-образ.
+С `0x6771` чип грузит родной MT6771-образ и отдаёт измерения; NMEA идёт
+через `mnld` в `/run/t1100-nmea.sock` (проверено: 111 строк за 10 с,
+`$GPGSV` с 12 спутниками). Сервис `t1100-internal-gps` теперь запускает
+mnld с `LD_PRELOAD=/vendor/lib/libpropfix.so`. Осталось: DTS pinctrl
+GPS LNA (GPIO155) и проверка Satellite. Подробности —
+`docs/gps-handoff.md`, `docs/gps-port-log.md`.

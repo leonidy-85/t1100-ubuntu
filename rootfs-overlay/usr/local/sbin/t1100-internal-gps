@@ -26,7 +26,7 @@ done
 start_mnld() {
     pgrep -f '^/system/bin/mnld' >/dev/null 2>&1 && return 0
     chroot /opt/bionic /system/bin/sh -c \
-        'export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; exec /system/bin/mnld' \
+        'export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; export LD_PRELOAD=/vendor/lib/libpropfix.so; exec /system/bin/mnld' \
         >>/tmp/mnld-internal.log 2>&1 &
 }
 
