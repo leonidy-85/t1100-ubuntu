@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Charge/notification LED for the T1100 (MT6370 PMIC, i2c-5 0x34).
+
+Behaviour:
+  * on charger   -> steady light
+  * notification -> blink (Phosh notifications are watched on the session bus)
+  * otherwise    -> all channels off
+
+The kernel has no driver for these channels (CONFIG_LEDS_MT6370_RGB is off and
+the board DTS has no LED nodes), so this daemon drives the PMIC directly.
+
+The session bus only accepts the desktop user, so the watcher is started
+through `su` and its output is parsed for org.freedesktop.Notifications.Notify.
+
+Usage:
+  t1100-led                 run the daemon (systemd)
+  t1100-led notify [SEC]    blink now (default from config)
+  t1100-led off             force all channels off
+  t1100-led status          print charger state and register snapshot
+
+Config: /etc/t1100-led.conf (key=value), see DEFAULTS below.
+"""
+import fcntl
+import os
+import pwd
+import select
+import socket
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+I2C_BUS = "/dev/i2c-5"
+I2C_ADDR = 0x34
+I2C_SLAVE_FORCE = 0x0706
+
+# The PMIC answers on 8-bit register addresses: the driver's 16-bit register
+# 0x185 is 0x85 on the wire (verified against the kernel regmap dump).
+REG_RGB_EN = 0x85
+REG_DIM = {1: 0x82, 2: 0x83, 3: 0x84}
+REG_ISINK = {1: 0x86, 2: 0x87, 3: 0x88}
+REG_CHRIND_DIM = 0x92
+REG_CHRIND_CTRL = 0x93
+LED_MODE_REG = 2      # constant current ("cc_mode"), 0 = PWM, 1 = breath
+
+ONLINE = "/sys/class/power_supply/mt6370-charger/online"
+SOCK = "/run/t1100-led.sock"
+CONF = "/etc/t1100-led.conf"
+
+WATCH_RULE = ("type='method_call',interface='org.freedesktop.Notifications',"
+              "member='Notify'")
+
+DEFAULTS = {
+    "charge_channel": "1",   # ISINK1 = red; the visible indicator is red
+    "notify_channel": "1",   # blink the same red light
+    "charge_dim": "0x60",
+    "notify_dim": "0xff",
+    "blink_ms": "400",
+    "notify_seconds": "6",
+    "watch_dbus": "1",
+}
+
+
+def load_conf():
+    conf = dict(DEFAULTS)
+    try:
+        for line in Path(CONF).read_text().splitlines():
+            line = line.split("#", 1)[0].strip()
+            if "=" in line:
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return conf
+
+
+class Led:
+    def __init__(self):
+        self.fd = os.open(I2C_BUS, os.O_RDWR)
+        fcntl.ioctl(self.fd, I2C_SLAVE_FORCE, I2C_ADDR)
+
+    def rd(self, reg):
+        os.write(self.fd, bytes([reg]))
+        return os.read(self.fd, 1)[0]
+
+    def wr(self, reg, val):
+        os.write(self.fd, bytes([reg, val & 0xFF]))
+
+    def on(self, ch, dim):
+        duty = 0x1F if dim >= 0x60 else max(1, (dim * 0x1F) // 0xFF)
+        if ch == 4:
+            self.wr(REG_CHRIND_CTRL, 0x03)
+            self.wr(REG_CHRIND_DIM, 0x80 | (LED_MODE_REG << 5) | duty)
+            self.wr(REG_RGB_EN, 0x80 | 0x01)
+        else:
+            self.wr(REG_ISINK[ch], 0x03)
+            self.wr(REG_DIM[ch], (LED_MODE_REG << 5) | duty)
+            # bit 7 is required for the ISINK outputs to drive current
+            self.wr(REG_RGB_EN, 0x80 | (1 << (4 - ch)))
+            # the physical indicator also hangs on the charge channel;
+            # keep it in sync so the light is visible on every board
+            self.wr(REG_CHRIND_CTRL, 0x03)
+            self.wr(REG_CHRIND_DIM, 0x80 | (LED_MODE_REG << 5) | duty)
+
+    def off(self):
+        self.wr(REG_CHRIND_DIM, 0x00)
+        self.wr(REG_RGB_EN, 0x00)
+
+    def snapshot(self):
+        return "EN=0x%02x CHRIND_CTRL=0x%02x CHRIND_DIM=0x%02x" % (
+            self.rd(REG_RGB_EN), self.rd(REG_CHRIND_CTRL), self.rd(REG_CHRIND_DIM))
+
+
+def charging():
+    try:
+        return Path(ONLINE).read_text().strip() == "1"
+    except OSError:
+        return False
+
+
+def session_bus():
+    """Return (user, address) of the first non-root session bus."""
+    try:
+        entries = sorted(Path("/run/user").iterdir())
+    except OSError:
+        return None
+    for p in entries:
+        if not p.name.isdigit() or p.name == "0":
+            continue
+        bus = p / "bus"
+        if not bus.exists():
+            continue
+        try:
+            user = pwd.getpwuid(int(p.name)).pw_name
+        except KeyError:
+            continue
+        return user, "unix:path=%s" % bus
+    return None
+
+
+class NotifyWatcher:
+    def __init__(self):
+        self.info = session_bus()
+        self.proc = None
+        self.retry_at = 0.0
+        self.buf = ""
+
+    def start(self):
+        if not self.info or self.proc:
+            return
+        user, addr = self.info
+        script = ('export DBUS_SESSION_BUS_ADDRESS=%s; exec dbus-monitor --session "%s"'
+                  % (addr, WATCH_RULE))
+        cmd = ["su", "-s", "/bin/sh", user, "-c", script]
+        try:
+            self.proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1)
+            os.set_blocking(self.proc.stdout.fileno(), False)
+        except OSError:
+            self.proc = None
+            self.retry_at = time.monotonic() + 10
+
+    def poll(self):
+        """Return list of events seen since the last call."""
+        if not self.info:
+            return []
+        now = time.monotonic()
+        if self.proc is None:
+            if now >= self.retry_at:
+                self.start()
+            return []
+        if self.proc.poll() is not None:
+            self.stop()
+            self.retry_at = now + 5
+            return []
+        events = []
+        try:
+            data = os.read(self.proc.stdout.fileno(), 65536).decode(errors="replace")
+        except (BlockingIOError, OSError):
+            return []
+        if not data:
+            return []
+        self.buf += data
+        while "\n" in self.buf:
+            line, self.buf = self.buf.split("\n", 1)
+            if "member=Notify" in line:
+                events.append("notify")
+        if len(self.buf) > 8192:
+            self.buf = self.buf[-1024:]
+        return events
+
+    def stop(self):
+        if not self.proc:
+            return
+        try:
+            self.proc.kill()
+            self.proc.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        self.proc = None
+        self.buf = ""
+
+
+def daemon():
+    conf = load_conf()
+    charge_ch = int(conf["charge_channel"])
+    notify_ch = int(conf["notify_channel"])
+    charge_dim = int(conf["charge_dim"], 0)
+    notify_dim = int(conf["notify_dim"], 0)
+    blink = max(0.05, int(conf["blink_ms"]) / 1000.0)
+    notify_len = float(conf["notify_seconds"])
+
+    led = Led()
+    led.off()
+    watcher = NotifyWatcher() if conf.get("watch_dbus", "1") == "1" else None
+
+    try:
+        os.unlink(SOCK)
+    except FileNotFoundError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(SOCK)
+    os.chmod(SOCK, 0o666)
+    srv.listen(4)
+
+    notify_until = 0.0
+    blink_on = False
+    next_toggle = 0.0
+    last_poll = 0.0
+    powered = None
+    while True:
+        r, _, _ = select.select([srv], [], [], 0.05)
+        if r:
+            c, _ = srv.accept()
+            try:
+                cmd = c.recv(64).decode(errors="replace").split()
+            except OSError:
+                cmd = []
+            c.close()
+            if cmd and cmd[0] == "notify":
+                sec = float(cmd[1]) if len(cmd) > 1 else notify_len
+                notify_until = time.monotonic() + sec
+                next_toggle = 0.0
+            elif cmd and cmd[0] == "off":
+                notify_until = 0.0
+                led.off()
+                powered = None
+
+        if watcher and "notify" in watcher.poll():
+            print("notification: blink %.1fs" % notify_len, flush=True)
+            notify_until = time.monotonic() + notify_len
+            next_toggle = 0.0
+
+        now = time.monotonic()
+        if now - last_poll >= 1.0:
+            last_poll = now
+            state = charging()
+            if state != powered:
+                print("charger online=%d" % state, flush=True)
+            powered = state
+
+        if now < notify_until:
+            if now >= next_toggle:
+                blink_on = not blink_on
+                if blink_on:
+                    led.on(notify_ch, notify_dim)
+                else:
+                    led.off()
+                next_toggle = now + blink
+        else:
+            if blink_on:
+                blink_on = False
+                led.off()
+            if powered:
+                led.on(charge_ch, charge_dim)
+
+
+def client(cmd):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(SOCK)
+    s.sendall((" ".join(cmd) + "\n").encode())
+    s.close()
+
+
+def main():
+    if len(sys.argv) == 1:
+        daemon()
+        return
+    what = sys.argv[1]
+    if what == "notify":
+        client(["notify"] + sys.argv[2:])
+    elif what == "off":
+        client(["off"])
+    elif what == "status":
+        led = Led()
+        print("charging:", charging(), "|", led.snapshot())
+    else:
+        print(__doc__)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

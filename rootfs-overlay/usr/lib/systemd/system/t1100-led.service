@@ -1,0 +1,12 @@
+[Unit]
+Description=T1100 charge/notification LED (MT6370 via i2c)
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/t1100-led
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
