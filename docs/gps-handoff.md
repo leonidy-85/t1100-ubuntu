@@ -80,10 +80,9 @@ Android-бридж (`t1100-nmea-adb`) не использовать.
    `mtk_gps_sys_init err = 2`, но продолжает старт. В стоке свойство
    выставляет nvram-сервис (`/vendor/etc/init/hw/*nvram*rc`).
 2. `persist.vendor.connsys.chipid` — в стоке `-1`, выставляет
-   `wmt_launcher` (`0x788` для MT6771). В chroot пусто; если `libmnl`
-   выбирает DSP-образ по нему, уходит generic-образ. Именованные
-   образы в библиотеке есть: `MT6771_DSP_0064_B183` (file `0x3f2db7`),
-   `MT6771_DSP_0064_C189` (`0x401dbf`).
+   `wmt_launcher` (`0x788` для MT6771). Закрыто шимом (см. «22.11 (4)»):
+   с `0x0788` поток DSP-фрагментов не изменился, т.е. на выбор образа
+   chipid не влияет.
 3. DTS: у узла `consys@18070000` нет `pinctrl-*`; wmt логирует
    `get consys pinctrl fail` и `GPS LNA pin number(-1)`, ioctl 16
    отдаёт `0xffffffff`. В стоковом dtbo есть `gpslna@0/1/2`
@@ -92,18 +91,52 @@ Android-бридж (`t1100-nmea-adb`) не использовать.
 4. В pty-захвате ioctl STP дают `ENOTTY` (`errno=25`) — артефакт tty,
    на реальном узле их нет.
 
+## 22.11 (4): вечерние эксперименты — что проверено после передачи
+
+- **Android-свойства подделаны шимом.** `tools/device/t1100-propfix.c`
+  собирается ARM32 (`arm-linux-gnueabihf-gcc -shared -fPIC -nostdlib`) в
+  `libpropfix.so` и кладётся в `/opt/bionic/vendor/lib/`; `LD_PRELOAD`
+  задаётся **внутри** chroot-шелла (иначе x86-chroot грузит ARM-библиотеку).
+  Шим отвечает `persist.vendor.connsys.chipid=0x0788`,
+  `vendor.service.nvram_init=Ready`, `ro.property_service.version=2` и
+  логирует все запросы в `/data/vendor/gps/propfix.log`.
+  Результат: `combo_chip_id is 0x0788`, `nvram_init_val Ready`,
+  `GPS NVRam gps_nvram_fd == NULL` (файл не открылся — не блокер).
+- **С выбором DSP-образа chipid не связан:** поток mnld→чип с шимом
+  побайтово совпал с прежним (sha256 `d83b6e09…`, 39 721 Б, 30 кадров),
+  chip по-прежнему отдаёт только статус `0x31` + 28 ACK `0x32`.
+- **EMI — ложный след.** `read()` в `gps_emi.c` всегда возвращал 0
+  (не выставлялся `ret`) — исправлено. После фикса прочитаны оба MiB
+  региона CONNSYS: в первом (`emi_off_mb=0`, `0xbfc00000`) лежит
+  coredump/лог (nonzero 56 704), сигнатуры DSP-образа нет; во втором
+  (`0xbfd00000`) — нули. Вывод: образ уходит по STP внутрь combo-чипа,
+  а не в SoC EMI; проверять там нечего.
+- **ioctl 9 (D1 efuse) реализован для MT6771** (`0x11f10048`): mnld его
+  действительно вызывает сразу после `GPS_open`, раньше получал
+  `Read Efuse not supported`. На старт DSP не повлияло.
+- **Проба протокола** (`tools/device/mnl-probe.py`, non-blocking):
+  keepalive → молчание; неизвестный тип `0x99` → молчание; config →
+  ровно один `0x31`; т.е. ответы настоящие и адресные, не canned.
+- **WMT-путь GPS on** проверен по исходникам: `wmt_func_gps_pre_ctrl`
+  делает только GPS_SYNC и LNA, канала `gps_mcu_ctrl` в power-on нет;
+  VCN28 подан (regulator_summary: 2800 мВ, потребитель consys активен).
+  ROM-patch файлы на месте, MCU-патч скачивается (166 фрагментов),
+  версия чипа определяется как `SOC_CONSYS.E1 (0x8a00/0x8a00)`.
+- **Ограничение метода:** `arm-linux-gnueabihf-objdump` по `libmnl.so`
+  не находит литеральных ссылок на строки (`_BootDSP_UART_V2`,
+  `ChipID,x,`) — PIC-адресация; дальнейший статический RE требует
+  radare2/Ghidra.
+
 ## Следующие шаги (по приоритету)
 
 1. **DTS pinctrl**: добавить в `consys` состояния `gps_lna_state_*`
    (`pins = "gpio155"`, init/oh/ol) и `pinctrl-1`-phandle; пересобрать
    dtb; проверить `GPS LNA gpio pin number:155` и ioctl 16 = 155.
    Это штатный путь LNA и нужен сервису независимо от NMEA.
-2. **Property shim**: подставить `persist.vendor.connsys.chipid=0x788`
-   и `vendor.service.nvram_init=Ready`. Варианты: (а) собрать ARM32
-   `LD_PRELOAD`-шим — на build-хосте нет `arm-linux-gnueabihf-gcc`,
-   поставить пакет; (б) поднять минимальный property-сервис
-   (`/dev/__properties__`, protocol) — дороже; (в) патч строки в
-   `mnld`/`libmnl` — грубо, но быстро для проверки.
+2. **~~Property shim~~ — СДЕЛАНО** (см. раздел «22.11 (4)»):
+   `tools/device/t1100-propfix.c` → `libpropfix.so`, `LD_PRELOAD` в
+   chroot. `chipid=0x0788` и `nvram_init=Ready` mnld видит. На выбор
+   DSP-образа это не влияет (поток тот же) — пункт закрыт.
 3. **Проверить, доходит ли DSP boot**: в `libmnl.so` есть
    `_BootDSP_UART_V2(): code_size,start_addr,exec_addr,cipher_key,
    code_frag_num`, `BootDSP: start/finished`; в logd этих строк нет.
@@ -133,7 +166,13 @@ Android-бридж (`t1100-nmea-adb`) не использовать.
 - `rootfs-overlay/usr/local/sbin/t1100-gps` — штатный клиент:
   `--replay FILE`, `--replay-pause`, `--power-cycle`, `--seconds`,
   `--raw`; печатает не-ACK кадры и `$`-строки.
-- Драйвер: `insmod gps_drv.ko t1100_trace=1`.
+- `tools/device/mnl-probe.py` — non-blocking проба `/dev/stpgps`:
+  keepalive / неизвестный тип / config, печатает hex ответов.
+- `tools/device/t1100-propfix.c` — ARM32 `LD_PRELOAD`-шим
+  `__system_property_get` (chipid + nvram), лог в
+  `/data/vendor/gps/propfix.log`; сборка
+  `arm-linux-gnueabihf-gcc -shared -fPIC -nostdlib -O2`.
+- Драйвер: `insmod gps_drv.ko t1100_trace=1` (есть ещё `emi_off_mb`).
 - Сборка: `scripts/build-gps-remote.sh` с
   `BUILD_HOST=l@172.17.141.124`,
   `EXTRA_SYMBOLS=/home/l/t1100-wifi-build-own48/work/common/Module.symvers`,

@@ -152,6 +152,12 @@ struct gps_emi_dev *devobj;
 
 static struct semaphore fw_dl_mtx;
 
+/* Debug/experiment: read the GPS window at a different MiB offset inside the
+ * CONNSYS reserved block (-1 keeps the vendor layout). */
+static int emi_off_mb = -1;
+module_param(emi_off_mb, int, 0644);
+MODULE_PARM_DESC(emi_off_mb, "GPS EMI offset in MiB from CONNSYS base");
+
 void mtk_wcn_consys_gps_memory_reserve(void)
 {
 	if (gGpsEmiPhyBase)
@@ -159,8 +165,13 @@ void mtk_wcn_consys_gps_memory_reserve(void)
 
 	/* T1100: take the GPS window from the CONNSYS reserved-memory block
 	 * (2 MiB) owned by wmt_drv; the vendor layout puts GPS at +1 MiB. */
-	if (gConEmiPhyBase)
-		gGpsEmiPhyBase = gConEmiPhyBase + GPS_EMI_BASE_ADDR_OFFSET;
+	if (gConEmiPhyBase) {
+		size_t off = GPS_EMI_BASE_ADDR_OFFSET;
+
+		if (emi_off_mb >= 0)
+			off = (size_t)emi_off_mb * SZ_1M;
+		gGpsEmiPhyBase = gConEmiPhyBase + off;
+	}
 
 	if (gGpsEmiPhyBase)
 		GPS_DBG("Con:0x%zx, Gps:0x%zx (size 0x%zx)\n",
@@ -387,8 +398,12 @@ static ssize_t gps_emi_read(struct file *file, char __user *buf, size_t count, l
 	if (count > GPS_ADC_CAPTURE_BUFF_SIZE)
 		count = GPS_ADC_CAPTURE_BUFF_SIZE;
 	if (pGpsEmibaseaddr != NULL) {
-		if (copy_to_user(buf, (char *)pGpsEmibaseaddr, count))
+		if (copy_to_user(buf, (char *)pGpsEmibaseaddr, count)) {
 			pr_err("Copy to user failed\n");
+		} else {
+			ret = count;
+			*ppos += count;
+		}
 	}
 	GPS_DBG("gps_emi_read finish\n");
 	return ret;

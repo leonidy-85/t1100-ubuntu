@@ -238,3 +238,26 @@ mnld корректен (чип его принимает), но GPS-движо�
 `persist.vendor.connsys.chipid` (в dmesg нет ни одного `GPS_ioctl`).
 `vendor.service.nvram_init` в Ubuntu отсутствует → `mtk_gps_sys_init
 err = 2`, но старт продолжается. Оба свойства — кандидаты на шим.
+
+## 22.11 (7): property-шим, EMI, efuse — блокер не найден
+
+- `tools/device/t1100-propfix.c` (ARM32, `-nostdlib`) подменяет
+  `__system_property_get`: `persist.vendor.connsys.chipid=0x0788`,
+  `vendor.service.nvram_init=Ready`. mnld: `combo_chip_id is 0x0788`,
+  `nvram_init_val Ready`, `GPS NVRam gps_nvram_fd == NULL`. Поток
+  mnld→чип с шимом побайтово тот же (sha256 `d83b6e09…`), чип — только
+  `0x31` + 28 ACK. Выбор DSP-образа от chipid не зависит.
+- `gps_emi_read()` не выставлял `ret` → `dd` отдавал 0 байт. Исправлено.
+  Прочитаны оба MiB CONNSYS: `0xbfc00000` — coredump/лог (56 704
+  ненулевых), `0xbfd00000` — нули; сигнатуры DSP-образа нет. Значит
+  образ уходит по STP внутрь combo-чипа, SoC EMI — ложный след.
+- ioctl 9 (`COMBO_IOC_D1_EFUSE_GET`) реализован для MT6771
+  (`ioremap(0x11f10048)`); mnld его вызывает сразу после `GPS_open`.
+  На старт DSP не влияет.
+- `tools/device/mnl-probe.py`: keepalive и неизвестный тип `0x99` —
+  молчание, config — ровно один `0x31`. Ответы адресные, не canned.
+- WMT GPS on в исходниках: только GPS_SYNC и LNA, `gps_mcu_ctrl` в
+  power-on нет. VCN28 подан (2800 мВ). ROM-patch и MCU-патч (166
+  фрагментов) в порядке, чип определяется как `SOC_CONSYS.E1`.
+- Статический RE libmnl через `arm-linux-gnueabihf-objdump` упирается в
+  PIC-адресацию (нет литеральных ссылок на строки); нужен radare2/Ghidra.

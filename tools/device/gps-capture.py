@@ -41,10 +41,12 @@ REAL = "/dev/stpgps.real"
 BIONIC = "/opt/bionic"
 MNLD_CMD = (
     "export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; "
+    "export LD_PRELOAD=/vendor/lib/libpropfix.so; "
     "exec /system/bin/mnld"
 )
 HAL_CMD = (
     "export LD_LIBRARY_PATH=/vendor/lib:/system/lib:/vendor/lib/hw; "
+    "export LD_PRELOAD=/vendor/lib/libpropfix.so; "
     "exec /system/bin/gps_hal_test"
 )
 

@@ -821,7 +821,17 @@ long GPS_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			iounmap(addr);
 		} while (0);
 #else
-		GPS_ERR_FUNC("Read Efuse not supported in this platform\n");
+		do {
+			char *addr = ioremap(0x11f10048, 0x4);
+
+			if (!addr) {
+				retval = -ENOMEM;
+				break;
+			}
+			retval = *(volatile unsigned int *)addr;
+			GPS_DBG_FUNC("MT6771 efuse (0x%x)\n", retval);
+			iounmap(addr);
+		} while (0);
 #endif
 		break;
 
