@@ -285,3 +285,21 @@ DSP не загружался.
 `Read Efuse not supported`); LNA-пин 155 в стоке есть, у нас нет —
 это остаётся единственным известным отличием от стока, но на NMEA
 не влияет.
+
+## 22.11 (9): шим в overlay, LNA-пункт закрыт
+
+`scripts/build-propfix.sh` собирает ARM32 `libpropfix.so` на build-хосте
+и кладёт в `rootfs-overlay/opt/bionic/vendor/lib/` — теперь шим
+разворачивается вместе с overlay, а не живёт на планшете вручную.
+Проверено: после заливки sha256 на планшете совпал с артефактом,
+`systemctl restart t1100-internal-gps` → `combo_chip_id is 0x6771`,
+NMEA снова идёт.
+
+DTS-пункт про GPS LNA закрыт: вендорские состояния `gpslna@0/1/2`
+(`pinmux = <0x9b00>`, `output-low/high`, `slew-rate`) в mainline не
+переносятся — `drivers/pinctrl/mediatek` не поддерживает
+`output-low`/`output-high`, pin 155 есть только как функция 0
+«GPIO155», т.е. выставится один mux без уровня. GPS работает без
+этого; если понадобится штатная LNA, делать через gpiolib в
+wmt-драйвере. Клиента Satellite на планшете нет, сокет
+`/run/t1100-nmea.sock` отдаёт валидный NMEA — остаётся поставить клиент.

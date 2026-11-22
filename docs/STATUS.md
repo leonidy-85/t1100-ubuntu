@@ -5866,6 +5866,10 @@ BTIF/STP-транспорт (включая исправленную поляр�
 С `0x6771` чип грузит родной MT6771-образ и отдаёт измерения; NMEA идёт
 через `mnld` в `/run/t1100-nmea.sock` (проверено: 111 строк за 10 с,
 `$GPGSV` с 12 спутниками). Сервис `t1100-internal-gps` теперь запускает
-mnld с `LD_PRELOAD=/vendor/lib/libpropfix.so`. Осталось: DTS pinctrl
-GPS LNA (GPIO155) и проверка Satellite. Подробности —
-`docs/gps-handoff.md`, `docs/gps-port-log.md`.
+mnld с `LD_PRELOAD=/vendor/lib/libpropfix.so`. Шим теперь собирается
+`scripts/build-propfix.sh` и лежит в `rootfs-overlay/opt/bionic/vendor/lib/`,
+т.е. ставится вместе с системой. DTS pinctrl GPS LNA (GPIO155) закрыт как
+неактуальный: mainline `pinctrl-mediatek` не умеет `output-low/high`, а на
+NMEA это не влияет. Осталось: поставить клиент Satellite (на планшете его
+нет) и посмотреть отрисовку. Подробности — `docs/gps-handoff.md`,
+`docs/gps-port-log.md`.
