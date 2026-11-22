@@ -21,7 +21,7 @@
 set -u
 
 WMT_PARAMS="t1100_quiet_ms=100"
-WLAN_PARAMS="t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=0"
+WLAN_PARAMS="t1100_probe=0 t1100_rom_patch_mcif=0 t1100_pwr_on_done=0 t1100_no_fw_own=0"
 
 echo "t1100-wifi-start: modprobe wmt_drv"
 modprobe wmt_drv $WMT_PARAMS || { echo "wmt_drv: modprobe failed"; exit 1; }
