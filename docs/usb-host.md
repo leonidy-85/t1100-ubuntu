@@ -65,3 +65,13 @@ t1100-usb-host status   # роль, зарядка, список USB-устро�
 (`XDG_RUNTIME_DIR=/run/user/1000`, `WAYLAND_DISPLAY=wayland-0`), живёт и
 переживает смену роли, сделанную из CLI. Визуальную проверку удобнее сделать
 на самом планшете.
+
+**Важно для появления в сетке Phosh.** Phosh 0.59 с включённым адаптивным
+фильтром (`sm.puri.phosh app-filter-mode`) показывает только приложения,
+у которых в `.desktop` есть `X-Purism-FormFactor=Mobile;` (или
+`X-KDE-FormFactor=handset;`). Поэтому в `org.t1100.UsbHost.desktop` (а также
+в `t1100-audio-ui.desktop` и `t1100-usb-ui.desktop`) добавлена строка
+`X-Purism-FormFactor=Mobile;Desktop;`. После правки достаточно
+`update-desktop-database /usr/share/applications` — сетка обновляется на лету,
+перезапуск оболочки не нужен.
+

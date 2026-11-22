@@ -7,4 +7,5 @@ Exec=/usr/local/bin/t1100-usb-ui
 Icon=drive-removable-media-usb
 Terminal=false
 Categories=System;Utility;
+X-Purism-FormFactor=Mobile;Desktop;
 Keywords=USB;host;device;флешка;кабель;

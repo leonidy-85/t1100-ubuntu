@@ -8,4 +8,5 @@ Exec=/usr/local/bin/t1100-audio-ui
 Icon=audio-card
 Terminal=false
 Categories=AudioVideo;Audio;
+X-Purism-FormFactor=Mobile;Desktop;
 Keywords=audio;headphones;speaker;наушники;динамик;

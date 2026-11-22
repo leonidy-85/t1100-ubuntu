@@ -6,5 +6,6 @@ Exec=t1100-usb-gui
 Icon=org.t1100.UsbHost
 Terminal=false
 Categories=System;Settings;
+X-Purism-FormFactor=Mobile;Desktop;
 Keywords=usb;otg;host;rndis;t1100;
 StartupNotify=true
