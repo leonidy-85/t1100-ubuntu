@@ -2,9 +2,9 @@
 
 Проект порта **mainline-ядра** (или близкого к нему) на планшет **Fplus T1100**
 (SoC **MT6771 / MT8788**, GPU **Mali-G72 MP3 Bifrost**) с целью запустить
-**Ubuntu + Wayland-десктоп (сейчас KDE Plasma) с аппаратным GPU-ускорением**.
+**Linux + Wayland-десктоп (сейчас Phosh) с аппаратным GPU-ускорением**.
 
-> **Статус (16.11.2026): фазы 1–3 закрыты, десктоп (фаза 4) работает; встроенные Wi-Fi и Bluetooth (фаза 5) работают. Ubuntu 26.04 + KDE Plasma 6.6.4.**
+> **Статус (23.11.2026): фазы 1–3 закрыты, десктоп (фаза 4) работает; встроенные Wi-Fi, Bluetooth и GPS работают. ALT Linux 2026.11 + Phosh.**
 > mainline 6.12.114 + патчи 0001–0078 (0035 отключён, 0020 заменён на 0060): ядро доходит до `systemd running`,
 > eMMC HS400 (57.6 ГиБ, 56 разделов), RAM 3.5 ГБ, все **8 ядер** (`maxcpus=8`),
 > USB-RNDIS (`1d6b:0104`) и `ssh root@10.42.66.66` по ключу, **батарея
@@ -16,7 +16,7 @@
 > GPU: panfrost (0039) — **Mesa 26.0.3**; **DVFS включён** (0058/0059:
 > coupler MT6771/MT8788, OPP 698/743/800 МГц, VGPU/VSRAM spread 100 мВ);
 > `glmark2` Score 1409/1583, но в отдельных shader-сценах есть таймауты
-> panfrost — отдельный баг, не DVFS. KDE Plasma 6.6.4 + SDDM (autologin root).
+> panfrost — отдельный баг, не DVFS. Phosh (ранее KDE Plasma 6.6.4 + SDDM).
 > HDMI-выход: `card1-HDMI-A-1` (DPI0 → IT66121, патч 0078) — расширенный рабочий стол
 > 1280×720@60. Ограничение: DPI разведён 12 линиями (`bus-width=12` → TMDS ≤ 74.25 МГц),
 > поэтому 1080p/2K невозможны; на части мониторов — редкие зелёные точки (TMDS), звук HDMI не подключён.
@@ -52,13 +52,40 @@
 > `t1100-usb-gadget.sh` отвязывает UDC на время сна и возвращает после; тем не менее
 > зависшая GPU-задача panfrost может отклонить suspend (`PM: Some devices failed to
 > suspend`, `error -16`) — отдельная известная проблема.
-> **UI:** «Аудиовыход» переключает динамик/наушники, «USB режим» — USB
-> host/device (KDialog; пакет `kdialog`).
-> Дальше: устойчивость panfrost (`js fault`/`gpu sched timeout`, 0075/0076),
-> SVS/soak-тест, PD/зарядка через hub, 6.3 suspend/разряд,
-> power save для Wi-Fi, FM/GPS, воспроизводимая clean-сборка. Состояние и план — `docs/STATUS.md`,
+> **UI:** «Аудиовыход» (GTK4/Adw, `org.t1100.AudioOut`) — динамик/наушники
+> и громкость; «USB-порт» (`org.t1100.UsbHost`) — host/device, состояние VBUS
+> и список USB-устройств. Старые KDialog-версии скрыты (`NoDisplay`).
+> Дальше: тач при холодной загрузке (цикл питания рельса), устойчивость
+> panfrost (`js fault`/`gpu sched timeout`, 0075/0076), SVS/soak-тест,
+> PD/зарядка через hub, 6.3 suspend/разряд, power save для Wi-Fi,
+> воспроизводимая clean-сборка. Состояние и план — `docs/STATUS.md`,
 > `docs/handover.md`.
->
+
+## Обновление 23.11.2026
+
+- **GPS работает.** Внутренний MT6631 (CONSYS) поднимается вендорским `mnld` +
+  HAL в chroot `/opt/bionic`; `t1100-internal-gps.service` стартует сам после
+  загрузки и отдаёт NMEA в `/run/t1100-nmea.sock` (12–13 спутников, `$GNGGA` /
+  `$GPGSV`). Причина прежней тишины — неверный
+  `persist.vendor.connsys.chipid`: с `0x6771` libmnl выбирает родной MT6771
+  DSP-образ, а не generic. Значение подставляет шим `libpropfix.so`
+  (LD_PRELOAD внутри chroot). Подробности — `docs/gps-handoff.md`,
+  `docs/gps-port-log.md`.
+- **Индикаторный светодиод.** `t1100-led.service` управляет MT6370 по i2c:
+  ровный свет при зарядке, мигание на уведомления (D-Bus Phosh), выключен
+  в покое. Регистры и последовательность — `docs/led-indicator.md`.
+- **USB host.** Роль переключается через `usb-role-switch`, MT6370 выдаёт
+  VBUS 5 В; с рабочим OTG-адаптером флешка определяется как `sda`. С
+  «зарядным» адаптером xHCI видит `CCS=0` — это ограничение адаптера, не порта.
+- **Тач при холодной загрузке.** Прошивка HX83102E не отчитывается о загрузке
+  (`FW did not report reload`), после сна/пробуждения работает. Нужен цикл
+  питания рельса в probe; первая попытка фикса не загрузилась и откачена.
+- **Дампы и прошивка.** Полный дамп eMMC (58 разделов) — `dumps/`, пакет для
+  SP Flash Tool — `firmware/` и `firmware-128/` (6/128), инструкция —
+  `firmware/README.md`. Каталоги в `.gitignore`.
+- **Служебные Android-разделы скрыты** из udisks правилом
+  `99-t1100-hide-android-parts.rules`, в интерфейсе виден только `userdata`.
+
 > ~~**Статус (02.11.2026): Ubuntu 24.04 с systemd установлена на eMMC; загрузка
 > подтверждена косвенно (петли сбросов нет), лог подтверждения — следующий шаг.
 > Не хватает: USB-UDC (сеть), KMS-панели, GPU, KDE.**~~
@@ -203,12 +230,12 @@ sha256sum build/remote/dtbs/mt6771-fplus-t1100.dtb
 | eMMC | ✅ HS400, `mmcblk0` 57.6 ГиБ, разделы видны |
 | Логи без UART/экрана | ✅ окно LK из cmdline (`ramoops.mem_address=0x54410000`, `mem_size=0xe0000`, 0042) + чтение из рекавери (`/proc/last_kmsg`) |
 | USB (mtu3/UDC + host) | ✅ RNDIS `1d6b:0104`, `usb0 = 10.42.66.66`, SSH; host — флешка `sda` 7.4 GB, VBUS 5.05 В (0060/0061/0067), helper `t1100-usb-role`; возврат host→device без reboot |
-| Ubuntu rootfs | ✅ Ubuntu 26.04 LTS arm64 + KDE Plasma 6.6.4 на `p54` (ext4, метка `ubuntu`), 8 ядер |
+| Система | ✅ ALT Linux 2026.11 arm64 + Phosh на `p54` (ext4), 8 ядер (ранее Ubuntu 26.04 + KDE Plasma 6.6.4) |
 | DRM/KMS + панель BOE TV110XUM (IT6112) | ✅ `card1-DSI-1` 1600×2176@58.93; сдвиг кадра убран (0046/0052), resume после s2idle восстанавливает мост (0074) |
 | HDMI (DPI0 → IT66121) | ✅ `card1-HDMI-A-1`, расширенный рабочий стол 1280×720@60 (0078); ограничение — 12-битная DPI-шина (1080p/2K невозможны), на части мониторов зелёные точки по TMDS; звук HDMI не заявлен |
 | GPU panfrost (Mali-G72) | ✅ Mesa 26.0.3, GLES 3.1; DVFS 698/743/800 МГц (0058/0059), `glmark2` Score 1409/1583; в отдельных shader-сценах — `js fault`/`gpu sched timeout` (0075/0076, известный баг) |
 | CPU DVFS | ✅ `mtk-cpufreq` (0062/0063), 793…1989 МГц, 650/700…1050 мВ, `schedutil`; thermal CPU-зона 80/90/115 °C (0064), throttling проверен; SVS пока выключен |
-| Wayland / KDE | ✅ KDE Plasma 6.6.4 + SDDM autologin root; тач HX83102E (0040/0043/0047/0048/0050/0051) и клавиатура работают |
+| Wayland / Phosh | ✅ Phosh (ранее KDE Plasma 6.6.4 + SDDM); тач HX83102E (0040/0043/0047/0048/0050/0051) и клавиатура работают; при холодной загрузке тач требует цикла питания |
 | Звук | ✅ динамик и микрофон; маршрут `UL1_CH1/CH2 ADDA_UL`, PipeWire source `alsa_mic` |
 | Wi-Fi / BT | ✅ встроенный CONSYS_6771/MT6631: `wlan0`, MAC `08:26:ae:b1:87:39`, скан, ассоциация, DHCP `192.168.2.146/24`, автозапуск `t1100-wifi.service` (0039–0045), WEXT-скорость (0046; power save выключен, 0047); ✅ Bluetooth: HCI на STP `t1100_bt` → `hci0`, скан/паровка/A2DP, автозапуск `t1100-bt.service` (патч 0077); ✅ USB Wi-Fi донгл AC650 (`rtl8xxxu`) тоже проверен |
 
