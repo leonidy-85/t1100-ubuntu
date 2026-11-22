@@ -1,0 +1,12 @@
+[Unit]
+Description=T1100 boot splash on the panel
+After=systemd-udev-settle.service
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/t1100-boot-splash
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
