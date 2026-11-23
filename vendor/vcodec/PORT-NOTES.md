@@ -183,3 +183,35 @@ task; it was **not** done.
   `INC/DEC_PWR_USER`, `SET_FRAME_INFO` (currently `-ENOTTY`).
 - Buffer allocation is intentionally absent (matches vendor source: no
   `dma_alloc`/`ion_`/`m4u`; HAL uses `/dev/ion`).
+
+## 23.11.2026 — состояние после дня отладки (AP-side VDEC)
+
+Что работает на железе (планшет 172.17.141.157, ядро 6.12.114-wifi1):
+- модуль `vcodec_kernel_driver` собран под точный конфиг живого ядра
+  (`/home/l/live-out`, vermagic `6.12.114-wifi1`), без правки байтов;
+- `mtk-vcodec-dec` отвязан (`echo 16020000.video-codec > .../unbind`),
+  вендорский модуль получает IRQ 400 (`MT_SYSIRQ 250`, Level);
+- `compat LOCKHW ret=0` — 32-битный ABI HAL проходит целиком;
+- аллокатор: `VCODEC_ALLOC_NON_CACHE_BUFFER` → `alloc_pages` + реальный PA,
+  `mmap` по `virt_to_phys(kva)` с `pgprot_writecombine` (SIGBUS ушёл);
+- ION-шим `tools/ionshim_vc.c` → `libionshim_vc4.so`: ALLOC через Vcodec,
+  page-align mmap, defer-free, alias-чистка; HAL видит `pa=` и пишет в буферы.
+
+Где стоит:
+- `Vdec_Drv_H264_decodeEx` доходит до железа, но поток не разбирается:
+  `Fail to parse Slice header data structure` (hw_power=1) /
+  `Fail to Fetch Barrel shifter` (hw_power=0), кадров нет;
+- затем вендорский HAL падает SIGSEGV: пойман `addr=0x0 pc=0x0` — вызов
+  через NULL-указатель, `lr=0xf5dbcfeb`, `r2=0x2`, `r3=0xf66c3080`;
+  библиотека по `lr` пока не определена (нужен дамп `/proc/self/maps`
+  в момент падения: `tools/device/crashinfo.c`, см. /tmp/opencode).
+
+В DT `video-codec@16020000` (`mediatek,mt8183-vcodec-dec`) **нет `iommus`** —
+VDEC работает без IOMMU, версия «нужен MVA» отпадает. Есть
+`power-domains = <0x47 0x0a>` и `clocks = <0x71 0>` (имя `vdec`);
+genpd-путь в модуле реализован (`vcodec_vdec_genpd_get`).
+
+Следующие шаги: (1) поймать `lr`-регион через дамп maps в обработчике
+SIGSEGV; (2) сравнить формат AU/CSD с тем, что HAL отдаёт на эталонном
+Android (там `/dev/Vcodec` живой и `media.codec` работает);
+(3) при подтверждении — добить парсер/формат, затем собрать YUV.
