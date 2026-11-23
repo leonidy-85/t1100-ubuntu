@@ -164,10 +164,13 @@
 - Wi-Fi — через WMT/CONNSYS, вендорский `wlan_drv_gen3`; BT — HCI UART H4 через
   тот же WMT (сток: `CONFIG_BT_HCIUART_H4=y`).
 - Прошивка: **`/vendor/firmware/`** (`WIFI_RAM_CODE_6759`, `WMT_SOC.cfg`,
-  `soc3_0_ram_*.bin`, `mt6631_fm_*` и т.п.). В Ubuntu-rootfs `/lib/firmware` нет.
+  `soc3_0_ram_*.bin`, `mt6631_fm_*` и т.п.). В rootfs `/lib/firmware` их нет.
 - **Mainline 6.12: поддержки нет** — ни драйвера, ни узлов в DTS; `mt76` этот
-  чип не покрывает, для BT готового CONNSYS/WMT-пути тоже нет. Сейчас Wi-Fi и
-  BT не работают, сеть — только RNDIS по USB. Порт вендорского стека — фаза 5.
+  чип не покрывает, для BT готового CONNSYS/WMT-пути тоже нет. Вендорский
+  стек портирован патчами и работает: **Wi-Fi** — wlan0/DHCP, автоподключение,
+  self-heal watchdog; **GPS** — вендорский `mnld`+HAL в chroot
+  (`docs/gps-handoff.md`); **BT** — в работе (HCI-драйвер `t1100_bt` поверх
+  STP/BTIF); **FM** — заблокирован firmware (`docs/fm-port-log.md`).
 - USB: MUSB-HDRC + XHCI (база `0x11200000`), OTG. В mainline
   `dr_mode = "peripheral"`, host/OTG не поднят (`tcpc` отключён, `tcpci` не
   находит `connector`), поэтому USB-донгл Wi-Fi/BT — не быстрый обход.

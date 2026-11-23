@@ -1,17 +1,20 @@
-# AGENTS.md — проект t1100-ubuntu (порт Ubuntu с KMS на MT6771)
+# AGENTS.md — проект t1100-ubuntu (порт Linux с KMS на MT6771)
 
 Правила для агентов opencode. Читать в начале сессии.
 
 ## Что это
 
-Проект порта Linux (mainline или near-mainline) на планшет **Fplus T1100**
+Проект порта Linux (mainline) на планшет **Fplus T1100**
 (SoC **MT6771 / MT8788 = Helio P60/P70**, GPU **Mali-G72 MP3 Bifrost**) с целью
-**Ubuntu + Wayland/GNOME + DRM/KMS + panfrost**. Сейчас — фазы 1–3 закрыты:
-mainline 6.12 грузится до Ubuntu 24.04 (systemd), панель работает, KMS закрыт
-`modetest`, panfrost даёт GLES 3.1 (`kmscube` 56.4 fps, `glmark2` Score 452);
-фаза 4 в работе — Weston 13 уже выводит панель, остались тач и десктоп.
-Wi-Fi/BT в mainline не поддержаны (фаза 5). Актуальное состояние —
-`docs/STATUS.md`.
+**рабочий стол + DRM/KMS + panfrost**. Фазы 0–3 закрыты: mainline 6.12
+(патчи `patches/` 0001–0082) доходит до systemd, панель работает, KMS
+закрыт `modetest`, panfrost даёт GLES 3.1 (`kmscube` 56.4 fps, `glmark2`
+Score 452). Userspace — **ALT Mobile + Phosh** (до 21.11 был Ubuntu+KDE,
+есть бэкап старого rootfs): тач, Waydroid с Android 13, Wi-Fi и GPS
+работают. В работе: BT (свой HCI-драйвер `t1100_bt` поверх STP/BTIF,
+был рабочий прогон 16.11), аппаратный видеодекод (развилка — ADR `0004`),
+DVFS GPU. FM заблокирован firmware (`docs/fm-port-log.md`). Актуальное
+состояние — `docs/STATUS.md`.
 
 ## Обязательный контекст
 
@@ -128,5 +131,7 @@ master` (проверено 10.11). Правило: тяжёлые прогон�
 
 ## Не-цели v1
 
-Модем, камера, звук, Android/hybris, Ubuntu Touch — вне скоупа, если не
-заработают «сами».
+Модем, камера, HEVC-декод, Ubuntu Touch — вне скоупа, если не заработают
+«сами». Звук базово работает (динамик/наушники через UCM, приложения
+выбора выхода); автодетект гарнитуры (ACCDET) не сделан. Android — только
+контейнером Waydroid (работает), hybris не нужен.

@@ -1,6 +1,7 @@
 # План порта
 
-Цель: **Ubuntu + Wayland/GNOME** с **DRM/KMS** и **GPU (panfrost)** на
+Цель: **рабочий стол Linux** (сейчас ALT Mobile + Phosh, исходно
+Ubuntu + Wayland/GNOME) с **DRM/KMS** и **GPU (panfrost)** на
 Fplus T1100 (MT6771). План итеративный; каждая фаза заканчивается проверяемым
 результатом.
 
@@ -157,5 +158,5 @@ Fplus T1100 (MT6771). План итеративный; каждая фаза з�
 ## Критерии успеха v1
 1. `kmscube` на панели (KMS).
 2. `glmark2`/`es2gears` с GPU (panfrost).
-3. GNOME/Wayland на дисплее.
+3. Wayland-оболочка на дисплее (выполнено: Phosh).
 4. SSH/сеть, стабильный ввод.
