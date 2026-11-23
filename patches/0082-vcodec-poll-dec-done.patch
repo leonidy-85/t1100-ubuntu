@@ -1,26 +1,28 @@
 --- a/vendor/vcodec/mt6771/videocodec_kernel_driver.c
 +++ b/vendor/vcodec/mt6771/videocodec_kernel_driver.c
-@@ -1159,6 +1159,19 @@
+@@ -1159,6 +1159,21 @@
  	return 0;
  }
  
 +static void vcodec_dump_vdec_state(const char *tag)
 +{
-+	pr_info("[VCODEC][DUMP] %s GCON=%08x MISC28=%08x MISCa4=%08x MISC14=%08x VLD84=%08x VLDe8=%08x VLD2d8=%08x\n",
++	/*
++	 * Do not touch the VLD block here.  Reading VLD registers while the
++	 * decoder is idle/stuck hangs the SMI bus on this board (verified
++	 * twice from userspace and once from this timeout path).
++	 */
++	pr_info("[VCODEC][DUMP] %s GCON=%08x MISC28=%08x MISCa4=%08x MISC14=%08x\n",
 +		tag,
 +		VDO_HW_READ(KVA_VDEC_GCON_BASE),
 +		VDO_HW_READ(KVA_VDEC_MISC_BASE + 0x28),
 +		VDO_HW_READ(KVA_VDEC_MISC_BASE + 0xa4),
-+		VDO_HW_READ(KVA_VDEC_MISC_BASE + 0x14),
-+		VDO_HW_READ(KVA_VDEC_VLD_BASE + 0x84),
-+		VDO_HW_READ(KVA_VDEC_VLD_BASE + 0xe8),
-+		VDO_HW_READ(KVA_VDEC_VLD_BASE + 0x2d8));
++		VDO_HW_READ(KVA_VDEC_MISC_BASE + 0x14));
 +}
 +
  void dec_isr(void)
  {
  	enum VAL_RESULT_T    eValRet;
-@@ -1194,7 +1207,7 @@
+@@ -1194,7 +1209,7 @@
  
  	/* Clear interrupt */
  	VDO_HW_WRITE(KVA_VDEC_MISC_BASE+41*4,
@@ -29,7 +31,7 @@
  	VDO_HW_WRITE(KVA_VDEC_MISC_BASE+41*4,
  		VDO_HW_READ(KVA_VDEC_MISC_BASE + 41*4) & ~0x10);
  
-@@ -1208,6 +1221,24 @@
+@@ -1208,6 +1223,24 @@
  }
  
  
@@ -54,7 +56,7 @@
  void enc_isr(void)
  {
  	enum VAL_RESULT_T  eValRet;
-@@ -2022,8 +2053,12 @@
+@@ -2022,8 +2055,12 @@
  		DecIsrEvent.u4TimeoutMs = val_isr->u4TimeoutMs;
  		spin_unlock_irqrestore(&DecIsrLock, ulFlags);
  
