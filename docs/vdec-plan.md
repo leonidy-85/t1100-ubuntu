@@ -181,3 +181,48 @@ OMX service запускаются, `strace` подтверждает загру
 Варианты: (1) порт `Vcodec` + 32-битный `libion`-шим над DMA-BUF/memfd;
 (2) порт MTK ION; (3) переписать HAL. Пока цель — H.264; HEVC по-прежнему
 вне реалистичного пути (mainline HEVC только LAT, вендор — OMX-блоб).
+
+## 8. Legacy/stateful и VP9: прошивка MT8183 отвергает оба пути (23.11.2026)
+
+Проверены две оставшиеся гипотезы: (а) прошивка 2022 г. понимает только
+legacy VSI, а не stateless; (б) проблема H.264-специфична, и VP9 пойдёт.
+
+### Legacy H.264
+
+- В match-таблице `mtk_vcodec_dec_drv.c` для `mediatek,mt8183-vcodec-dec`
+  временно подставлен `mtk_vdec_8173_pdata` (stateful,
+  `uses_stateless_api=false`, `MTK_VDEC_PURE_SINGLE_CORE`); лог подтвердил
+  `stateless=0`.
+- Написан статический клиент `/tmp/v4l2_stateful_h264` (M2M MPLANE, output
+  H264, capture MT21C, по одному NAL на буфер).
+- Результат: SPS (`type=7`, 33 Б) и PPS (`type=8`, 9 Б) дают
+  `failure=721539` (`0xB0283`), IDR (`type=5`, 4985 Б) — `196738`
+  (`0x30082`, `H264_ERR_NOT_VALID`). Init/ABI — `status=0`, `abi=2`.
+- Попутно найден и исправлен oops: legacy `vdec_h264_decode()` копировал PPS
+  в SCP DMEM через `memcpy`, компилятор делал unaligned store на device
+  memory (`FSC=0x21`). Заменено на побайтовый `writeb()`.
+
+### VP9
+
+- `gst-launch-1.0 ... ! vp9enc ! avmux_ivf ! filesink` → `/tmp/test.ivf`
+  (7522 Б, `DKIF`/`VP90`).
+- Клиент `/tmp/v4l2_stateful_vp9` (тот же M2M, `V4L2_PIX_FMT_VP9`, разбор
+  IVF) на `vdec_vp9_init` получает `send fail vpu_id=3 msg_id=A000
+  status=-5`: прошивка не регистрирует VP9-сервис, есть только H.264
+  (IPI id=1). Строки `vp9` в `scp.img` — не сервис.
+
+### Сверка с ChromeOS 5.10
+
+Структуры `mtk_h264_sps_param`, `mtk_h264_pps_param`,
+`mtk_h264_dec_slice_param`, `vdec_h264_vsi`, `vdec_pic_info` в 5.10
+**идентичны** 6.12 (VSI 1784 Б); `codec_type` там тоже не заполняется.
+Рассинхрон VSI/ABI исключён.
+
+### Вывод
+
+Mainline SCP-путь упирается в несовместимость mt8183-прошивки с VDEC
+MT6771: H.264 отвергается и в stateless, и в legacy, VP9-сервиса нет.
+IOMMU, клоки, power-domain, SPS/PPS, VSI/ABI, длина буфера исключены.
+Дальше — либо MT6771-специфичная VDEC-прошивка (в стоковой SCP её нет),
+либо возврат к варианту A: вендорский AP-side `/dev/Vcodec` + 32-битный
+HAL, начиная с портов LARB1 (`smi_bus_prepare_enable` — заглушка).
