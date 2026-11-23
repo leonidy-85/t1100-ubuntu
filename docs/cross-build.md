@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| хост | `172.17.141.172` |
-| доступ | `l` / пароль `0` (`sudo` тот же пароль), 12 ядер, 15 ГБ RAM, Ubuntu 26.04 |
+| хост | `172.17.141.124` (hostname `ai1`; до 23.11 был `172.17.141.172`) |
+| доступ | ключ `~/.ssh/id_ed25519` (алиас `ov-build`); пароль `l`/`0` (`sudo` тот же), 12 ядер, 30 ГБ RAM, Ubuntu 26.04 |
 | тулчейн | `gcc-aarch64-linux-gnu` (GCC 15), `binutils-aarch64-linux-gnu` |
 | прочее | `meson`, `ninja-build`, `ccache`, `rsync`, `bison`, `flex`, `libelf-dev`, `libssl-dev`, `debootstrap` |
 | каталоги | `/home/l/t1100-ubuntu-build/{src,out}` — ядро, `/home/l/t1100-tools` — userspace, `/home/l/t1100-sysroot` — arm64-sysroot |
