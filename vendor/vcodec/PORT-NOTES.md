@@ -215,3 +215,28 @@ genpd-путь в модуле реализован (`vcodec_vdec_genpd_get`).
 SIGSEGV; (2) сравнить формат AU/CSD с тем, что HAL отдаёт на эталонном
 Android (там `/dev/Vcodec` живой и `media.codec` работает);
 (3) при подтверждении — добить парсер/формат, затем собрать YUV.
+
+### 23.11.2026, вечер — где именно стоит декодер
+
+Инструментированный модуль (`pr_info` в ioctl/mmap/power) дал точную картину:
+- HAL открывает `/dev/Vcodec`, делает серию `VCODEC_ALLOC_NON_CACHE_BUFFER`
+  (в т.ч. два запроса по 5 МБ, которые `alloc_pages` не может — HAL это терпит),
+  вызывает `VCODEC_INC_DEC_EMI_USER` (0x17) и затем падает SIGSEGV
+  (иногда) — `pc=0`, вызов через NULL-указатель сразу после open.
+- Регистры мапятся нормально: `pfn 0x16000000`, `0x16020000`, `0x16021000`
+  (syscon + VDEC), а также буферы по PA.
+- `VDEC genpd on/off` работает; `compat LOCKHW ret=0`.
+- **IRQ 400 зарегистрирован, но счётчик прерываний = 0** — железо не
+  поднимает прерывание, поэтому `MtkOmxVdecDecodeThread` ловит
+  `WAIT timeout`, а уже потом парсер пишет `Fail to parse Slice header`.
+- В логе HAL: `Failed to open ged device`, `Open SMI(/dev/MTK_SMI)
+  failed`, `BWC: Failed to switch SMI/EMI profile` — вендорских
+  SMI/GED/EMI-драйверов в mainline нет; `smi_bus_prepare_enable()`
+  в порте — заглушка.
+
+Рабочая гипотеза: VDEC не начинает работу (или не может читать битстрим),
+потому что не включён SMI/LARB-путь и/или регистровое окно пишется при
+выключенном домене. Прежде чем копать HAL дальше, нужно проверить
+ненулевые значения регистров VDEC сразу после `vdec_power_on` (лог
+`after clk`, собран в vc_clk.ko) и убедиться, что запись из userspace
+доходит до железа.
