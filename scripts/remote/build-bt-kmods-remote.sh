@@ -18,8 +18,9 @@
 # Env:
 #   KERNEL_OUT   out-tree to build in (default /home/l/t1100-ubuntu-build/out-wifi)
 #   KERNEL_SRC   kernel source tree (default /home/l/t1100-ubuntu-build/src)
-#   LOCALVERSION must equal the out-tree's localversion suffix (derived from
-#                include/config/kernel.release when not given)
+#   LOCALVERSION pass ONLY when the out-tree's suffix is not in CONFIG_LOCALVERSION;
+#                the script never derives it automatically (a wrong override
+#                yields a doubled suffix like -wifi1-wifi1)
 #   WIFI_SYM     wmt_drv Module.symvers for t1100_bt
 #                (default /home/l/t1100-wifi-build-own48/work/common/Module.symvers;
 #                 part 2 is skipped when the file does not exist)
@@ -34,6 +35,7 @@ KERNEL_OUT=${KERNEL_OUT:-/home/l/t1100-ubuntu-build/out-wifi}
 KERNEL_SRC=${KERNEL_SRC:-/home/l/t1100-ubuntu-build/src}
 WIFI_SYM=${WIFI_SYM:-/home/l/t1100-wifi-build-own48/work/common/Module.symvers}
 BT_SRC=${BT_SRC:-/home/l/t1100-ubuntu-build/bt}
+LOCALVERSION=${LOCALVERSION-}
 JOBS=${JOBS:-12}
 for arg in "$@"; do
 	case "$arg" in
@@ -50,15 +52,15 @@ grep -q '^CONFIG_BT=m' "$KERNEL_OUT/.config" || {
 	echo "в .config нет CONFIG_BT=m (нужен configs/t1100-wifi.fragment)" >&2; exit 1; }
 
 cd "$KERNEL_OUT" || exit 1
-if [ -z "$LOCALVERSION" ] && [ -f include/config/kernel.release ]; then
-	LOCALVERSION=$(sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+//' include/config/kernel.release)
-fi
 export PATH="$HOME/.ccache-bin:$PATH" CCACHE_DIR="${CCACHE_DIR:-$HOME/.ccache-t1100}"
-MK="make -C $KERNEL_SRC O=$PWD ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LOCALVERSION=$LOCALVERSION"
+MK="make -C $KERNEL_SRC O=$PWD ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-"
+# Суффикс обычно живёт в CONFIG_LOCALVERSION (для out-wifi это -wifi1);
+# явный LOCALVERSION добавляем только если его передали снаружи.
+[ -n "$LOCALVERSION" ] && MK="$MK LOCALVERSION=$LOCALVERSION"
 
 REL_BEFORE=$(cat include/config/kernel.release 2>/dev/null)
 echo "kernel out : $KERNEL_OUT"
-echo "release    : $REL_BEFORE (LOCALVERSION='$LOCALVERSION')"
+echo "release    : $REL_BEFORE"
 
 # Order matters for the symvers folding: crypto first, then bluetooth, then
 # the profile modules that reference bluetooth's exports.
@@ -96,6 +98,7 @@ cat vmlinux.symvers /tmp/btsymvers-"$STAMP"-*.sy \
 	| awk -F'\t' '{ if (!seen[$2]++) print }' > Module.symvers
 echo "Module.symvers: $(wc -l < Module.symvers) symbols (release $REL_AFTER)"
 
+ALL="$TARGETS"
 # --- Часть 2: t1100_bt (HCI over STP/BTIF) из репозитория ---
 if [ -d "$BT_SRC" ] && [ -f "$WIFI_SYM" ]; then
 	echo "== t1100_bt (KBUILD_EXTRA_SYMBOLS=$WIFI_SYM)"
@@ -104,13 +107,12 @@ if [ -d "$BT_SRC" ] && [ -f "$WIFI_SYM" ]; then
 	rc=$?
 	echo "   rc=$rc errors=$(grep -c 'error:' /tmp/btkmods-t1100bt.log)"
 	[ $rc -ne 0 ] && { rc_all=1; tail -20 /tmp/btkmods-t1100bt.log; }
+	ALL="$ALL $BT_SRC/t1100_bt.ko $BT_SRC/t1100_bt_probe.ko"
 else
 	echo "== t1100_bt пропущен (нет $BT_SRC или $WIFI_SYM)"
 fi
 
 echo "== .ko"
-ALL="$TARGETS"
-[ -f "$BT_SRC/t1100_bt.ko" ] && ALL="$ALL t1100_bt.ko t1100_bt_probe.ko"
 for t in $ALL; do
 	[ -f "$t" ] || { echo "  НЕТ $t"; rc_all=1; continue; }
 	v=$(modinfo -F vermagic "$t" 2>/dev/null)
