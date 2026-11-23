@@ -1,6 +1,6 @@
 [Unit]
 Description=T1100 internal Bluetooth (MT6631 over STP)
-After=t1100-wifi.service
+After=t1100-wifi-early.service
 Before=bluetooth.service
 Wants=bluetooth.service
 
