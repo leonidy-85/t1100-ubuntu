@@ -1,0 +1,10 @@
+#!/bin/sh
+# Выключить Bluetooth и вернуть GPS (парный к t1100-bt-on).
+set -e
+
+hciconfig hci0 down 2>/dev/null || true
+systemctl stop bluetooth.service || true
+systemctl mask bluetooth.service
+modprobe -r t1100_bt 2>/dev/null || true
+systemctl start t1100-internal-gps
+echo "t1100-bt-off: BT выключен, GPS запущен"

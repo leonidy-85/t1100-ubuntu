@@ -1,0 +1,28 @@
+#!/bin/sh
+# Включить встроенный Bluetooth (MT6631 поверх STP/BTIF).
+#
+# Ограничение (23.11.2026): BT и GPS взаимно исключают друг друга в текущем
+# стеке — при работающем mnld/gps_drv WMT func_on(BT) возвращает 1, а
+# попытки включить BT под GPS клинят CONSYS (вплоть до refcount -1 у wmt_drv).
+# Вендорский порядок предполагает доставку soc3_0_ram_bt через wmt_launcher;
+# через наш STP-путь этот патч не работает (см. docs/bt-port-log.md).
+#
+# t1100-bt-off возвращает GPS.
+set -e
+
+systemctl stop t1100-internal-gps || true
+modprobe -r gps_drv 2>/dev/null || true
+sleep 1
+
+modprobe af_alg
+modprobe algif_hash
+modprobe algif_skcipher
+modprobe algif_aead
+modprobe ecdh_generic
+modprobe bluetooth
+modprobe t1100_bt
+
+hciconfig hci0 up
+systemctl unmask bluetooth.service
+systemctl restart bluetooth.service
+echo "t1100-bt-on: BT поднят (GPS остановлен); вернуть — t1100-bt-off"
