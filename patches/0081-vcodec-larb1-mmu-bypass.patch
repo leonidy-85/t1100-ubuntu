@@ -1,0 +1,97 @@
+--- a/vendor/vcodec/mt6771/videocodec_kernel_driver.c
++++ b/vendor/vcodec/mt6771/videocodec_kernel_driver.c
+@@ -749,8 +749,46 @@
+ static struct platform_device *vcodec_larb_pdev;
+ static struct clk *vcodec_larb_clk_apb;
+ static struct clk *vcodec_larb_clk_smi;
++static void __iomem *vcodec_larb_base;
+ static bool vcodec_larb_held;
+ 
++#define VCODEC_LARB1_MMU_CON(i)	(0x380 + ((i) * 4))
++
++static void vcodec_larb_dump_mmu(const char *tag)
++{
++	u32 v[7];
++	int i;
++
++	if (!vcodec_larb_base)
++		return;
++	for (i = 0; i < 7; i++)
++		v[i] = readl(vcodec_larb_base + VCODEC_LARB1_MMU_CON(i));
++	pr_info("[VCODEC] LARB1 %s MMU_CON: %08x %08x %08x %08x %08x %08x %08x\n",
++		tag, v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
++}
++
++/*
++ * The 32-bit HAL gets physical addresses from the ION shim.  If the SMI
++ * port still has F_MMU_EN set (bootloader default or a previous IOMMU
++ * attach), the larb sends those physical addresses through the M4U and the
++ * VDEC never sees the bitstream.  Force the VDEC ports into bypass mode.
++ */
++static void vcodec_larb_mmu_bypass(void)
++{
++	int i;
++
++	if (!vcodec_larb_base)
++		return;
++	for (i = 0; i < 7; i++) {
++		u32 v = readl(vcodec_larb_base + VCODEC_LARB1_MMU_CON(i));
++
++		if (v & BIT(0)) {
++			v &= ~BIT(0);
++			writel(v, vcodec_larb_base + VCODEC_LARB1_MMU_CON(i));
++		}
++	}
++}
++
+ static int vcodec_larb_get(void)
+ {
+ 	struct device_node *np;
+@@ -776,6 +814,7 @@
+ 
+ 	vcodec_larb_clk_apb = of_clk_get(np, 0);
+ 	vcodec_larb_clk_smi = of_clk_get(np, 1);
++	vcodec_larb_base = of_iomap(np, 0);
+ 	of_node_put(np);
+ 
+ 	if (!IS_ERR_OR_NULL(vcodec_larb_clk_apb))
+@@ -785,6 +824,10 @@
+ 
+ 	ret = pm_runtime_get_sync(&pdev->dev);
+ 
++	vcodec_larb_dump_mmu("before");
++	vcodec_larb_mmu_bypass();
++	vcodec_larb_dump_mmu("after");
++
+ 	vcodec_larb_pdev = pdev;
+ 	vcodec_larb_held = true;
+ 	pr_info("[VCODEC] LARB1 on (clk apb=%d smi=%d, rpm=%d)\n",
+@@ -798,6 +841,10 @@
+ 	if (!vcodec_larb_held)
+ 		return;
+ 	pm_runtime_put_sync(&vcodec_larb_pdev->dev);
++	if (vcodec_larb_base) {
++		iounmap(vcodec_larb_base);
++		vcodec_larb_base = NULL;
++	}
+ 	if (!IS_ERR_OR_NULL(vcodec_larb_clk_smi))
+ 		clk_disable_unprepare(vcodec_larb_clk_smi);
+ 	if (!IS_ERR_OR_NULL(vcodec_larb_clk_apb))
+@@ -2809,6 +2856,17 @@
+ 	rHWLock.eDriverType = cp.eDriverType;
+ 	rHWLock.bSecureInst = cp.bSecureInst;
+ 
++	{
++		u32 *raw = (u32 *)&cp;
++
++		pr_info("[VCODEC] compat LOCKHW raw: %08x %08x %08x %08x %08x %08x %08x %08x type=%d\n",
++			raw[0], raw[1], raw[2], raw[3], raw[4], raw[5],
++			raw[6], raw[7], rHWLock.eDriverType);
++	}
++	/* The Aurora HAL sometimes leaves eDriverType at 0; we only decode H.264. */
++	if (rHWLock.eDriverType == 0)
++		rHWLock.eDriverType = VAL_DRIVER_TYPE_H264_DEC;
++
+ 	return unlock ? vcodec_unlockhw_kernel(&rHWLock)
+ 		      : vcodec_lockhw_kernel(&rHWLock);
+ }
