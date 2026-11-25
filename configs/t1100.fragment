@@ -141,6 +141,9 @@ CONFIG_SYSFS=y
 CONFIG_MFD_MT6370=y
 CONFIG_REGULATOR_MT6370=y
 CONFIG_DRM_PANEL_IT6112_BOE_TV110XUM_LB2=y
+# T800 (direct DSI0 HX8279 1200x1920): mainline driver, built in ahead of the
+# panel bring-up; the P1 T800 DTS keeps dsi0/panel disabled.
+CONFIG_DRM_PANEL_BOE_HIMAX8279D=y
 
 # --- bring-up debug: userspace access to SoC registers ----------------------
 # devmem access is needed to inspect the DSI/RDMA/OVL registers while the
