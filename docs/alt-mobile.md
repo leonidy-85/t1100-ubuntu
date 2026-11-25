@@ -237,6 +237,81 @@ speaker-test -D hw:0,0 -c 2 -r 48000 -t sine -l 1
   должен подниматься автоматически. Адрес может измениться по DHCP —
   смотреть `ip -br addr show wlan0`.
 
+## opencode на планшете (24.11.2026)
+
+Установлен тот же CLI, что на ноутбуке: **opencode v2.4.1**, standalone-бинарь
+под `aarch64`+glibc (ALT Sisyphus 2026.11, glibc 2.43 — подходит; Node.js не
+нужен, бинарь self-contained на Bun).
+
+- Установка шла **под `user`**, не под root: TUI запускается из Phosh-сессии,
+  а `/root` для uid 1000 закрыт. Команда:
+  `su - user -c 'curl -fsSL https://opencode.ai/v2/install | bash'`
+  (скачано ~123 МБ архива, распаковано 258 МБ; установщик сам дописал
+  `export PATH=/home/user/.opencode/bin:$PATH` в `~/.bashrc`).
+- Бинарь: `/home/user/.opencode/bin/opencode`; при первом запуске поднимается
+  фоновый сервис `opencode serve --service`.
+- Авторизация: `~/.local/share/opencode/auth.json` (0600, uid 1000) —
+  скопирован с ноутбука, провайдеры `deepseek` и `opencode-go`.
+  Конфиг — `~/.config/opencode/opencode.jsonc`: `$schema` +
+  `"model": "deepseek/deepseek-flash"`. MCP-серверы (gitlab/gitflic/
+  craft-anything) намеренно не переносились: им нужны env-секреты и node.
+- Запуск на экране: `kgx` (GNOME Console) → `opencode`; окно занимает весь
+  экран 2176×1600, TUI рендерится нормально, модель видна в строке ввода.
+  Проверено и без экрана: `opencode run "…"` по ssh отвечает.
+- **Память.** Порог здесь жёсткий: из 3498 МБ при живом Phosh + Waydroid +
+  Epiphany свободно ~0.3 ГБ, zram-swap забит на ~1.3 из 1.5 ГБ. TUI держит
+  ~177 МБ RSS, сервис — ещё ~260 МБ. Перед работой закрывать браузер,
+  при нехватке — `su - user -c 'opencode service stop'` (освобождает ~260 МБ)
+  или останавливать `waydroid-container`.
+- Не проверено вводом с экрана: Stevia-OSK для TUI (нужны `Ctrl`, `Esc`,
+  стрелки, `Shift+Tab`). Если OSK не отдаёт их — USB-клавиатура через OTG
+  (`mtu3`, USB-host уже работает).
+- **MCP gitflic.** Сервер живёт на ноутбуке: `mcp-shared` слушает
+  `127.0.0.1:8810` и проксирует `gitflic-mcp`. Наружу, только в USB-линк,
+  его отдаёт юнит `mcp-gitflic-usb.service`
+  (`socat TCP-LISTEN:8810,bind=10.42.66.67 → 127.0.0.1:8810`), т.е. в LAN
+  порт не выставлен. На планшете в `~/.config/opencode/opencode.jsonc`:
+  `mcp.servers.gitflic = {type: remote, url: http://10.42.66.67:8810/mcp,
+  oauth: false}`; проверка — `opencode mcp list` → `✓ gitflic connected`.
+  Токены при этом остаются на ноутбуке; на планшет дополнительно скопированы
+  их копии для git-операций с самого устройства (0600, uid 1000):
+  `~/.config/opencode/gitflic-mcp.env`, `secrets/gitflic_token`,
+  `secrets/gitflic_git_credentials`.
+- **Пароли `0`:** `root` и `user` (по просьбе; ALT хранит их в tcb,
+  yescrypt/sha512). Проверено: `ssh user@10.42.66.66` по паролю и `sudo`
+  из-под `user` работают, хеши сверены с `crypt("0")`. Для `root` в sshd
+  включён `PermitRootLogin yes` (было `without-password`, бэкап
+  `/etc/openssh/sshd_config.bak-*`): `ssh root@10.42.66.66` по паролю
+  пускает, проверено и по USB, и по Wi-Fi. Устройство в сети, так что это
+  осознанно слабые пароли на открытом порту 22.
+- **Связка ключей (gnome-keyring).** Коллекция `login` была заперта старым
+  паролем и **пуста** (`Items = []`), поэтому её не меняли, а пересоздали:
+  бэкап `~/.local/share/keyrings/login.keyring.bak-20261124-2333`,
+  новый ключ создан `printf '0\n' | gnome-keyring-daemon --replace --unlock
+  --components=secrets` — пароль `0`. Проверено: свежий демон с `--unlock` и
+  «0» открывает коллекцию (`Locked=false`), `secret-tool store/lookup`
+  работает. При обычном входе разблокировку делает PAM
+  (`pam_gnome_keyring` в `/etc/pam.d/greetd` и `/etc/pam.d/phosh`) — тем же
+  паролем `0`, так что рассинхрона с логином больше нет.
+  (`org.freedesktop.Secret.Service.SetAlias` в gnome-keyring 51.1 принимает
+  только алиас `default`, поэтому «Вход»/`login` через D-Bus не назначить —
+  используется файл `login.keyring`.)
+- **git на планшете:** поставлен `git 2.50.1` (ALT Sisyphus). Авторизация в
+  GitFlic — не basic-auth (логин/токен как пароль даёт 401), а заголовок
+  `Authorization: token <GITFLIC_TOKEN>`; он прописан в
+  `/home/user/.gitconfig` как `http.https://gitflic.ru/.extraHeader`
+  (токен берётся из скопированного `secrets/gitflic_token`). Тот же приём
+  использован на ноутбуке — с ним `git push` проходит, с `py6on:<token>`
+  в URL/credential-store — нет. Идентичность git скопирована
+  (`Андрей Маркин <py6on@yandex.ru>`).
+- **ssh host key сменился** после переезда на ALT: sshd (ALT) читает ключи из
+  `/etc/openssh/`, а не `/etc/ssh/`; действующий отпечаток ED25519 —
+  `SHA256:4XLZcU/Asf/iPj4KLIngAzvjDo2Tf7N4Egbcv4FV8kk`. Старые записи
+  `10.42.66.66` в `~/.ssh/known_hosts` удалены, новые добавлены.
+- Планшет сейчас виден и по Wi-Fi: `wlan0` = `172.17.141.191/24` (адрес по
+  DHCP и меняется — проверять `ip -br a show wlan0`, а не `192.168.2.52` из
+  раздела «Проверка»); вход `ssh root@<ip>` по ключу или паролю `0`.
+
 ## Ограничения
 
 - Тач T1100 по-прежнему не готов; для Phosh нужен USB-ввод (мышь/клавиатура).
