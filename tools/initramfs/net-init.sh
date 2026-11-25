@@ -4,6 +4,9 @@ export PATH=/bin
 mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev 2>/dev/null
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t tmpfs none /dev/shm 2>/dev/null
 mount -t tmpfs none /tmp
 mount -t configfs none /sys/kernel/config 2>/dev/null
 
