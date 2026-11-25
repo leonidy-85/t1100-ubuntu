@@ -1,0 +1,326 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 5 Nov 2026 14:53:44 +0300
+Subject: [PATCH] rtc: mt6397: reproduce the vendor MT6358 RTC power-down
+ sequence
+
+Patch 0033 wrote RTC_BBPU_KEY to BBPU and triggered WRTGR, i.e. exactly
+what mt6323_do_pwroff() does, but on this board the rails stay up, the
+kernel keeps running and USB keeps enumerating.
+
+The vendor power-down was recovered from the LK image
+(lk-verified.img, load base 0x56000000, file offset = VA - 0x55fffe00):
+mt_power_off() @0x5601b214 (prints "mt_power_off new", VA 0x56075184)
+tail-branches to rtc_power_off() @0x5601c510, which does much more than
+a single KEY write:
+
+  0x5601c4e0  RTC_AL_SEC (0x5a0) &= ~(BIT(6)|BIT(8)) + WRTGR
+  0x5601c3a4  PMIC 0x001e bits 1 and 3 = 1
+  0x5601c3be  PMIC 0x051a bit 2 = 0
+  0x5601c3cc  RTC_BBPU |= KEY|BIT(5) + WRTGR
+  0x5601c3f8  RTC 0x5ac bits[10:8] = 0b101 + WRTGR
+  0x5601c412  RTC_BBPU |= KEY|BIT(5) + WRTGR
+  0x5601c42e  RTC 0x5ae = 0x1a57, 0x2b68, then |= 0x100, 1 ms apart
+  0x5601c370  RTC_OSC32CON = 0x586a + WRTGR
+  0x5601c382  RTC_OSC32CON = 0x9136 + WRTGR
+  0x5601c524  RTC_BBPU = KEY|0x3
+  0x5601c530  RTC_AL_MASK = RTC_AL_MASK_DOW + WRTGR
+  0x5601c552  poll RTC_BBPU bit 1 == 0 (1 s budget)
+  0x5601c57e  RTC_BBPU |= KEY|BIT(5) + WRTGR
+  0x5601c5bc  pmic_power_hold(0): PMIC 0x0a08 bit 0 = 0
+
+The two steps 0033 was missing are BIT(5) next to KEY in BBPU and the
+release of the PMIC power hold (0x0a08 bit 0); LK writes neither
+CHRSTATUS nor CHG_EN and does not clear RTC_BBPU_AUTO. Both are
+reproduced verbatim, PMIC 0x001e/0x051a included, because the LK path
+sets them right before arming the power-down and the PMIC register map
+has no public description for them.
+
+The trigger/wait helpers are new atomic variants: ->power_off runs from
+do_kernel_power_off() with interrupts disabled, and the shared
+mtk_rtc_write_trigger()/regmap_read_poll_timeout() path calls
+usleep_range(), which is not usable there. Every step is logged with
+dev_info, and if the board is still alive after the command the handler
+reads BBPU back and warns like the upstream MT6323 driver does.
+---
+ drivers/rtc/rtc-mt6397.c       | 218 ++++++++++++++++++++++++++++++---
+ include/linux/mfd/mt6397/rtc.h |   9 ++
+ 2 files changed, 212 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/rtc/rtc-mt6397.c b/drivers/rtc/rtc-mt6397.c
+index 7806def2c..bb06ab57c 100644
+--- a/drivers/rtc/rtc-mt6397.c
++++ b/drivers/rtc/rtc-mt6397.c
+@@ -38,6 +38,26 @@ static int mtk_rtc_write_trigger(struct mt6397_rtc *rtc)
+ 	return ret;
+ }
+ 
++/*
++ * Registers and constants of the vendor power-down recipe.
++ *
++ * The two RTC offsets below are the ones LK uses (0x5ac/0x5ae, i.e. +0x24 and
++ * +0x26 from the RTC base 0x588); they have no name in the upstream register
++ * map, so they are kept as raw offsets.
++ */
++#define RTC_SPARE24			0x0024
++#define RTC_SPARE26			0x0026
++
++/* PMIC registers outside the RTC block that the same path touches. */
++#define MTK_PMIC_PD_REG_001E		0x001e	/* bits 1 and 3 are set   */
++#define MTK_PMIC_PD_REG_051A		0x051a	/* bit 2 is cleared       */
++#define MTK_PMIC_PWRHOLD_REG		0x0a08	/* bit 0: PMIC power hold */
++#define MTK_PMIC_PWR_STAT_REG		0x0468	/* read back for the log  */
++
++#define MTK_RTC_PD_TRIGGER_TIMEOUT_US	100000	/* WRTGR latch, 100 ms    */
++#define MTK_RTC_PD_SETTLE_TIMEOUT_US	1000000	/* vendor budget: 1 s     */
++#define MTK_RTC_PD_STEP_DELAY_US	1000	/* vendor udelay(1 ms)    */
++
+ static irqreturn_t mtk_rtc_irq_handler_thread(int irq, void *data)
+ {
+ 	struct mt6397_rtc *rtc = data;
+@@ -245,6 +265,68 @@ static const struct rtc_class_ops mtk_rtc_ops = {
+ 	.set_alarm  = mtk_rtc_set_alarm,
+ };
+ 
++/*
++ * Trigger latch write, atomic-safe variant for the power-off path.
++ *
++ * mtk_rtc_write_trigger() polls with regmap_read_poll_timeout(), i.e. it
++ * calls usleep_range(), while ->power_off runs from the sys-off chain with
++ * interrupts disabled (arch/arm64/kernel/process.c: machine_power_off() ->
++ * do_kernel_power_off()). Use the _atomic flavour (udelay) here.
++ */
++static int mtk_rtc_write_trigger_atomic(struct mt6397_rtc *rtc)
++{
++	unsigned int data;
++	int ret;
++
++	ret = regmap_write(rtc->regmap, rtc->addr_base + rtc->data->wrtgr, 1);
++	if (ret < 0)
++		return ret;
++
++	return regmap_read_poll_timeout_atomic(rtc->regmap,
++					       rtc->addr_base + RTC_BBPU, data,
++					       !(data & RTC_BBPU_CBUSY),
++					       MTK_RTC_POLL_DELAY_US,
++					       MTK_RTC_PD_TRIGGER_TIMEOUT_US);
++}
++
++static int mtk_rtc_pd_write(struct mt6397_rtc *rtc, const char *what, u32 reg,
++			    u16 mask, u16 val)
++{
++	struct device *dev = rtc->rtc_dev->dev.parent;
++	int ret;
++
++	if (mask == 0xffff)
++		ret = regmap_write(rtc->regmap, reg, val);
++	else
++		ret = regmap_update_bits(rtc->regmap, reg, mask, val);
++
++	if (ret < 0)
++		dev_err(dev, "power-off: %s: write %#06x failed: %d\n",
++			what, reg, ret);
++	else
++		dev_info(dev, "power-off: %s: %#06x = %#06x (mask %#06x)\n",
++			 what, reg, val & mask, mask);
++
++	return ret;
++}
++
++/* RTC_BBPU |= RTC_BBPU_KEY | RTC_BBPU_PWREN, read-modify-write like LK. */
++static void mtk_rtc_pd_bbpu_or(struct mt6397_rtc *rtc, const char *what)
++{
++	unsigned int val;
++	int ret;
++
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_BBPU, &val);
++	if (ret) {
++		dev_err(rtc->rtc_dev->dev.parent,
++			"power-off: read BBPU failed: %d\n", ret);
++		return;
++	}
++
++	mtk_rtc_pd_write(rtc, what, rtc->addr_base + RTC_BBPU, 0xffff,
++			 val | RTC_BBPU_KEY | RTC_BBPU_PWREN);
++}
++
+ /*
+  * Power off through the RTC block of the PMIC.
+  *
+@@ -253,35 +335,141 @@ static const struct rtc_class_ops mtk_rtc_ops = {
+  * them (include/linux/mfd/mt6397/rtc.h), only the WRTGR offset differs and
+  * that is already in rtc->data->wrtgr. MT6323 has a dedicated
+  * "mt6323-pwrc" MFD cell and driver for this
+- * (drivers/power/reset/mt6323-poweroff.c), but mt6397-core.c creates that
+- * cell for MT6323 only, so MT6358/MT6397 have no power-off handler at all and
+- * fall through to the PSCI system-off call, which on this SoC does not cut
+- * the PMIC rails.
++ * (drivers/power/reset/mt6323-poweroff.c, mt6323_do_pwroff(): BBPU = KEY,
++ * WRTGR = 1), but mt6397-core.c creates that cell for MT6323 only, so
++ * MT6358/MT6397 have no power-off handler at all and fall through to the
++ * PSCI system-off call, which on this SoC does not cut the PMIC rails.
+  *
+- * Runs from the atomic sys-off chain (machine_power_off() ->
+- * do_kernel_power_off(), arch/arm64/kernel/process.c) with interrupts off, so
+- * no locking: only BBPU/WRTGR are written here, never the time or alarm
+- * registers that rtc->lock protects.
++ * A single BBPU = KEY write (patch 0033) is not enough on MT6358: the board
++ * stays alive, the kernel does not die and USB keeps enumerating. The vendor
++ * power-down recipe was recovered from the LK image (lk-verified.img, load
++ * base 0x56000000, file offset = VA - 0x55fffe00):
++ *
++ *   mt_power_off()      @0x5601b214  (prints "mt_power_off new", VA
++ *                                     0x56075184, then b.w ->)
++ *   rtc_power_off()     @0x5601c510  step by step:
++ *
++ *   0x5601c4e0  RTC_AL_SEC (0x5a0) &= ~(BIT(6) | BIT(8)); WRTGR
++ *   0x5601c3a4  PMIC 0x001e bits 1 and 3 = 1            (pmic_config_interface)
++ *   0x5601c3be  PMIC 0x051a bit 2 = 0
++ *   0x5601c3cc  RTC_BBPU |= KEY | BIT(5); WRTGR
++ *   0x5601c3f8  0x5ac bits [10:8] = 0b101; WRTGR
++ *   0x5601c412  RTC_BBPU |= KEY | BIT(5); WRTGR
++ *   0x5601c42e  0x5ae = 0x1a57, udelay(1ms), 0x2b68, udelay(1ms),
++ *               0x5ae |= 0x100, udelay(1ms)
++ *   0x5601c370  0x5bc = 0x586a; WRTGR
++ *   0x5601c382  0x5bc = 0x9136; WRTGR
++ *   0x5601c524  RTC_BBPU = KEY | 0x3
++ *   0x5601c530  RTC_AL_MASK (0x590) = BIT(4)
++ *   0x5601c53a  WRTGR
++ *   0x5601c552  poll RTC_BBPU bit 1 == 0 for up to 1000 ms
++ *   0x5601c57e  RTC_BBPU |= KEY | BIT(5); WRTGR
++ *   0x5601c5bc  pmic_power_hold(0) -> PMIC 0x0a08 bit 0 = 0
++ *               0x5601b190: reads PMIC 0x0468 for the log only
++ *
++ * Nothing else: LK never writes CHRSTATUS, CHG_EN or F_CHG_EN before power
++ * down, and it does not clear RTC_BBPU_AUTO. The two writes that 0033 was
++ * missing are BIT(5) in BBPU and PMIC power hold (0x0a08 bit 0).
++ *
++ * The handler runs from the atomic sys-off chain, so no locking: it only
++ * touches RTC trigger/shadow registers and PMIC strap bits, never the time or
++ * alarm registers that rtc->lock protects.
+  */
+ static int mtk_rtc_power_off(struct sys_off_data *data)
+ {
+ 	struct mt6397_rtc *rtc = data->cb_data;
++	struct device *dev = rtc->rtc_dev->dev.parent;
++	unsigned int val, bbpu;
+ 	int ret;
+ 
+-	dev_info(rtc->rtc_dev->dev.parent, "powering off\n");
++	dev_info(dev, "power-off: MT6358 RTC power-down sequence\n");
+ 
+-	/* Same sequence as mt6323_do_pwroff(). */
+-	ret = regmap_write(rtc->regmap, rtc->addr_base + RTC_BBPU, RTC_BBPU_KEY);
++	/* 1. Invalidate the alarm so the RTC cannot wake the board back up. */
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_AL_SEC, &val);
+ 	if (ret) {
+-		dev_err(rtc->rtc_dev->dev.parent,
+-			"failed to write BBPU: %d\n", ret);
++		dev_err(dev, "power-off: read AL_SEC failed: %d\n", ret);
+ 		return NOTIFY_DONE;
+ 	}
++	mtk_rtc_pd_write(rtc, "alarm invalidate", rtc->addr_base + RTC_AL_SEC,
++			 0xffff, val & ~0x0140);
++	mtk_rtc_write_trigger_atomic(rtc);
++
++	/* 2. PMIC straps the vendor sets before arming the power-down. */
++	mtk_rtc_pd_write(rtc, "PMIC 0x001e bit1", MTK_PMIC_PD_REG_001E, BIT(1), BIT(1));
++	mtk_rtc_pd_write(rtc, "PMIC 0x001e bit3", MTK_PMIC_PD_REG_001E, BIT(3), BIT(3));
++	mtk_rtc_pd_write(rtc, "PMIC 0x051a bit2", MTK_PMIC_PD_REG_051A, BIT(2), 0);
++
++	/* 3. Arm BBPU with key + bit 5 and touch the RTC spare registers. */
++	mtk_rtc_pd_bbpu_or(rtc, "arm");
++	mtk_rtc_write_trigger_atomic(rtc);
++
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_SPARE24, &val);
++	if (!ret) {
++		mtk_rtc_pd_write(rtc, "spare24", rtc->addr_base + RTC_SPARE24,
++				 0x0700, 0x0500);
++		mtk_rtc_write_trigger_atomic(rtc);
++	}
++	mtk_rtc_pd_bbpu_or(rtc, "arm again");
++	mtk_rtc_write_trigger_atomic(rtc);
++
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_SPARE26, &val);
++	if (!ret) {
++		mtk_rtc_pd_write(rtc, "spare26/1", rtc->addr_base + RTC_SPARE26,
++				 0xffff, 0x1a57);
++		udelay(MTK_RTC_PD_STEP_DELAY_US);
++		mtk_rtc_pd_write(rtc, "spare26/2", rtc->addr_base + RTC_SPARE26,
++				 0xffff, 0x2b68);
++		udelay(MTK_RTC_PD_STEP_DELAY_US);
++		mtk_rtc_pd_write(rtc, "spare26/3", rtc->addr_base + RTC_SPARE26,
++				 0xffff, val | 0x0100);
++		udelay(MTK_RTC_PD_STEP_DELAY_US);
++	}
++
++	/* 4. Oscillator setup for the RTC that has to survive the power cut. */
++	mtk_rtc_pd_write(rtc, "osc32con/1", rtc->addr_base + RTC_OSC32CON,
++			 0xffff, 0x586a);
++	mtk_rtc_write_trigger_atomic(rtc);
++	mtk_rtc_pd_write(rtc, "osc32con/2", rtc->addr_base + RTC_OSC32CON,
++			 0xffff, 0x9136);
++	mtk_rtc_write_trigger_atomic(rtc);
++
++	/*
++	 * 5. Full BBPU value, mask the day-of-week alarm, then wait for the
++	 *    RTC to settle (bit 1 self-clears).
++	 */
++	mtk_rtc_pd_write(rtc, "bbpu prep", rtc->addr_base + RTC_BBPU, 0xffff,
++			 RTC_BBPU_KEY | 0x3);
++	mtk_rtc_pd_write(rtc, "alarm mask", rtc->addr_base + RTC_AL_MASK,
++			 0xffff, RTC_AL_MASK_DOW);
++	mtk_rtc_write_trigger_atomic(rtc);
++
++	ret = regmap_read_poll_timeout_atomic(rtc->regmap,
++					      rtc->addr_base + RTC_BBPU, val,
++					      !(val & BIT(1)),
++					      MTK_RTC_POLL_DELAY_US,
++					      MTK_RTC_PD_SETTLE_TIMEOUT_US);
++	if (ret)
++		dev_warn(dev, "power-off: RTC did not settle, BBPU = %#06x\n",
++			 val);
++
++	/* 6. The actual power-down request: KEY together with bit 5. */
++	mtk_rtc_pd_bbpu_or(rtc, "power down");
++	mtk_rtc_write_trigger_atomic(rtc);
+ 
+-	mtk_rtc_write_trigger(rtc);
++	/*
++	 * 7. Release the PMIC power hold, otherwise the PMIC keeps the rails
++	 *    up after the SoC is gone.
++	 */
++	mtk_rtc_pd_write(rtc, "power hold off", MTK_PMIC_PWRHOLD_REG, BIT(0), 0);
++	ret = regmap_read(rtc->regmap, MTK_PMIC_PWR_STAT_REG, &bbpu);
++	if (!ret)
++		dev_info(dev, "power-off: PMIC 0x%04x = %#06x\n",
++			 MTK_PMIC_PWR_STAT_REG, bbpu);
+ 
+-	/* Wait until the rails are gone, otherwise notice with a warn. */
++	/* Wait for the rails to disappear; if we are still running, say so. */
+ 	mdelay(1000);
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_BBPU, &val);
++	dev_warn(dev, "power-off: still alive, BBPU = %#06x\n", ret ? 0xffff : val);
+ 	WARN_ONCE(1, "Unable to power off system\n");
+ 
+ 	return NOTIFY_DONE;
+diff --git a/include/linux/mfd/mt6397/rtc.h b/include/linux/mfd/mt6397/rtc.h
+index ea438b975..398407213 100644
+--- a/include/linux/mfd/mt6397/rtc.h
++++ b/include/linux/mfd/mt6397/rtc.h
+@@ -17,6 +17,15 @@
+ #define RTC_BBPU               0x0000
+ #define RTC_BBPU_CBUSY         BIT(6)
+ #define RTC_BBPU_KEY            (0x43 << 8)
++/*
++ * Written together with RTC_BBPU_KEY by the vendor power-down path: the
++ * MT6358 LK (mt_power_off() -> rtc_power_off()) sets KEY|BIT(5) as the last
++ * BBPU update before it releases the PMIC power hold, and the rails only go
++ * away with that bit set.
++ */
++#define RTC_BBPU_PWREN         BIT(5)
++
++#define RTC_OSC32CON           0x0034
+ 
+ #define RTC_WRTGR_MT6358       0x003a
+ #define RTC_WRTGR_MT6397       0x003c

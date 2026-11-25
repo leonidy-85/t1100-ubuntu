@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Mon, 2 Nov 2026 21:01:06 +0300
+Subject: [PATCH] arm64: dts: t1100: enable the MT6370 DSV rails for the panel
+
+The panel is powered from the MT6370 sub-PMIC: VPOS/VNEG are the DSV
+outputs (stock DT: mt6370_pmu_dsv, mt6370_dsvp/dsvn with a 6 V ceiling,
+db_vbst = 0x1644 = 5700 mV). Without them the 1600x2176 panel stays
+dark no matter what the DSI side does.
+
+Enable the MFD node only. It keeps the ADC child and the regulators
+block that were already described, and deliberately has no charger,
+TCPC, flashlight or indicator child: mt6370_probe() creates a platform
+device per MFD_CELL_OF only when the matching child node exists, so the
+Type-C controller (which the vendor tree uses to drive VBUS and the USB
+role, and which would fight the RNDIS port this port depends on) is
+simply never instantiated. The driver still needs the EINT: probe calls
+devm_regmap_add_irq_chip() with i2c->irq, hence
+interrupts-extended = <&pio 10 ...>, the same pin the mt6771-next port
+of the same board uses.
+
+MT6370 (MFD + regulator, drivers/mfd/mt6370.c and
+drivers/regulator/mt6370-regulator.c) exist in 6.12; the gate bit
+comment in the port notes applies to the DISP power domain, not to this
+PMIC.
+
+To verify on hardware: "mt6370-regulator mt6370-regulator.0: Failed to
+register (N) regulator" and the i2c5 probe of 0x34 must both be absent,
+and regulator_summary must show mt6370-dsv-vpos/vneg enabled while the
+panel is on.
+---
+ arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 926ee0558..bfd2b21ad 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -263,7 +263,7 @@ &i2c5 {
+ 	pmic@34 {
+ 		compatible = "mediatek,mt6370";
+ 		reg = <0x34>;
+-		status = "disabled";
++		wakeup-source;
+ 
+ 		interrupts-extended = <&pio 10 IRQ_TYPE_LEVEL_LOW>;
+ 		interrupt-controller;

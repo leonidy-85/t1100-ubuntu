@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 14:35:18 +0300
+Subject: [PATCH] arm64: dts: t1100: nest the OTG vbus regulator inside the
+ charger node
+
+The mt6370 charger driver registers its OTG boost regulator with
+of_match = "usb-otg-vbus-regulator" and no explicit of_node, so the
+regulator core resolves it against the charger device node children
+(regulator_of_get_init_node). The upstream mt6370-charger binding also
+defines usb-otg-vbus-regulator as a child of the charger node.
+
+We had it as a sibling of charger (both children of the mt6370 MFD
+node), so the lookup never matched, the regulator registered with
+of_node = NULL, and mtu3 could not resolve vbus-supply = <&mt6370_otg_vbus>:
+"failed to get vbus" -> -EPROBE_DEFER forever -> no UDC, no USB gadget.
+
+Move the node inside charger. The phandle stays global, so the ssusb
+and tcpc vbus-supply references are unchanged. Verified on hardware:
+mtu3 probes, UDC 11201000.usb reaches "configured", RNDIS gadget comes up.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 26 ++++++++++++++-----
+ 1 file changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 44cdb40fc..8afbdd95e 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -375,14 +375,26 @@ charger {
+ 				      <&mt6370_adc MT6370_CHAN_TS_BAT>,
+ 				      <&mt6370_adc MT6370_CHAN_IBUS>,
+ 				      <&mt6370_adc MT6370_CHAN_IBAT>;
+-		};
+ 
+-		mt6370_otg_vbus: usb-otg-vbus-regulator {
+-			regulator-name = "mt6370-usb-otg-vbus";
+-			regulator-min-microvolt = <4350000>;
+-			regulator-max-microvolt = <5800000>;
+-			regulator-min-microamp = <500000>;
+-			regulator-max-microamp = <3000000>;
++			/*
++			 * The OTG boost regulator must be a child of the
++			 * charger node, not a sibling: mt6370_chg_otg_rdesc
++			 * .of_match = "usb-otg-vbus-regulator" is resolved by
++			 * regulator_of_get_init_node() against the charger
++			 * device's of_node children. As a sibling it was never
++			 * found, the regulator registered with of_node=NULL and
++			 * mtu3's vbus-supply = <&mt6370_otg_vbus> phandle could
++			 * not resolve -> "failed to get vbus", probe deferred
++			 * forever, no UDC and no USB gadget. The phandle stays
++			 * global, so &ssusb and &tcpc references are unchanged.
++			 */
++			mt6370_otg_vbus: usb-otg-vbus-regulator {
++				regulator-name = "mt6370-usb-otg-vbus";
++				regulator-min-microvolt = <4350000>;
++				regulator-max-microvolt = <5800000>;
++				regulator-min-microamp = <500000>;
++				regulator-max-microamp = <3000000>;
++			};
+ 		};
+ 
+ 		/*

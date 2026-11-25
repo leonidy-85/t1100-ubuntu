@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Mon, 2 Nov 2026 22:00:14 +0300
+Subject: [PATCH] drm/panel: it6112: drive the bridge STBY and EXT_PWR pins
+
+The stock kernel of the same board initialises the display GPIOs from its
+"elink" LCM driver (refs/device/dmesg-stock.txt.gz):
+
+  elink_configurate_gpio: the stby-gpios default value: 0 is different
+      with the active value: 1
+  elink_configurate_gpio: successfully config gpio stby-gpios output,
+      active = 1
+  elink_configurate_gpio: successfully config gpio ext_pwr-gpios output,
+      active = 1
+
+i.e. STBY (GPIO44) and EXT_PWR (GPIO175) are driven high and stay high.
+Both belong to the LCM GPIO set of the vendor DT (odm/lcm:
+stby-gpios = <&pio 44 0>, ext_pwr-gpios = <&pio 175 0>) and no other
+node in the live DT uses those pins.
+
+The mainline port never touched them, so after a cold boot the bridge
+can sit in standby: it still answers I2C (the product-id read works),
+but the MIPI TX half that feeds the panel may stay disabled. Assert both
+pins (optionally, via stby-gpios/ext-pwr-gpios) before the first
+register access and again in ->prepare(), matching the vendor order
+(rails, then standby/power, then reset, then bridge init).
+
+They are intentionally left asserted in ->unprepare(); the vendor never
+powers them down either, and re-running the bridge init with a warm
+bridge is harmless.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  |  2 ++
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 33 ++++++++++++++++++-
+ 2 files changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index ac89c50fa..8dd898484 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -236,6 +236,8 @@ panel: panel@56 {
+ 		height-mm = <226>;
+ 
+ 		reset-gpios = <&pio 45 GPIO_ACTIVE_HIGH>;
++		stby-gpios = <&pio 44 GPIO_ACTIVE_HIGH>;
++		ext-pwr-gpios = <&pio 175 GPIO_ACTIVE_HIGH>;
+ 		backlight = <&backlight>;
+ 
+ 		dvdd-supply = <&panel_dvdd>;
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index fa8544244..80f29a83f 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -75,6 +75,8 @@ struct it6112_ctx {
+ 	struct i2c_client *i2c_mipi_rx;
+ 	struct regulator_bulk_data regulators[3];
+ 	struct gpio_desc *reset_gpio;
++	struct gpio_desc *stby_gpio;
++	struct gpio_desc *ext_pwr_gpio;
+ };
+ 
+ static struct it6112_ctx *panel_to_it6112(struct drm_panel *panel)
+@@ -339,6 +341,10 @@ static int boe_tv110xum_lb2_prepare(struct drm_panel *panel)
+ 		return ret;
+ 	}
+ 
++	gpiod_set_value_cansleep(ctx->stby_gpio, 1);
++	gpiod_set_value_cansleep(ctx->ext_pwr_gpio, 1);
++	msleep(20);
++
+ 	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
+ 	usleep_range(12000, 13000);
+ 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
+@@ -454,6 +460,24 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio),
+ 				     "failed to get reset gpio\n");
+ 
++	/*
++	 * The vendor LCM driver (elink, stock dmesg: "config gpio stby-gpios
++	 * output, active = 1" and "config gpio ext_pwr-gpios output, active
++	 * = 1") holds STBY (GPIO44) and EXT_PWR (GPIO175) high for the whole
++	 * lifetime of the display; nothing in the mainline port drives them,
++	 * so the bridge is left in whatever state the bootloader chose.
++	 */
++	ctx->stby_gpio = devm_gpiod_get_optional(dev, "stby", GPIOD_OUT_LOW);
++	if (IS_ERR(ctx->stby_gpio))
++		return dev_err_probe(dev, PTR_ERR(ctx->stby_gpio),
++				     "failed to get stby gpio\n");
++
++	ctx->ext_pwr_gpio = devm_gpiod_get_optional(dev, "ext-pwr",
++						    GPIOD_OUT_LOW);
++	if (IS_ERR(ctx->ext_pwr_gpio))
++		return dev_err_probe(dev, PTR_ERR(ctx->ext_pwr_gpio),
++				     "failed to get ext-pwr gpio\n");
++
+ 	/*
+ 	 * The IT6112 only answers on I2C while DVDD and the DSV rails are up.
+ 	 * LK usually leaves them on, but do not depend on that: power them for
+@@ -465,6 +489,11 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "failed to enable regulators\n");
+ 
++	/* Same order as the vendor LCM driver: rails, then STBY/EXT_PWR. */
++	gpiod_set_value_cansleep(ctx->stby_gpio, 1);
++	gpiod_set_value_cansleep(ctx->ext_pwr_gpio, 1);
++	msleep(20);
++
+ 	pid = it6112_get_pid(ctx);
+ 
+ 	regulator_bulk_disable(ARRAY_SIZE(ctx->regulators),
+@@ -477,7 +506,9 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 		return dev_err_probe(dev, -ENODEV, "unknown product id: 0x%x\n",
+ 				     pid);
+ 
+-	dev_info(dev, "IT6112 bridge found, product id 0x%04x\n", pid);
++	dev_info(dev, "IT6112 bridge found, product id 0x%04x (stby %s, ext-pwr %s)\n",
++		 pid, ctx->stby_gpio ? "yes" : "absent",
++		 ctx->ext_pwr_gpio ? "yes" : "absent");
+ 
+ 	endpoint = of_graph_get_endpoint_by_regs(dev->of_node, 0, -1);
+ 	if (!endpoint)

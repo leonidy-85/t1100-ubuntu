@@ -1,0 +1,568 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Fri, 30 Oct 2026 18:59:42 +0300
+Subject: [PATCH] soc: mediatek: mtk-ramconsole: write persistent_ram directly,
+ no console
+
+The board still dies before the ramoops console exists, so on the last two
+boot images /proc/last_kmsg showed nothing at all: not a partial log, not an
+"mrcm:" line - the zone still held an older boot's log. Two independent facts
+explain it.
+
+1. The zone is system RAM (lk reserves it and it stays inside the memory
+   map), and arm64 refuses to ioremap RAM:
+     __ioremap_prot(): "Don't allow RAM to be mapped" -> WARN -> NULL.
+   So mrcm_locate() got NULL from ioremap(), mrcm_base stayed NULL and the
+   driver returned -ENODEV after printing into a ring buffer nobody can read.
+   No log, no crash, nothing.
+
+2. Even with a mapping, the previous version only wrote after
+   register_console(CON_PRINTBUFFER) + pr_info() + unregister_console(),
+   which is ramoops' own mechanism - if printk does not replay into the
+   console for whatever reason, the zone stays untouched.
+
+Rewrite it to do the one thing that cannot be skipped: build the
+persistent_ram console record by hand (12-byte header "DBGC"/start/size plus
+the text ring, exactly fs/pstore/ram_core.c's struct
+persistent_ram_buffer), so ramoops later finds a valid "existing buffer" and
+appends to it instead of zapping it.
+
+Zone location no longer touches the device tree: values come from
+ramoops.mem_address/mem_size/console_size/pmsg_size/ftrace_size on
+boot_command_line (and must not be read from DT - lk spins if a static
+reserved-memory node overlaps its own reservations), with hardcoded
+fallbacks 0x54410000/0xe0000/0x40000 matching the stock cmdline.
+
+Mapping: memremap(MEMREMAP_WB) (returns the linear mapping for valid RAM),
+falling back to ioremap() for a non-RAM region. Text written through the
+linear mapping sits in the caches, so each snapshot ends with
+dcache_clean_poc(): if the SoC dies and the board is reset, DRAM must already
+contain the log.
+
+Snapshots: early_initcall (the earliest initcall there is - before SMP and
+before any driver), postcore_initcall_sync (around ramoops registration, also
+restores the ring if ramoops zapped it), arch_initcall and
+late_initcall_sync. Each one rewrites the ring from the current printk buffer
+via kmsg_dump_rewind()/kmsg_dump_get_line() (chronological, no console
+registration involved) and starts with a "T1100LOG mrcm: stage=..." line, so
+the presence of that line alone proves the black box ran.
+
+Bring-up aid only.
+---
+ drivers/soc/mediatek/mtk-ramconsole.c | 419 +++++++++++++++-----------
+ 1 file changed, 246 insertions(+), 173 deletions(-)
+
+diff --git a/drivers/soc/mediatek/mtk-ramconsole.c b/drivers/soc/mediatek/mtk-ramconsole.c
+index 60f6982d6..44cf63c92 100644
+--- a/drivers/soc/mediatek/mtk-ramconsole.c
++++ b/drivers/soc/mediatek/mtk-ramconsole.c
+@@ -8,222 +8,274 @@
+  * recovery exposes /proc/last_kmsg, and its contents come from the ramoops
+  * console zone in DRAM, which survives a warm reset.
+  *
+- * The kernel already has a working path into that zone: ramoops itself
+- * (CONFIG_PSTORE_CONSOLE) registers a console and, because the console is
+- * registered with CON_PRINTBUFFER, replays the whole printk ring buffer -
+- * that is why the log of a successful boot starts at "[0.000000] Linux
+- * version". The problem is that ramoops only comes up at postcore_initcall
+- * time; everything before that (setup_arch, early_initcall, core_initcall,
+- * and any bus hang caused by a driver) is invisible.
++ * ramoops itself cannot help before postcore_initcall time: it registers a
++ * console there and only then starts writing. Everything before that is
++ * invisible, and so is any hang that happens while the kernel is still
++ * bringing up the PMIC/DRAM rails.
+  *
+- * This driver closes that window without ever competing with ramoops:
++ * This driver therefore writes the persistent_ram console record directly:
++ * 12-byte header (sig "DBGC", start, size) followed by a text ring, exactly
++ * the layout fs/pstore/ram_core.c expects, so ramoops later picks the buffer
++ * up as "existing buffer" and keeps appending to it instead of zapping it.
++ * No console is registered: register_console()+CON_PRINTBUFFER is the path
++ * ramoops already takes, it was tried here first, and it produced nothing on
++ * this board.
+  *
+- *   1. it stops the TOPRGU watchdog as the very first thing, so a hang stays
+- *      a hang instead of a silent reset loop;
+- *   2. at early_initcall and at postcore_initcall_sync it takes a *snapshot*
+- *      of the printk ring buffer into the same console zone ramoops will use:
+- *      register a console with CON_PRINTBUFFER, let printk replay the ring,
+- *      unregister it again. No second writer, no bookkeeping to keep in sync
+- *      with persistent_ram, and after the second snapshot ramoops takes over
+- *      and appends to the same ring.
++ * Two details that cost a boot image each to learn:
+  *
+- * Zone discovery, in order:
+- *   a) a "ramoops" device tree node, if one is ever added (mainline layout:
+- *      console zone starts after the record area);
+- *   b) the reserved-memory children the bootloader creates itself
+- *      (mblock-N-pstore, mblock-N-ram_console, ...). They cannot be declared
+- *      in our DTS - MTK LK spins forever if a static region overlaps one of
+- *      its own reservations (docs/lk-dtb-rules.md) - but they *are* present
+- *      in the device tree LK hands over, so they can be re-used;
+- *   c) the ramoops.* kernel parameters, which is how this board configures
+- *      ramoops ("ramoops: using module parameters" in the log).
++ *   - The zone lives in *system RAM* (the bootloader reserves it and it stays
++ *     in the memory map), and arm64 refuses to ioremap RAM:
++ *     __ioremap_prot() -> "Don't allow RAM to be mapped" -> NULL. The first
++ *     version of this driver ioremapped the zone, got NULL, printed
++ *     "no ramoops console zone found" into a ring buffer nobody could read,
++ *     and did nothing at all. Use memremap(MEMREMAP_WB), which for valid RAM
++ *     returns the linear mapping.
++ *   - Text written through that mapping sits in the caches. If the SoC dies
++ *     and the board is reset, DRAM only has what was cleaned to the point of
++ *     coherency, so every snapshot ends with dcache_clean_poc().
+  *
+- * The first version of this driver only looked for (a) and therefore did
+- * nothing at all on this board: of_find_compatible_node(NULL, NULL, "ramoops")
+- * returned NULL, nzones stayed 0 and the driver bailed out with -ENODEV.
++ * The zone geometry comes from the ramoops.* kernel parameters only (the
++ * board passes them on the command line; there is no ramoops DT node and
++ * declaring one is not an option - MTK lk spins forever if a static
++ * reserved-memory region overlaps its own reservations). If the parameters
++ * are missing, hardcoded fallbacks matching refs/device/cmdline.txt are used,
++ * so the log works even with a truncated command line.
++ *
++ * Snapshots are taken at early_initcall (before SMP and before any driver),
++ * postcore_initcall_sync (around the time ramoops registers), arch_initcall
++ * and late_initcall_sync. Each one rewrites the ring from scratch with the
++ * current printk buffer, so the last completed snapshot is the one that
++ * survives. "T1100LOG" marks the start of a snapshot, which makes it obvious
++ * whether the black box itself ran at all.
+  *
+  * Bring-up aid only; remove once a real console exists.
+  */
+ 
+ #define pr_fmt(fmt) "mrcm: " fmt
+ 
+-#include <linux/console.h>
+ #include <linux/init.h>
+ #include <linux/io.h>
++#include <linux/jiffies.h>
+ #include <linux/kernel.h>
+-#include <linux/mm.h>
+-#include <linux/of.h>
+-#include <linux/of_address.h>
++#include <linux/kmsg_dump.h>
++#include <linux/memremap.h>
++#include <linux/printk.h>
++#include <linux/sizes.h>
+ #include <linux/string.h>
+ 
++#include <asm/cacheflush.h>
++
++/* Same numbers the stock cmdline hands to ramoops (refs/device/cmdline.txt). */
++#define MRC_ADDR_FALLBACK	0x54410000UL
++#define MRC_SIZE_FALLBACK	0xe0000UL
++#define MRC_CONSOLE_FALLBACK	0x40000UL
++#define MRC_PMSG_FALLBACK	0x10000UL
++#define MRC_FTRACE_FALLBACK	0x0UL
++
+ #define PERSISTENT_RAM_SIG	0x43474244u	/* "DBGC" */
+ #define PR_HEADER_SIZE		12		/* sig, start, size */
+ 
+-static u8 __iomem *mrcm_base;
+-static u32 mrcm_size;		/* whole zone, including the header */
+-static u32 mrcm_start;
+-static u32 mrcm_len;
+-static bool mrcm_wdt_was_on;
++static struct {
++	void __iomem *base;
++	phys_addr_t paddr;
++	u32 size;		/* console zone, header included */
++	u32 ring;		/* size - PR_HEADER_SIZE */
++	u32 start;		/* oldest byte */
++	u32 len;		/* valid bytes */
++	bool cached;		/* mapped WB, needs a cache clean */
++	bool have_zone;
++	bool wdt_was_on;
++	/* Stages that already completed; each snapshot restarts at a known
++	 * line, so the list of completed stages has to be carried along. */
++	char done[64];
++} mrc;
++
++/* ------------------------------------------------------------------ */
++/* persistent_ram writes                                               */
++/* ------------------------------------------------------------------ */
++
++/* struct persistent_ram_buffer { u32 sig; atomic_t start; atomic_t size; } */
++static void mrc_kick(void)
++{
++	writel(mrc.start, mrc.base + 4);
++	writel(mrc.len, mrc.base + 8);
++}
+ 
+-static void mrcm_kick(void)
++static void mrc_flush(void)
+ {
+-	writel(mrcm_start, mrcm_base + 4);
+-	writel(mrcm_len, mrcm_base + 8);
++	if (!mrc.cached)
++		return;
++	dcache_clean_poc((unsigned long)mrc.base,
++			 (unsigned long)mrc.base + mrc.size);
+ }
+ 
+-static void mrcm_console_write(struct console *con, const char *s,
+-			       unsigned int count)
++static void mrc_ring_write(const char *s, size_t n)
+ {
+-	u32 ring = mrcm_size - PR_HEADER_SIZE;
+-	unsigned int i;
++	void __iomem *data = mrc.base + PR_HEADER_SIZE;
++	u32 ring = mrc.ring;
+ 
+-	if (!ring)
+-		return;
++	while (n) {
++		u32 pos;
++		size_t chunk;
+ 
+-	for (i = 0; i < count; i++) {
+-		if (mrcm_len < ring) {
+-			writeb(s[i], mrcm_base + PR_HEADER_SIZE +
+-			       ((mrcm_start + mrcm_len) % ring));
+-			mrcm_len++;
+-		} else {
+-			writeb(s[i], mrcm_base + PR_HEADER_SIZE + mrcm_start);
+-			mrcm_start = (mrcm_start + 1) % ring;
++		/* Full: drop the oldest byte, the ring keeps the newest text. */
++		if (mrc.len >= ring) {
++			mrc.start = (mrc.start + 1) % ring;
++			mrc.len--;
+ 		}
++		pos = mrc.start + mrc.len;
++		if (pos >= ring)
++			pos -= ring;
++		chunk = min_t(size_t, n, ring - pos);
++		chunk = min_t(size_t, chunk, ring - mrc.len);
++		memcpy_toio(data + pos, s, chunk);
++		mrc.len += chunk;
++		s += chunk;
++		n -= chunk;
+ 	}
+-	mrcm_kick();
+ }
+ 
+-static struct console mrcm_console = {
+-	.name	= "mrcm",
+-	.write	= mrcm_console_write,
+-	.flags	= CON_PRINTBUFFER | CON_ENABLED,
+-	.index	= -1,
+-};
++static void mrc_reset(void)
++{
++	mrc.start = 0;
++	mrc.len = 0;
++	writel(PERSISTENT_RAM_SIG, mrc.base);
++	mrc_kick();
++}
+ 
+-/* ramoops.<name>=<value> from the command line; values are 0x-prefixed. */
+-static bool __init mrcm_param(const char *name, unsigned long *val)
++/* ------------------------------------------------------------------ */
++/* zone discovery: ramoops.* parameters, then hardcoded fallbacks       */
++/* ------------------------------------------------------------------ */
++
++static bool __init mrc_cmdline_param(const char *name, unsigned long *out)
+ {
+ 	char key[64];
+-	const char *p = saved_command_line;
+-	char *end;
++	const char *p;
+ 	size_t len;
+ 
+ 	snprintf(key, sizeof(key), "ramoops.%s=", name);
+ 	len = strlen(key);
+ 
+-	while ((p = strstr(p, key))) {
+-		if (p == saved_command_line || p[-1] == ' ') {
+-			unsigned long long v = memparse(p + len, &end);
+-
+-			if (end == p + len)
+-				return false;
+-			*val = v;
+-			return true;
+-		}
+-		p += len;
+-	}
+-	return false;
+-}
+-
+-/* LK reserves the zones itself and appends them as mblock-N-<name>. */
+-static bool __init mrcm_find_mblock(const char *name, u64 *paddr, u64 *size)
+-{
+-	struct device_node *rmem, *child;
+-	bool found = false;
++	for (p = boot_command_line; p && *p; p++) {
++		char *end;
++		unsigned long long v;
+ 
+-	rmem = of_find_node_by_path("/reserved-memory");
+-	if (!rmem)
+-		return false;
+-
+-	for_each_child_of_node(rmem, child) {
+-		const char *base = kbasename(child->full_name);
+-
+-		if (!strstr(base, name))
++		if (p != boot_command_line && p[-1] != ' ')
+ 			continue;
+-		if (of_property_read_reg(child, 0, paddr, size))
++		if (strncmp(p, key, len))
+ 			continue;
+-		found = *size != 0;
+-		of_node_put(child);
+-		break;
++		v = memparse(p + len, &end);
++		if (end == p + len)
++			return false;
++		*out = (unsigned long)v;
++		return true;
+ 	}
+-
+-	of_node_put(rmem);
+-	return found;
++	return false;
+ }
+ 
+-static void __init mrcm_locate(void)
++static void __init mrc_locate(void)
+ {
+-	struct device_node *np;
+-	unsigned long console_size = 0, pmsg_size = 0, ftrace_size = 0;
+-	u64 paddr = 0, size = 0, dump_size;
+-
+-	np = of_find_compatible_node(NULL, NULL, "ramoops");
+-	if (np) {
+-		u32 v;
+-
+-		of_property_read_reg(np, 0, &paddr, &size);
+-		if (!of_property_read_u32(np, "console-size", &v))
+-			console_size = v;
+-		if (!of_property_read_u32(np, "pmsg-size", &v))
+-			pmsg_size = v;
+-		if (!of_property_read_u32(np, "ftrace-size", &v))
+-			ftrace_size = v;
+-		of_node_put(np);
+-	}
+-
+-	/* This board passes the geometry on the command line (no DT node). */
++	unsigned long addr = 0, size = 0, console_size = 0;
++	unsigned long pmsg_size = 0, ftrace_size = 0;
++	s64 console_off;
++
++	mrc_cmdline_param("mem_address", &addr);
++	mrc_cmdline_param("mem_size", &size);
++	mrc_cmdline_param("console_size", &console_size);
++	mrc_cmdline_param("pmsg_size", &pmsg_size);
++	mrc_cmdline_param("ftrace_size", &ftrace_size);
++
++	if (!addr)
++		addr = MRC_ADDR_FALLBACK;
++	if (!size)
++		size = MRC_SIZE_FALLBACK;
+ 	if (!console_size)
+-		mrcm_param("console_size", &console_size);
++		console_size = MRC_CONSOLE_FALLBACK;
+ 	if (!pmsg_size)
+-		mrcm_param("pmsg_size", &pmsg_size);
++		pmsg_size = MRC_PMSG_FALLBACK;
+ 	if (!ftrace_size)
+-		mrcm_param("ftrace_size", &ftrace_size);
+-
+-	if (!paddr || !size) {
+-		unsigned long a = 0, s = 0;
+-
+-		if (!mrcm_find_mblock("pstore", &paddr, &size) &&
+-		    (!mrcm_param("mem_address", &a) ||
+-		     !mrcm_param("mem_size", &s)))
+-			return;
+-		if (!paddr) {
+-			paddr = a;
+-			size = s;
+-		}
+-	}
++		ftrace_size = MRC_FTRACE_FALLBACK;
+ 
+-	/* Same arithmetic as ramoops_init_prz(): console lives after records. */
+-	if (!console_size || size <= console_size)
++	/* Same arithmetic as ramoops_probe(): the console zone comes after the
++	 * dmesg records, then pmsg, then ftrace. */
++	console_off = (s64)size - (s64)console_size - (s64)pmsg_size -
++		      (s64)ftrace_size;
++	if (console_off < 0 || (unsigned long)console_off + console_size > size)
+ 		return;
+-	dump_size = size - console_size - pmsg_size - ftrace_size;
+-	if (dump_size + console_size > size)
++	if (console_size <= PR_HEADER_SIZE)
+ 		return;
+ 
+-	mrcm_base = ioremap(paddr + dump_size, console_size);
+-	if (!mrcm_base)
++	mrc.base = memremap(addr + console_off, console_size, MEMREMAP_WB);
++	if (mrc.base) {
++		mrc.cached = true;
++	} else {
++		/* Not linear-mapped (unexpected here); a device mapping is
++		 * still better than no log and needs no cache maintenance. */
++		mrc.base = ioremap(addr + console_off, console_size);
++		mrc.cached = false;
++	}
++	if (!mrc.base)
+ 		return;
+-	mrcm_size = console_size;
++
++	mrc.paddr = addr + console_off;
++	mrc.size = console_size;
++	mrc.ring = console_size - PR_HEADER_SIZE;
++	mrc.have_zone = true;
+ }
+ 
++/* ------------------------------------------------------------------ */
++/* snapshots                                                           */
++/* ------------------------------------------------------------------ */
++
+ /*
+- * Replay the printk ring buffer into the zone. register_console() with
+- * CON_PRINTBUFFER starts the new console at the oldest record still in the
+- * ring, and the next printk() flushes it; unregistering right away keeps us
+- * out of ramoops' way.
++ * Chronological: kmsg_dump_rewind() positions the iterator at the oldest
++ * record still present in the printk ring, kmsg_dump_get_line() walks
++ * forward one record at a time.
+  */
+-static void __init mrcm_snapshot(const char *where)
++static void __init mrc_dump_kmsg(void)
+ {
+-	if (!mrcm_base)
+-		return;
++	struct kmsg_dump_iter iter;
++	/* 1024 is PRINTKRB_RECORD_MAX, plus the syslog prefix. */
++	static char line[2048];
++	size_t len;
++	unsigned int lines = 0;
++
++	kmsg_dump_rewind(&iter);
++	while (kmsg_dump_get_line(&iter, true, line, sizeof(line), &len)) {
++		if (!len)
++			break;
++		mrc_ring_write(line, len);
++		if (++lines > SZ_64K)
++			break;
++	}
++}
++
++static void __init mrc_stage(const char *stage)
++{
++	char line[320];
++	size_t len;
++	int n;
+ 
+-	mrcm_start = 0;
+-	mrcm_len = 0;
+-	writel(PERSISTENT_RAM_SIG, mrcm_base);
+-	mrcm_kick();
++	if (!mrc.have_zone)
++		return;
+ 
+-	register_console(&mrcm_console);
+-	pr_info("snapshot at %s\n", where);
+-	unregister_console(&mrcm_console);
++	mrc_reset();
++	len = strlen(mrc.done);
++	if (len + strlen(stage) + 2 < sizeof(mrc.done))
++		snprintf(mrc.done + len, sizeof(mrc.done) - len, "%s,", stage);
++
++	n = scnprintf(line, sizeof(line),
++		      "T1100LOG mrcm: stage=%s done=%s zone=0x%llx+0x%x ring=0x%x map=%s uptime_ms=%u\n",
++		      stage, mrc.done, (unsigned long long)mrc.paddr, mrc.size,
++		      mrc.ring, mrc.cached ? "wb" : "io",
++		      jiffies_to_msecs(jiffies));
++	mrc_ring_write(line, n);
++	mrc_kick();
++	mrc_flush();
++
++	mrc_dump_kmsg();
++	mrc_kick();
++	mrc_flush();
+ }
+ 
+ /*
+@@ -231,7 +283,7 @@ static void __init mrcm_snapshot(const char *where)
+  * every early kernel hang becomes a silent ~15 s reset loop. Stop it here,
+  * long before driver init, so a hang stays a hang and our log survives.
+  */
+-static void __init mrcm_stop_wdt(void)
++static void __init mrc_stop_wdt(void)
+ {
+ 	void __iomem *wdt;
+ 	u32 mode;
+@@ -243,32 +295,53 @@ static void __init mrcm_stop_wdt(void)
+ 	mode = readl(wdt + 0x00);
+ 	if (mode & 0x1) {
+ 		writel((mode & ~0x1u) | 0x22000000, wdt + 0x00);
+-		mrcm_wdt_was_on = true;
++		mrc.wdt_was_on = true;
+ 	}
+ 	iounmap(wdt);
+ }
+ 
+-static int __init mrcm_init(void)
++/* Runs before SMP and before any driver probe: the earliest hook we get. */
++static int __init mrc_init_early(void)
+ {
+-	mrcm_stop_wdt();
+-	mrcm_locate();
+-	if (!mrcm_base) {
+-		pr_err("no ramoops console zone found, disabled (wdt stopped: %d)\n",
+-		       mrcm_wdt_was_on);
++	mrc_stop_wdt();
++	mrc_locate();
++	if (!mrc.have_zone) {
++		pr_err("no ramoops console zone (wdt stopped: %d)\n",
++		       mrc.wdt_was_on);
+ 		return -ENODEV;
+ 	}
+ 
+-	pr_info("zone %u bytes, wdt stopped: %d\n", mrcm_size,
+-		mrcm_wdt_was_on);
+-	mrcm_snapshot("early_initcall");
++	pr_info("zone 0x%llx+0x%x, wdt stopped: %d\n",
++		(unsigned long long)mrc.paddr, mrc.size, mrc.wdt_was_on);
++	mrc_stage("early_initcall");
++	return 0;
++}
++early_initcall(mrc_init_early);
++
++/* ramoops has (or is about to have) registered its console here. Rewriting
++ * the ring at this point also restores it if ramoops zapped the buffer. */
++static int __init mrc_stage_postcore(void)
++{
++	/* Second chance in case memremap() was not usable this early. */
++	if (!mrc.have_zone)
++		mrc_locate();
++	mrc_stage("postcore_initcall_sync");
++	return 0;
++}
++postcore_initcall_sync(mrc_stage_postcore);
++
++/* After the device tree has been populated, before driver initcalls. */
++static int __init mrc_stage_arch(void)
++{
++	mrc_stage("arch_initcall");
+ 	return 0;
+ }
+-early_initcall(mrcm_init);
++arch_initcall(mrc_stage_arch);
+ 
+-/* Everything up to and including the ramoops console registration. */
+-static int __init mrcm_snapshot_late(void)
++/* Last snapshot before init: whatever hangs afterwards is named in the log. */
++static int __init mrc_stage_late(void)
+ {
+-	mrcm_snapshot("postcore_initcall_sync");
++	mrc_stage("late_initcall_sync");
+ 	return 0;
+ }
+-postcore_initcall_sync(mrcm_snapshot_late);
++late_initcall_sync(mrc_stage_late);

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Thu, 29 Oct 2026 22:47:40 +0300
+Subject: [PATCH] arm64: head: drop the on-screen debug markers (T1100)
+
+The visual checkpoints painted into the bootloader framebuffer were a
+one-off diagnostic for a board without UART. They are not needed now:
+the framebuffer is about to be owned by the real DRM/KMS driver, and
+writing into it from early assembly is exactly what breaks the
+simpledrm handoff semantics.
+
+Keep the MTK TOPRGU watchdog stop - without it a silent early failure
+resets the board before pstore can record anything.
+---
+ arch/arm64/kernel/head.S | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/kernel/head.S b/arch/arm64/kernel/head.S
+index 3675982ee..e757a3c79 100644
+--- a/arch/arm64/kernel/head.S
++++ b/arch/arm64/kernel/head.S
+@@ -96,6 +96,7 @@ SYM_CODE_START(primary_entry)
+ 	mov	w11, #0x2200
+ 	orr	w10, w10, w11, lsl #16
+ 	str	w10, [x9]
++
+ 	bl	record_mmu_state
+ 	bl	preserve_boot_args
+ 

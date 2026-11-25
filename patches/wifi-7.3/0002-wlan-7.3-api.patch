@@ -1,0 +1,319 @@
+diff --git a/os/linux/gl_init.c b/os/linux/gl_init.c
+--- a/os/linux/gl_init.c
++++ b/os/linux/gl_init.c
+@@ -260,19 +260,86 @@
+ ********************************************************************************
+ */
+ 
++
++/* 7.3: cfg80211 hands the wireless_dev, not the net_device, to these ops. */
++static int mtk_cfg80211_add_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				     int link_id, u8 key_index, bool pairwise,
++				     const u8 *mac_addr, struct key_params *params)
++{
++	return mtk_cfg80211_add_key(wiphy, wdev->netdev, link_id,
++				    key_index, pairwise, mac_addr, params);
++}
++
++static int mtk_cfg80211_get_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				     int link_id, u8 key_index, bool pairwise,
++				     const u8 *mac_addr, void *cookie,
++				     void (*callback)(void *cookie, struct key_params *))
++{
++	return mtk_cfg80211_get_key(wiphy, wdev->netdev, link_id,
++				    key_index, pairwise, mac_addr, cookie, callback);
++}
++
++static int mtk_cfg80211_del_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				     int link_id, u8 key_index, bool pairwise,
++				     const u8 *mac_addr)
++{
++	return mtk_cfg80211_del_key(wiphy, wdev->netdev, link_id,
++				    key_index, pairwise, mac_addr);
++}
++
++static int mtk_cfg80211_get_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++					 const u8 *mac, struct station_info *sinfo)
++{
++	return mtk_cfg80211_get_station(wiphy, wdev->netdev, mac, sinfo);
++}
++
++static int mtk_cfg80211_change_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++					    const u8 *mac, struct station_parameters *params)
++{
++	return mtk_cfg80211_change_station(wiphy, wdev->netdev, mac, params);
++}
++
++static int mtk_cfg80211_add_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++					 const u8 *mac, struct station_parameters *params)
++{
++	return mtk_cfg80211_add_station(wiphy, wdev->netdev, mac, params);
++}
++
++static int mtk_cfg80211_del_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++					 struct station_del_parameters *params)
++{
++	return mtk_cfg80211_del_station(wiphy, wdev->netdev, params);
++}
++
++static int mtk_cfg80211_mgmt_tx_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				     struct cfg80211_mgmt_tx_params *params, u64 cookie)
++{
++	return mtk_cfg80211_mgmt_tx(wiphy, wdev, params, &cookie);
++}
++
++
++static int mtk_cfg80211_remain_on_channel_wdev(struct wiphy *wiphy,
++					       struct wireless_dev *wdev,
++					       struct ieee80211_channel *chan,
++					       unsigned int duration, u64 cookie,
++					       const u8 *rx_addr)
++{
++	return mtk_cfg80211_remain_on_channel(wiphy, wdev, chan, duration, &cookie);
++}
++
+ static struct cfg80211_ops mtk_wlan_ops = {
+ 	.suspend = mtk_cfg80211_suspend,
+ 	.resume	= mtk_cfg80211_resume,
+ 	.change_virtual_intf = mtk_cfg80211_change_iface,
+-	.add_key = mtk_cfg80211_add_key,
+-	.get_key = mtk_cfg80211_get_key,
+-	.del_key = mtk_cfg80211_del_key,
++	.add_key = mtk_cfg80211_add_key_wdev,
++	.get_key = mtk_cfg80211_get_key_wdev,
++	.del_key = mtk_cfg80211_del_key_wdev,
+ 	.set_default_key = mtk_cfg80211_set_default_key,
+-	.get_station = mtk_cfg80211_get_station,
++	.get_station = mtk_cfg80211_get_station_wdev,
+ #if CFG_SUPPORT_TDLS
+-	.change_station = mtk_cfg80211_change_station,
+-	.add_station = mtk_cfg80211_add_station,
+-	.del_station = mtk_cfg80211_del_station,
++	.change_station = mtk_cfg80211_change_station_wdev,
++	.add_station = mtk_cfg80211_add_station_wdev,
++	.del_station = mtk_cfg80211_del_station_wdev,
+ #endif
+ 	.scan = mtk_cfg80211_scan,
+ #if CFG_SUPPORT_ABORT_SCAN
+@@ -291,9 +358,9 @@
+ #endif
+ 	.assoc = mtk_cfg80211_assoc,
+ 	/* Action Frame TX/RX */
+-	.remain_on_channel = mtk_cfg80211_remain_on_channel,
++	.remain_on_channel = mtk_cfg80211_remain_on_channel_wdev,
+ 	.cancel_remain_on_channel = mtk_cfg80211_cancel_remain_on_channel,
+-	.mgmt_tx = mtk_cfg80211_mgmt_tx,
++	.mgmt_tx = mtk_cfg80211_mgmt_tx_wdev,
+ 	/* .mgmt_tx_cancel_wait        = mtk_cfg80211_mgmt_tx_cancel_wait, */
+ 	/* 6.12: renamed from .mgmt_frame_register (2 args) */
+ 	.update_mgmt_frame_registrations = mtk_cfg80211_update_mgmt_frame_registrations,
+diff --git a/os/linux/gl_kal.c b/os/linux/gl_kal.c
+--- a/os/linux/gl_kal.c
++++ b/os/linux/gl_kal.c
+@@ -3496,7 +3496,7 @@
+ 
+ 	clear_bit(GLUE_FLAG_TIMEOUT_BIT, &prGlueInfo->ulFlag);
+ 
+-	if (del_timer_sync(&(prGlueInfo->tickfn)) >= 0)
++	if (timer_delete_sync(&(prGlueInfo->tickfn)) >= 0)
+ 		return TRUE;
+ 	else
+ 		return FALSE;
+@@ -3559,7 +3559,7 @@
+ void kalTimeoutHandler(struct timer_list *prTimer)
+ {
+ 
+-	P_GLUE_INFO_T prGlueInfo = from_timer(prGlueInfo, prTimer, tickfn);
++	P_GLUE_INFO_T prGlueInfo = timer_container_of(prGlueInfo, prTimer, tickfn);
+ 
+ 	ASSERT(prGlueInfo);
+ 
+diff --git a/os/linux/gl_p2p.c b/os/linux/gl_p2p.c
+--- a/os/linux/gl_p2p.c
++++ b/os/linux/gl_p2p.c
+@@ -74,15 +74,80 @@
+ static struct wireless_dev *gprP2pWdev;
+ 
+ #if CFG_ENABLE_WIFI_DIRECT_CFG_80211
++
++/* 7.3: cfg80211 passes wireless_dev and by-value cookies/radio ids. */
++static int mtk_p2p_add_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				int link_id, u8 key_index, bool pairwise,
++				const u8 *mac_addr, struct key_params *params)
++{
++	return mtk_p2p_cfg80211_add_key(wiphy, wdev->netdev, link_id, key_index,
++					pairwise, mac_addr, params);
++}
++static int mtk_p2p_get_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				int link_id, u8 key_index, bool pairwise,
++				const u8 *mac_addr, void *cookie,
++				void (*callback)(void *, struct key_params *))
++{
++	return mtk_p2p_cfg80211_get_key(wiphy, wdev->netdev, link_id, key_index,
++					pairwise, mac_addr, cookie, callback);
++}
++static int mtk_p2p_del_key_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				int link_id, u8 key_index, bool pairwise,
++				const u8 *mac_addr)
++{
++	return mtk_p2p_cfg80211_del_key(wiphy, wdev->netdev, link_id, key_index,
++					pairwise, mac_addr);
++}
++static int mtk_p2p_get_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				    const u8 *mac, struct station_info *sinfo)
++{
++	return mtk_p2p_cfg80211_get_station(wiphy, wdev->netdev, mac, sinfo);
++}
++static int mtk_p2p_del_station_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				    struct station_del_parameters *params)
++{
++	return mtk_p2p_cfg80211_del_station(wiphy, wdev->netdev, params);
++}
++static int mtk_p2p_remain_on_channel_wdev(struct wiphy *wiphy,
++					  struct wireless_dev *wdev,
++					  struct ieee80211_channel *chan,
++					  unsigned int duration, u64 cookie,
++					  const u8 *rx_addr)
++{
++	return mtk_p2p_cfg80211_remain_on_channel(wiphy, wdev, chan, duration, &cookie);
++}
++static int mtk_p2p_mgmt_tx_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				struct cfg80211_mgmt_tx_params *params, u64 cookie)
++{
++	return mtk_p2p_cfg80211_mgmt_tx(wiphy, wdev, params, &cookie);
++}
++static int mtk_p2p_set_txpower_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				    int radio_idx, enum nl80211_tx_power_setting type,
++				    int mbm)
++{
++	return mtk_p2p_cfg80211_set_txpower(wiphy, wdev, type, mbm);
++}
++static int mtk_p2p_get_txpower_wdev(struct wiphy *wiphy, struct wireless_dev *wdev,
++				    int radio_idx, unsigned int link_id, int *dbm)
++{
++	return mtk_p2p_cfg80211_get_txpower(wiphy, wdev, dbm);
++}
++
++
++static int mtk_p2p_set_wiphy_params_wdev(struct wiphy *wiphy, int radio_idx, u32 changed)
++{
++	return mtk_p2p_cfg80211_set_wiphy_params(wiphy, changed);
++}
++
+ static struct cfg80211_ops mtk_p2p_ops = {
+ 	/*.add_virtual_intf = mtk_p2p_cfg80211_add_iface,*/
+ 	.change_virtual_intf = mtk_p2p_cfg80211_change_iface,	/* 1 st */
+ 	.del_virtual_intf = mtk_p2p_cfg80211_del_iface,
+ 	.change_bss = mtk_p2p_cfg80211_change_bss,
+ 	.scan = mtk_p2p_cfg80211_scan,
+-	.remain_on_channel = mtk_p2p_cfg80211_remain_on_channel,
++	.remain_on_channel = mtk_p2p_remain_on_channel_wdev,
+ 	.cancel_remain_on_channel = mtk_p2p_cfg80211_cancel_remain_on_channel,
+-	.mgmt_tx = mtk_p2p_cfg80211_mgmt_tx,
++	.mgmt_tx = mtk_p2p_mgmt_tx_wdev,
+ 	.mgmt_tx_cancel_wait = mtk_p2p_cfg80211_mgmt_tx_cancel_wait,
+ 	.connect = mtk_p2p_cfg80211_connect,
+ 	.disconnect = mtk_p2p_cfg80211_disconnect,
+@@ -91,20 +156,20 @@
+ 	.start_ap = mtk_p2p_cfg80211_start_ap,
+ 	.change_beacon = mtk_p2p_cfg80211_change_beacon,
+ 	.stop_ap = mtk_p2p_cfg80211_stop_ap,
+-	.set_wiphy_params = mtk_p2p_cfg80211_set_wiphy_params,
+-	.del_station = mtk_p2p_cfg80211_del_station,
++	.set_wiphy_params = mtk_p2p_set_wiphy_params_wdev,
++	.del_station = mtk_p2p_del_station_wdev,
+ 	.set_bitrate_mask = mtk_p2p_cfg80211_set_bitrate_mask,
+ 	/* 6.12: renamed from .mgmt_frame_register (2 args) */
+ 	.update_mgmt_frame_registrations = mtk_p2p_cfg80211_update_mgmt_frame_registrations,
+-	.get_station = mtk_p2p_cfg80211_get_station,
+-	.add_key = mtk_p2p_cfg80211_add_key,
+-	.get_key = mtk_p2p_cfg80211_get_key,
+-	.del_key = mtk_p2p_cfg80211_del_key,
++	.get_station = mtk_p2p_get_station_wdev,
++	.add_key = mtk_p2p_add_key_wdev,
++	.get_key = mtk_p2p_get_key_wdev,
++	.del_key = mtk_p2p_del_key_wdev,
+ 	.set_default_key = mtk_p2p_cfg80211_set_default_key,
+ 	.join_ibss = mtk_p2p_cfg80211_join_ibss,
+ 	.leave_ibss = mtk_p2p_cfg80211_leave_ibss,
+-	.set_tx_power = mtk_p2p_cfg80211_set_txpower,
+-	.get_tx_power = mtk_p2p_cfg80211_get_txpower,
++	.set_tx_power = mtk_p2p_set_txpower_wdev,
++	.get_tx_power = mtk_p2p_get_txpower_wdev,
+ 	.set_power_mgmt = mtk_p2p_cfg80211_set_power_mgmt,
+ #ifdef CONFIG_NL80211_TESTMODE
+ 	.testmode_cmd = mtk_p2p_cfg80211_testmode_cmd,
+diff --git a/os/linux/gl_p2p_kal.c b/os/linux/gl_p2p_kal.c
+--- a/os/linux/gl_p2p_kal.c
++++ b/os/linux/gl_p2p_kal.c
+@@ -1184,13 +1184,13 @@
+ 			rStationInfo.assoc_req_ies = prCliStaRec->pucAssocReqIe;
+ 			rStationInfo.assoc_req_ies_len = prCliStaRec->u2AssocReqIeLen;
+ 
+-			cfg80211_new_sta(prGlueInfo->prP2PInfo->aprRoleHandler[ucRoleIndex],
++			cfg80211_new_sta(prGlueInfo->prP2PInfo->aprRoleHandler[ucRoleIndex]->ieee80211_ptr,
+ 					/* struct net_device * dev, */
+ 					 prCliStaRec->aucMacAddr, &rStationInfo, GFP_KERNEL);
+ 		} else {
+ 			++prP2pGlueInfo->i4Generation;
+ 
+-			cfg80211_del_sta(prGlueInfo->prP2PInfo->aprRoleHandler[ucRoleIndex],
++			cfg80211_del_sta(prGlueInfo->prP2PInfo->aprRoleHandler[ucRoleIndex]->ieee80211_ptr,
+ 					/* struct net_device * dev, */
+ 					 prCliStaRec->aucMacAddr, GFP_KERNEL);
+ 		}
+diff --git a/os/linux/gl_vendor.c b/os/linux/gl_vendor.c
+--- a/os/linux/gl_vendor.c
++++ b/os/linux/gl_vendor.c
+@@ -1875,7 +1875,7 @@
+ 		char wifiDriverVersionStr[] = NIC_DRIVER_VERSION_STRING"-"DRIVER_BUILD_DATE;
+ 		UINT_32 u4StrSize = strlen(wifiDriverVersionStr);
+ 		u4CopySize = (u4StrSize >= 64) ? 63 : u4StrSize;
+-		strncpy(verInfoBuf, wifiDriverVersionStr, u4CopySize);
++		strscpy(verInfoBuf, wifiDriverVersionStr, u4CopySize);
+ 	} else if (attrlist->nla_type == LOGGER_ATTRIBUTE_FW_VER) {
+ 		WIFI_VER_INFO_T *prVerInfo;
+ 		prGlueInfo = (P_GLUE_INFO_T) wiphy_priv(wiphy);
+diff --git a/os/linux/gl_wext.c b/os/linux/gl_wext.c
+--- a/os/linux/gl_wext.c
++++ b/os/linux/gl_wext.c
+@@ -687,22 +687,22 @@
+ 
+ 		switch (eNetWorkType) {
+ 		case PARAM_NETWORK_TYPE_DS:
+-			strncpy(pcName, "IEEE 802.11b", szNameSize);
++			strscpy(pcName, "IEEE 802.11b", szNameSize);
+ 			break;
+ 		case PARAM_NETWORK_TYPE_OFDM24:
+-			strncpy(pcName, "IEEE 802.11bgn", szNameSize);
++			strscpy(pcName, "IEEE 802.11bgn", szNameSize);
+ 			break;
+ 		case PARAM_NETWORK_TYPE_AUTOMODE:
+ 		case PARAM_NETWORK_TYPE_OFDM5:
+-			strncpy(pcName, "IEEE 802.11abgn", szNameSize);
++			strscpy(pcName, "IEEE 802.11abgn", szNameSize);
+ 			break;
+ 		case PARAM_NETWORK_TYPE_FH:
+ 		default:
+-			strncpy(pcName, "IEEE 802.11", szNameSize);
++			strscpy(pcName, "IEEE 802.11", szNameSize);
+ 			break;
+ 		}
+ 	} else {
+-		strncpy(pcName, "Disconnected", szNameSize);
++		strscpy(pcName, "Disconnected", szNameSize);
+ 	}
+ 
+ 	pcName[szNameSize - 1] = '\0';
+diff --git a/os/linux/include/gl_kal.h b/os/linux/include/gl_kal.h
+--- a/os/linux/include/gl_kal.h
++++ b/os/linux/include/gl_kal.h
+@@ -595,7 +595,7 @@
+ 
+ /* string operation */
+ #define kalStrCpy(dest, src)                         strcpy(dest, src)
+-#define kalStrnCpy(dest, src, n)                      strncpy(dest, src, n)
++#define kalStrnCpy(dest, src, n)                      strscpy(dest, src, n)
+ #define kalStrCmp(ct, cs)                            strcmp(ct, cs)
+ #define kalStrnCmp(ct, cs, n)                         strncmp(ct, cs, n)
+ #define kalStrChr(s, c)                              strchr(s, c)

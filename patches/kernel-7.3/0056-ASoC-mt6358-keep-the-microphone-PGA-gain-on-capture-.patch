@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 11:55:44 +0300
+Subject: [PATCH] ASoC: mt6358: keep the microphone PGA gain on capture stop
+
+Series patch 0068.
+---
+ sound/soc/codecs/mt6358.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/sound/soc/codecs/mt6358.c b/sound/soc/codecs/mt6358.c
+index ed8cbc63f..370ac88b0 100644
+--- a/sound/soc/codecs/mt6358.c
++++ b/sound/soc/codecs/mt6358.c
+@@ -1705,9 +1705,9 @@ static void mt6358_amic_disable(struct mt6358_priv *priv)
+ 	/* L preamplifier DCCEN */
+ 	regmap_update_bits(priv->regmap, MT6358_AUDENC_ANA_CON0,
+ 			   0x1 << 1, 0x0);
+-	/* L preamplifier input sel : off, L PGA 0 dB gain */
++	/* L preamplifier input sel : off, keep the user PGA gain */
+ 	regmap_update_bits(priv->regmap, MT6358_AUDENC_ANA_CON0,
+-			   0xfffb, 0x0000);
++			   0xfffb & ~RG_AUDPREAMPLGAIN_MASK_SFT, 0x0000);
+ 
+ 	/* disable L preamplifier DCC precharge */
+ 	regmap_update_bits(priv->regmap, MT6358_AUDENC_ANA_CON0,
+@@ -1719,9 +1719,9 @@ static void mt6358_amic_disable(struct mt6358_priv *priv)
+ 	/* R preamplifier DCCEN */
+ 	regmap_update_bits(priv->regmap, MT6358_AUDENC_ANA_CON1,
+ 			   0x1 << 1, 0x0);
+-	/* R preamplifier input sel : off, R PGA 0 dB gain */
++	/* R preamplifier input sel : off, keep the user PGA gain */
+ 	regmap_update_bits(priv->regmap, MT6358_AUDENC_ANA_CON1,
+-			   0x0ffb, 0x0000);
++			   0x0ffb & ~RG_AUDPREAMPLGAIN_MASK_SFT, 0x0000);
+ 
+ 	/* disable R preamplifier DCC precharge */
+ 	regmap_update_bits(priv->regmap, MT6358_AUDENC_ANA_CON1,

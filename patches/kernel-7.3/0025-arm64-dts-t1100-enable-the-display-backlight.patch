@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Mon, 2 Nov 2026 21:01:11 +0300
+Subject: [PATCH] arm64: dts: t1100: enable the display backlight
+
+The backlight node was fully described but disabled because there was
+no panel driver to light it up for. It drives DISP_PWM channel 0 of
+mmsys (stock disp_pwm0@1100e000, SPI 128 - identical to the mt8183.dtsi
+pwm0 node) and enables the LED string through GPIO56
+(odm/lcd-backlight, led_mode = 5 = PWM).
+
+pwm0 is provided by pwm-mtk-disp (mediatek,mt8183-disp-pwm), which is
+already built in (CONFIG_PWM_MTK_DISP), and its power domain is the
+DISP one that the panel path needs anyway.
+
+If the panel is enabled but the screen stays black, dropping
+"status = okay" here is the fastest way to tell "no picture" from "no
+backlight".
+---
+ arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index bfd2b21ad..e948e27ed 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -90,7 +90,7 @@ backlight: backlight {
+ 		brightness-levels = <0 1023>;
+ 		num-interpolated-steps = <1023>;
+ 		default-brightness-level = <576>;
+-		status = "disabled";
++		status = "okay";
+ 	};
+ 
+ 	/* Dual-cell LiHV pack (stock: 8 Ah, 4.35 V/cell). */

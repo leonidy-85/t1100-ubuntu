@@ -1,0 +1,196 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Tue, 3 Nov 2026 17:25:40 +0300
+Subject: [PATCH] rtc: mt6397: power off MT6358/MT6397 through the RTC block
+
+poweroff on the T1100 (MT6771 + MT6358) does not cut the rails: the board
+stays alive and then comes back into the same kernel. Nothing in the
+kernel drives the PMIC power-down, so do_kernel_power_off() only runs the
+legacy pm_power_off callback that the PSCI driver installs for every
+PSCI v0.2+ firmware (drivers/firmware/psci/psci.c:630) and the SoC falls
+back to something that is not a rail cut (the AP cannot switch the PMIC
+by itself, that is the PMIC's job on this platform).
+
+MT6358 has no pwrc MFD cell - drivers/mfd/mt6397-core.c:56-58,209-217
+creates "mt6323-pwrc" for MT6323 only (mt6323_pwrc_resources at :122-131)
+- so drivers/power/reset/mt6323-poweroff.c can never bind here, even
+though the RTC register block it uses is the same one MT6358 has
+(include/linux/mfd/mt6397/rtc.h is shared by mt6323/mt6358/mt6397 and
+only RTC_WRTGR differs: 0x3c vs 0x3a).
+
+Register the SYS_OFF_MODE_POWER_OFF handler in the RTC driver instead of
+adding a new driver. The driver already holds everything the sequence
+needs: the PMIC regmap, the absolute RTC base and the per-chip WRTGR
+offset. The base is not a guess: it comes from the MFD cell resource
+DEFINE_RES_MEM(MT6358_RTC_BASE = 0x0588, 0x3c)
+(drivers/mfd/mt6397-core.c:33,66-69) which mfd-core copies verbatim into
+the platform device because mem_base is NULL
+(drivers/mfd/mfd-core.c:249-268), so rtc->addr_base = 0x588
+(rtc-mt6397.c: mtk_rtc_probe, platform_get_resource). No DT change is
+needed: the rtc node in mt6358.dtsi has no reg property and must not get
+one, nothing reads it.
+
+The power-off itself is the documented MT6323 recipe reused through the
+existing trigger helper: write RTC_BBPU_KEY to BBPU, then write 1 to
+WRTGR, then poll CBUSY (mtk_rtc_write_trigger). Only BBPU/WRTGR are
+touched, never the time/alarm registers, so rtc->lock is not taken: the
+handler runs from the atomic sys-off chain after
+local_irq_disable()/smp_send_stop() (arch/arm64/kernel/process.c:111-116,
+kernel/reboot.c:655-674) where a mutex would be a sleeping call.
+
+Ordering versus firmware: handlers at SYS_OFF_PRIO_DEFAULT run in
+registration order, and PSCI's legacy callback is registered inside
+do_kernel_power_off() (kernel/reboot.c:666-669), i.e. after ours, so the
+PMIC is programmed before the PSCI SYSTEM_OFF call.
+
+MT6323 keeps its own driver (new mt6323_rtc_data without the flag), so
+nothing changes on the boards that already power off; MT6357/MT6359 share
+mt6358_rtc_data and get the handler too, MT6397 gets it for the same
+reason (untested hardware, one line to drop).
+
+The watchdog does not need touching: mtk_wdt_probe() never arms the WDT,
+mtk_wdt_init() only records an already running one (mtk_wdt.c:288-299),
+and WDOG_STOP_ON_REBOOT is already requested (mtk_wdt.c:445) so the core
+stops it on SYS_POWER_OFF (watchdog_core.c:158-176) before this handler
+runs.
+
+To verify on hardware: dmesg of the boot that powers off ends with
+"Power down" followed by "mt6397-rtc ... powering off", the board dies
+with no LED/screen activity, and the next power-on is a cold boot. If it
+instead reboots, the log (pstore console, CONFIG_PSTORE_CONSOLE=y)
+contains our line and then the WARN "Unable to power off system", which
+means BBPU/WRTGR did not take effect.
+---
+ drivers/rtc/rtc-mt6397.c       | 68 +++++++++++++++++++++++++++++++++-
+ include/linux/mfd/mt6397/rtc.h |  2 +
+ 2 files changed, 68 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/rtc/rtc-mt6397.c b/drivers/rtc/rtc-mt6397.c
+index 3d857681f..7806def2c 100644
+--- a/drivers/rtc/rtc-mt6397.c
++++ b/drivers/rtc/rtc-mt6397.c
+@@ -4,6 +4,7 @@
+ * Author: Tianping.Fang <tianping.fang@mediatek.com>
+ */
+ 
++#include <linux/delay.h>
+ #include <linux/err.h>
+ #include <linux/interrupt.h>
+ #include <linux/mfd/mt6397/core.h>
+@@ -11,6 +12,7 @@
+ #include <linux/mutex.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
++#include <linux/reboot.h>
+ #include <linux/regmap.h>
+ #include <linux/rtc.h>
+ #include <linux/mfd/mt6397/rtc.h>
+@@ -243,6 +245,48 @@ static const struct rtc_class_ops mtk_rtc_ops = {
+ 	.set_alarm  = mtk_rtc_set_alarm,
+ };
+ 
++/*
++ * Power off through the RTC block of the PMIC.
++ *
++ * MT6323/MT6358/MT6397 cut the rails when BBPU receives the power-off key and
++ * the write is triggered through WRTGR; the register map is shared by all of
++ * them (include/linux/mfd/mt6397/rtc.h), only the WRTGR offset differs and
++ * that is already in rtc->data->wrtgr. MT6323 has a dedicated
++ * "mt6323-pwrc" MFD cell and driver for this
++ * (drivers/power/reset/mt6323-poweroff.c), but mt6397-core.c creates that
++ * cell for MT6323 only, so MT6358/MT6397 have no power-off handler at all and
++ * fall through to the PSCI system-off call, which on this SoC does not cut
++ * the PMIC rails.
++ *
++ * Runs from the atomic sys-off chain (machine_power_off() ->
++ * do_kernel_power_off(), arch/arm64/kernel/process.c) with interrupts off, so
++ * no locking: only BBPU/WRTGR are written here, never the time or alarm
++ * registers that rtc->lock protects.
++ */
++static int mtk_rtc_power_off(struct sys_off_data *data)
++{
++	struct mt6397_rtc *rtc = data->cb_data;
++	int ret;
++
++	dev_info(rtc->rtc_dev->dev.parent, "powering off\n");
++
++	/* Same sequence as mt6323_do_pwroff(). */
++	ret = regmap_write(rtc->regmap, rtc->addr_base + RTC_BBPU, RTC_BBPU_KEY);
++	if (ret) {
++		dev_err(rtc->rtc_dev->dev.parent,
++			"failed to write BBPU: %d\n", ret);
++		return NOTIFY_DONE;
++	}
++
++	mtk_rtc_write_trigger(rtc);
++
++	/* Wait until the rails are gone, otherwise notice with a warn. */
++	mdelay(1000);
++	WARN_ONCE(1, "Unable to power off system\n");
++
++	return NOTIFY_DONE;
++}
++
+ static int mtk_rtc_probe(struct platform_device *pdev)
+ {
+ 	struct resource *res;
+@@ -293,7 +337,21 @@ static int mtk_rtc_probe(struct platform_device *pdev)
+ 	rtc->rtc_dev->start_secs = mktime64(1968, 1, 2, 0, 0, 0);
+ 	rtc->rtc_dev->set_start_time = true;
+ 
+-	return devm_rtc_register_device(rtc->rtc_dev);
++	ret = devm_rtc_register_device(rtc->rtc_dev);
++	if (ret)
++		return ret;
++
++	if (rtc->data->power_off) {
++		ret = devm_register_sys_off_handler(&pdev->dev,
++						    SYS_OFF_MODE_POWER_OFF,
++						    SYS_OFF_PRIO_DEFAULT,
++						    mtk_rtc_power_off, rtc);
++		if (ret)
++			return dev_err_probe(&pdev->dev, ret,
++					     "failed to register power-off handler\n");
++	}
++
++	return 0;
+ }
+ 
+ #ifdef CONFIG_PM_SLEEP
+@@ -321,16 +379,22 @@ static int mt6397_rtc_resume(struct device *dev)
+ static SIMPLE_DEV_PM_OPS(mt6397_pm_ops, mt6397_rtc_suspend,
+ 			mt6397_rtc_resume);
+ 
++static const struct mtk_rtc_data mt6323_rtc_data = {
++	.wrtgr = RTC_WRTGR_MT6323,
++};
++
+ static const struct mtk_rtc_data mt6358_rtc_data = {
+ 	.wrtgr = RTC_WRTGR_MT6358,
++	.power_off = true,
+ };
+ 
+ static const struct mtk_rtc_data mt6397_rtc_data = {
+ 	.wrtgr = RTC_WRTGR_MT6397,
++	.power_off = true,
+ };
+ 
+ static const struct of_device_id mt6397_rtc_of_match[] = {
+-	{ .compatible = "mediatek,mt6323-rtc", .data = &mt6397_rtc_data },
++	{ .compatible = "mediatek,mt6323-rtc", .data = &mt6323_rtc_data },
+ 	{ .compatible = "mediatek,mt6357-rtc", .data = &mt6358_rtc_data },
+ 	{ .compatible = "mediatek,mt6358-rtc", .data = &mt6358_rtc_data },
+ 	{ .compatible = "mediatek,mt6397-rtc", .data = &mt6397_rtc_data },
+diff --git a/include/linux/mfd/mt6397/rtc.h b/include/linux/mfd/mt6397/rtc.h
+index 27883af44..ea438b975 100644
+--- a/include/linux/mfd/mt6397/rtc.h
++++ b/include/linux/mfd/mt6397/rtc.h
+@@ -65,6 +65,8 @@
+ 
+ struct mtk_rtc_data {
+ 	u32                     wrtgr;
++	/* Chip has no separate pwrc cell: the RTC block cuts the rails. */
++	bool                    power_off;
+ };
+ 
+ struct mt6397_rtc {

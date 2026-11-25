@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 12:40:28 +0300
+Subject: [PATCH] power: supply: mt6370: take the battery state from the MT6358
+ gauge
+
+Series 0069 (vendor OCV curve) and 0072/0073 (gauge hooks). The charger
+keeps reporting "Charging" whenever it is enabled, so the sign of the
+gauge current decides between charging and discharging; voltage, current
+and capacity come from the gauge when it is valid and fall back to the
+MT6370 ADC otherwise.
+
+The 7.3 driver already uses devm_mutex_init(), devm_alloc_ordered_workqueue()
+and power_supply_config.fwnode, so those stay as upstream has them.
+---
+ drivers/power/supply/mt6370-charger.c | 51 +++++++++++++++++++++++----
+ 1 file changed, 44 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/power/supply/mt6370-charger.c b/drivers/power/supply/mt6370-charger.c
+index e6f500e24..2f4b0cf21 100644
+--- a/drivers/power/supply/mt6370-charger.c
++++ b/drivers/power/supply/mt6370-charger.c
+@@ -17,6 +17,7 @@
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
++#include <linux/power/mt6358-gauge.h>
+ #include <linux/power_supply.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/driver.h>
+@@ -568,15 +569,18 @@ static int mt6370_chg_get_property(struct power_supply *psy,
+ 	}
+ }
+ 
+-/* Mainline has no MT6358 fuel gauge: expose the MT6370 ADC as a battery and
+- * estimate the state of charge from a 1S Li-ion OCV table (coarse, no coulomb
+- * counter, enough for UPower/PowerDevil).
++/* Mainline has no MT6358 fuel gauge: the battery capacity comes from the
++ * minimal MT6358 gauge driver when it probed (patches/0072).  If the gauge is
++ * unavailable, fall back to the MT6370 VBAT ADC and a 1S Li-ion OCV table
++ * (coarse, no coulomb counter, enough for UPower/PowerDevil).
+  */
+ static const struct { int mv; int pct; } t1100_ocv[] = {
+-	{ 4400, 100 }, { 4300, 95 }, { 4200, 88 }, { 4100, 80 },
+-	{ 4000, 70 }, { 3900, 60 }, { 3800, 50 }, { 3750, 45 },
+-	{ 3700, 40 }, { 3650, 33 }, { 3600, 25 }, { 3500, 15 },
+-	{ 3400, 8 }, { 3300, 3 }, { 3000, 0 },
++	{ 4337, 100 }, { 4255, 95 }, { 4195, 90 }, { 4140, 85 },
++	{ 4090, 80 }, { 4038, 75 }, { 3975, 70 }, { 3947, 65 },
++	{ 3901, 60 }, { 3861, 55 }, { 3833, 50 }, { 3816, 45 },
++	{ 3799, 40 }, { 3786, 35 }, { 3776, 30 }, { 3766, 25 },
++	{ 3749, 20 }, { 3722, 15 }, { 3698, 10 }, { 3655, 5 },
++	{ 3372, 0 },
+ };
+ 
+ static int t1100_ocv_to_pct(int mv)
+@@ -596,11 +600,17 @@ static int t1100_ocv_to_pct(int mv)
+ 	return 0;
+ }
+ 
++static bool mt6370_bat_gauge_state(struct mt6358_gauge_state *state)
++{
++	return !mt6358_gauge_get_state(state) && state->valid;
++}
++
+ static int mt6370_bat_get_property(struct power_supply *psy,
+ 				   enum power_supply_property psp,
+ 				   union power_supply_propval *val)
+ {
+ 	struct mt6370_priv *priv = power_supply_get_drvdata(psy);
++	struct mt6358_gauge_state state;
+ 	int ret, mv = 0, ma = 0;
+ 
+ 	switch (psp) {
+@@ -611,20 +621,47 @@ static int mt6370_bat_get_property(struct power_supply *psy,
+ 		val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
+ 		return 0;
+ 	case POWER_SUPPLY_PROP_STATUS:
++		/*
++		 * The charger reports "Charging" as long as it is enabled, even
++		 * when the system load is higher than the input limit and the
++		 * battery is actually discharging.  The gauge current is the
++		 * reliable source for the sign; keep the charger state near 0.
++		 */
++		if (mt6370_bat_gauge_state(&state)) {
++			if (state.current_ma < -50)
++				val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
++			else if (state.current_ma > 50)
++				val->intval = POWER_SUPPLY_STATUS_CHARGING;
++			else
++				return mt6370_chg_get_status(priv, val);
++			return 0;
++		}
+ 		return mt6370_chg_get_status(priv, val);
+ 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
++		if (mt6370_bat_gauge_state(&state)) {
++			val->intval = state.voltage_mv * 1000;
++			return 0;
++		}
+ 		ret = mt6370_chg_read_adc_chan(priv, MT6370_ADC_CHAN_VBAT, &mv);
+ 		if (ret)
+ 			return ret;
+ 		val->intval = mv * 1000;
+ 		return 0;
+ 	case POWER_SUPPLY_PROP_CURRENT_NOW:
++		if (mt6370_bat_gauge_state(&state)) {
++			val->intval = state.current_ma * 1000;
++			return 0;
++		}
+ 		ret = mt6370_chg_read_adc_chan(priv, MT6370_ADC_CHAN_IBAT, &ma);
+ 		if (ret)
+ 			return ret;
+ 		val->intval = ma * 1000;
+ 		return 0;
+ 	case POWER_SUPPLY_PROP_CAPACITY:
++		if (mt6370_bat_gauge_state(&state)) {
++			val->intval = state.capacity;
++			return 0;
++		}
+ 		ret = mt6370_chg_read_adc_chan(priv, MT6370_ADC_CHAN_VBAT, &mv);
+ 		if (ret)
+ 			return ret;

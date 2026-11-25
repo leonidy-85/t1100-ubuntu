@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 10:09:53 +0300
+Subject: [PATCH] i2c: mt65xx: log the programmed bus timing during init
+
+The T800 bring-up has no UART and the touch controller on i2c0 does not
+answer, so the only way to tell a wrong source clock or divider from an
+electrical problem is the timing the driver actually programmed. Print
+speed, parent rate, divider, timing/high-speed/ltiming/ext registers and
+the register set in mtk_i2c_init_hw(); the register dump already existed
+but at dev_dbg().
+
+Also raise "Unsupported speed" from dev_dbg() to dev_info() so it reaches
+the RAM log with the default loglevel. Temporary bring-up aid.
+---
+ drivers/i2c/busses/i2c-mt65xx.c | 43 +++++++++++++++++++++------------
+ 1 file changed, 27 insertions(+), 16 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-mt65xx.c b/drivers/i2c/busses/i2c-mt65xx.c
+index 307925fb7..14c9184b0 100644
+--- a/drivers/i2c/busses/i2c-mt65xx.c
++++ b/drivers/i2c/busses/i2c-mt65xx.c
+@@ -551,6 +551,8 @@ static void mtk_i2c_writew(struct mtk_i2c *i2c, u16 val,
+ 	writew(val, i2c->base + i2c->dev_comp->regs[reg]);
+ }
+ 
++static void i2c_dump_register(struct mtk_i2c *i2c);
++
+ static void mtk_i2c_init_hw(struct mtk_i2c *i2c)
+ {
+ 	u16 control_reg;
+@@ -638,6 +640,11 @@ static void mtk_i2c_init_hw(struct mtk_i2c *i2c)
+ 
+ 	mtk_i2c_writew(i2c, control_reg, OFFSET_CONTROL);
+ 	mtk_i2c_writew(i2c, I2C_DELAY_LEN, OFFSET_DELAY_LEN);
++	dev_info(i2c->dev, "DBG init_hw: speed=%u parent=%lu div=%u timing=0x%x hs=0x%x ltiming=0x%x ext=0x%x sda=0x%x\n",
++		 i2c->speed_hz, clk_get_rate(i2c->clocks[0].clk), i2c->clk_src_div, i2c->timing_reg,
++		 i2c->high_speed_reg, i2c->ltiming_reg, i2c->ac_timing.ext,
++		 i2c->ac_timing.sda_timing);
++	i2c_dump_register(i2c);
+ }
+ 
+ static const struct i2c_spec_values *mtk_i2c_get_spec(unsigned int speed)
+@@ -860,7 +867,7 @@ static int mtk_i2c_calculate_speed(struct mtk_i2c *i2c, unsigned int clk_src,
+ 		/* In this case, hardware can't support such
+ 		 * low i2c_bus_freq
+ 		 */
+-		dev_dbg(i2c->dev, "Unsupported speed (%uhz)\n",	target_speed);
++		dev_info(i2c->dev, "Unsupported speed (%uhz)\n",	target_speed);
+ 		return -EINVAL;
+ 	}
+ 
+@@ -940,55 +947,59 @@ static void mtk_i2c_set_speed(struct mtk_i2c *i2c, unsigned int parent_clk)
+ 
+ 		break;
+ 	}
++
++	dev_info(i2c->dev, "DBG set_speed: target=%u parent=%u after_div=%u clk_div=%u step=%u sample=%u\n",
++		 target_speed, parent_clk * i2c->clk_src_div, clk_src, i2c->ac_timing.inter_clk_div,
++		 l_step_cnt, l_sample_cnt);
+ }
+ 
+ static void i2c_dump_register(struct mtk_i2c *i2c)
+ {
+-	dev_dbg(i2c->dev, "SLAVE_ADDR: 0x%x, INTR_MASK: 0x%x\n",
++	dev_info(i2c->dev, "SLAVE_ADDR: 0x%x, INTR_MASK: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_SLAVE_ADDR),
+ 		mtk_i2c_readw(i2c, OFFSET_INTR_MASK));
+-	dev_dbg(i2c->dev, "INTR_STAT: 0x%x, CONTROL: 0x%x\n",
++	dev_info(i2c->dev, "INTR_STAT: 0x%x, CONTROL: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_INTR_STAT),
+ 		mtk_i2c_readw(i2c, OFFSET_CONTROL));
+-	dev_dbg(i2c->dev, "TRANSFER_LEN: 0x%x, TRANSAC_LEN: 0x%x\n",
++	dev_info(i2c->dev, "TRANSFER_LEN: 0x%x, TRANSAC_LEN: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_TRANSFER_LEN),
+ 		mtk_i2c_readw(i2c, OFFSET_TRANSAC_LEN));
+-	dev_dbg(i2c->dev, "DELAY_LEN: 0x%x, HTIMING: 0x%x\n",
++	dev_info(i2c->dev, "DELAY_LEN: 0x%x, HTIMING: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_DELAY_LEN),
+ 		mtk_i2c_readw(i2c, OFFSET_TIMING));
+-	dev_dbg(i2c->dev, "START: 0x%x, EXT_CONF: 0x%x\n",
++	dev_info(i2c->dev, "START: 0x%x, EXT_CONF: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_START),
+ 		mtk_i2c_readw(i2c, OFFSET_EXT_CONF));
+-	dev_dbg(i2c->dev, "HS: 0x%x, IO_CONFIG: 0x%x\n",
++	dev_info(i2c->dev, "HS: 0x%x, IO_CONFIG: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_HS),
+ 		mtk_i2c_readw(i2c, OFFSET_IO_CONFIG));
+-	dev_dbg(i2c->dev, "DCM_EN: 0x%x, TRANSFER_LEN_AUX: 0x%x\n",
++	dev_info(i2c->dev, "DCM_EN: 0x%x, TRANSFER_LEN_AUX: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_DCM_EN),
+ 		mtk_i2c_readw(i2c, OFFSET_TRANSFER_LEN_AUX));
+-	dev_dbg(i2c->dev, "CLOCK_DIV: 0x%x, FIFO_STAT: 0x%x\n",
++	dev_info(i2c->dev, "CLOCK_DIV: 0x%x, FIFO_STAT: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_CLOCK_DIV),
+ 		mtk_i2c_readw(i2c, OFFSET_FIFO_STAT));
+-	dev_dbg(i2c->dev, "DEBUGCTRL : 0x%x, DEBUGSTAT: 0x%x\n",
++	dev_info(i2c->dev, "DEBUGCTRL : 0x%x, DEBUGSTAT: 0x%x\n",
+ 		mtk_i2c_readw(i2c, OFFSET_DEBUGCTRL),
+ 		mtk_i2c_readw(i2c, OFFSET_DEBUGSTAT));
+ 	if (i2c->dev_comp->regs == mt_i2c_regs_v2) {
+-		dev_dbg(i2c->dev, "LTIMING: 0x%x, MULTI_DMA: 0x%x\n",
++		dev_info(i2c->dev, "LTIMING: 0x%x, MULTI_DMA: 0x%x\n",
+ 			mtk_i2c_readw(i2c, OFFSET_LTIMING),
+ 			mtk_i2c_readw(i2c, OFFSET_MULTI_DMA));
+ 	}
+-	dev_dbg(i2c->dev, "\nDMA_INT_FLAG: 0x%x, DMA_INT_EN: 0x%x\n",
++	dev_info(i2c->dev, "\nDMA_INT_FLAG: 0x%x, DMA_INT_EN: 0x%x\n",
+ 		readl(i2c->pdmabase + OFFSET_INT_FLAG),
+ 		readl(i2c->pdmabase + OFFSET_INT_EN));
+-	dev_dbg(i2c->dev, "DMA_EN: 0x%x, DMA_CON: 0x%x\n",
++	dev_info(i2c->dev, "DMA_EN: 0x%x, DMA_CON: 0x%x\n",
+ 		readl(i2c->pdmabase + OFFSET_EN),
+ 		readl(i2c->pdmabase + OFFSET_CON));
+-	dev_dbg(i2c->dev, "DMA_TX_MEM_ADDR: 0x%x, DMA_RX_MEM_ADDR: 0x%x\n",
++	dev_info(i2c->dev, "DMA_TX_MEM_ADDR: 0x%x, DMA_RX_MEM_ADDR: 0x%x\n",
+ 		readl(i2c->pdmabase + OFFSET_TX_MEM_ADDR),
+ 		readl(i2c->pdmabase + OFFSET_RX_MEM_ADDR));
+-	dev_dbg(i2c->dev, "DMA_TX_LEN: 0x%x, DMA_RX_LEN: 0x%x\n",
++	dev_info(i2c->dev, "DMA_TX_LEN: 0x%x, DMA_RX_LEN: 0x%x\n",
+ 		readl(i2c->pdmabase + OFFSET_TX_LEN),
+ 		readl(i2c->pdmabase + OFFSET_RX_LEN));
+-	dev_dbg(i2c->dev, "DMA_TX_4G_MODE: 0x%x, DMA_RX_4G_MODE: 0x%x",
++	dev_info(i2c->dev, "DMA_TX_4G_MODE: 0x%x, DMA_RX_4G_MODE: 0x%x",
+ 		readl(i2c->pdmabase + OFFSET_TX_4G_MODE),
+ 		readl(i2c->pdmabase + OFFSET_RX_4G_MODE));
+ }

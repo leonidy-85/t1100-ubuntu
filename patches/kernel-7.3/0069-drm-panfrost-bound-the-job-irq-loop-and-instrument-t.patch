@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 12:46:37 +0300
+Subject: [PATCH] drm/panfrost: bound the job irq loop and instrument the slow
+ paths
+
+A job slot stuck in an exception state keeps its RAWSTAT bit asserted, so
+the clear+read loop in the threaded handler never ends and synchronize_irq()
+in the timeout/reset path wedges the GPU for good. Bail out after 32 rounds,
+mask the interrupt and schedule a reset; do not re-arm it while a reset is
+pending. Log the round count, the job_lock wait, the synchronize_irq() wait
+and the handler duration when they exceed 100 ms, and dump RAWSTAT/JS_STATE/
+INT_MASK on a sched timeout.
+---
+ drivers/gpu/drm/panfrost/panfrost_job.c | 90 ++++++++++++++++++++++++-
+ 1 file changed, 87 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpu/drm/panfrost/panfrost_job.c b/drivers/gpu/drm/panfrost/panfrost_job.c
+index ab83f8f7c..32e57d300 100644
+--- a/drivers/gpu/drm/panfrost/panfrost_job.c
++++ b/drivers/gpu/drm/panfrost/panfrost_job.c
+@@ -25,6 +25,18 @@
+ #define MAX_JM_CTX_PER_FILE 64
+ #define JOB_TIMEOUT_MS 500
+ 
++/* Anything above this is worth a line in dmesg, see the commit message. */
++#define JOB_IRQ_SLOW_MS 100
++
++/*
++ * A job interrupt that the GPU keeps re-asserting after it has been cleared
++ * must not keep the threaded handler busy forever: the timeout/reset path
++ * synchronizes with that handler, so an endless loop here wedges the reset
++ * worker and the GPU never recovers.  Normal operation needs one or two
++ * rounds per handler invocation.
++ */
++#define JOB_IRQ_MAX_ROUNDS 32
++
+ #define job_write(dev, reg, data) writel(data, dev->iomem + (reg))
+ #define job_read(dev, reg) readl(dev->iomem + (reg))
+ 
+@@ -523,6 +535,7 @@ static void panfrost_jm_handle_irq(struct panfrost_device *pfdev, u32 status)
+ 	struct panfrost_job *failed[NUM_JOB_SLOTS] = {};
+ 	u32 js_state = 0, js_events = 0;
+ 	unsigned int i, j;
++	unsigned int rounds = 0;
+ 
+ 	/* First we collect all failed/done jobs. */
+ 	while (status) {
+@@ -566,6 +579,27 @@ static void panfrost_jm_handle_irq(struct panfrost_device *pfdev, u32 status)
+ 		js_state |= job_read(pfdev, JOB_INT_JS_STATE) & js_state_mask;
+ 		js_events |= status;
+ 		status = job_read(pfdev, JOB_INT_RAWSTAT);
++
++		/*
++		 * A job slot that stays in an exception state (DATA_INVALID /
++		 * JOB_CONFIG faults are not recovered by the driver: only the
++		 * *next* command is cancelled) keeps its RAWSTAT bit asserted,
++		 * so writing JOB_INT_CLEAR has no visible effect and the loop
++		 * above would never end.  The threaded handler has to return:
++		 * panfrost_job_timedout() and panfrost_reset() wait for it in
++		 * synchronize_irq(), and while it runs no reset can happen, so
++		 * one stuck slot parks the whole GPU queue.  Mask the job
++		 * interrupt and hand over to the reset path, which soft-stops
++		 * the slots, resets the GPU and re-enables the interrupt.
++		 */
++		if (status && ++rounds >= JOB_IRQ_MAX_ROUNDS) {
++			dev_err(pfdev->base.dev,
++				"job irq status does not clear (rawstat=0x%08x, js_state=0x%08x), scheduling a GPU reset\n",
++				status, job_read(pfdev, JOB_INT_JS_STATE));
++			job_write(pfdev, JOB_INT_MASK, 0);
++			panfrost_device_schedule_reset(pfdev);
++			break;
++		}
+ 	}
+ 
+ 	/* Then we handle the dequeued jobs. */
+@@ -621,15 +655,41 @@ static void panfrost_jm_handle_irq(struct panfrost_device *pfdev, u32 status)
+ static void panfrost_jm_handle_irqs(struct panfrost_device *pfdev)
+ {
+ 	u32 status = job_read(pfdev, JOB_INT_RAWSTAT);
++	unsigned int rounds = 0;
++	s64 lock_wait_ms = 0;
+ 
+ 	while (status) {
++		ktime_t before = ktime_get();
++		s64 waited;
++
+ 		pm_runtime_mark_last_busy(pfdev->base.dev);
+ 
+ 		spin_lock(&pfdev->js->job_lock);
++		waited = ktime_ms_delta(ktime_get(), before);
++		if (waited > lock_wait_ms)
++			lock_wait_ms = waited;
+ 		panfrost_jm_handle_irq(pfdev, status);
+ 		spin_unlock(&pfdev->js->job_lock);
+ 		status = job_read(pfdev, JOB_INT_RAWSTAT);
++		rounds++;
++
++		/*
++		 * A reset is pending (a stuck job slot above, a bus fault that
++		 * needs one, or the timeout handler): the job slots are owned
++		 * by panfrost_reset() now, do not touch them from here.  The
++		 * reset path itself calls this function once, after masking the
++		 * interrupt, which is what the single pass is for.
++		 */
++		if (atomic_read(&pfdev->reset.pending))
++			break;
+ 	}
++
++	if (rounds > 8 || lock_wait_ms > JOB_IRQ_SLOW_MS)
++		dev_warn(pfdev->base.dev,
++			 "job irq: %u round(s), job_lock waited %lld ms, rawstat=0x%08x, js_state=0x%08x\n",
++			 rounds, lock_wait_ms,
++			 job_read(pfdev, JOB_INT_RAWSTAT),
++			 job_read(pfdev, JOB_INT_JS_STATE));
+ }
+ 
+ static u32 panfrost_active_slots(struct panfrost_device *pfdev,
+@@ -762,6 +822,8 @@ static enum drm_gpu_sched_stat panfrost_job_timedout(struct drm_sched_job
+ {
+ 	struct panfrost_job *job = to_panfrost_job(sched_job);
+ 	struct panfrost_device *pfdev = job->pfdev;
++	ktime_t sync_before;
++	s64 sync_ms;
+ 	int js = panfrost_job_get_slot(job);
+ 
+ 	/*
+@@ -780,19 +842,27 @@ static enum drm_gpu_sched_stat panfrost_job_timedout(struct drm_sched_job
+ 	 * job timeouts, synchronize the IRQ handler and re-check the fence
+ 	 * status.
+ 	 */
++	sync_before = ktime_get();
+ 	synchronize_irq(pfdev->js->irq);
++	sync_ms = ktime_ms_delta(ktime_get(), sync_before);
++	if (sync_ms > JOB_IRQ_SLOW_MS)
++		dev_warn(pfdev->base.dev, "synchronize_irq(job) took %lld ms\n",
++			 sync_ms);
+ 
+ 	if (dma_fence_is_signaled(job->done_fence)) {
+ 		dev_warn(pfdev->base.dev, "unexpectedly high interrupt latency\n");
+ 		return DRM_GPU_SCHED_STAT_NO_HANG;
+ 	}
+ 
+-	dev_err(pfdev->base.dev, "gpu sched timeout, js=%d, config=0x%x, status=0x%x, head=0x%x, tail=0x%x, sched_job=%p",
++	dev_err(pfdev->base.dev, "gpu sched timeout, js=%d, config=0x%x, status=0x%x, head=0x%x, tail=0x%x, rawstat=0x%x, js_state=0x%x, int_mask=0x%x, sched_job=%p",
+ 		js,
+ 		job_read(pfdev, JS_CONFIG(js)),
+ 		job_read(pfdev, JS_STATUS(js)),
+ 		job_read(pfdev, JS_HEAD_LO(js)),
+ 		job_read(pfdev, JS_TAIL_LO(js)),
++		job_read(pfdev, JOB_INT_RAWSTAT),
++		job_read(pfdev, JOB_INT_JS_STATE),
++		job_read(pfdev, JOB_INT_MASK),
+ 		sched_job);
+ 
+ 	panfrost_core_dump(job);
+@@ -820,13 +890,27 @@ static const struct drm_sched_backend_ops panfrost_sched_ops = {
+ static irqreturn_t panfrost_jm_irq_handler_thread(int irq, void *data)
+ {
+ 	struct panfrost_device *pfdev = data;
++	ktime_t before = ktime_get();
++	s64 elapsed;
+ 
+ 	panfrost_jm_handle_irqs(pfdev);
+ 
+-	/* Enable interrupts only if we're not about to get suspended */
+-	if (!test_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended))
++	/*
++	 * Enable interrupts only if we're not about to get suspended, and not
++	 * while a reset is pending: panfrost_reset() re-enables them once the
++	 * job slots have been restarted, re-arming them here would only
++	 * re-enter this handler for a status bit that cannot be cleared.
++	 */
++	if (!test_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended) &&
++	    !atomic_read(&pfdev->reset.pending))
+ 		job_write(pfdev, JOB_INT_MASK, ALL_JS_INT_MASK);
+ 
++	elapsed = ktime_ms_delta(ktime_get(), before);
++	if (elapsed > JOB_IRQ_SLOW_MS)
++		dev_warn(pfdev->base.dev, "job irq thread took %lld ms, suspended=%d\n",
++			 elapsed,
++			 test_bit(PANFROST_COMP_BIT_JOB, pfdev->is_suspended));
++
+ 	return IRQ_HANDLED;
+ }
+ 

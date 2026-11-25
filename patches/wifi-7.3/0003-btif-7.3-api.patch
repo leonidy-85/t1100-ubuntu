@@ -1,0 +1,11 @@
+--- a/m23_board.c
++++ b/m23_board.c
+@@ -178,7 +178,7 @@
+ 		return -ENODEV;
+ 	}
+ 
+-	fwspec.fwnode = of_node_to_fwnode(root_irqc);
++	fwspec.fwnode = of_fwnode_handle(root_irqc);
+ 	fwspec.param_count = 3;
+ 	fwspec.param[0] = 0;			/* GIC_SPI */
+ 	fwspec.param[1] = spi;

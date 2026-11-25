@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 11:42:22 +0300
+Subject: [PATCH] drm/panel: it6112: use the 7.3 panel allocation API
+
+drm_panel_init() is gone since the panel core became refcounted: the
+container must come from devm_drm_panel_alloc(), which initializes the
+embedded drm_panel itself. of_drm_get_panel_orientation() was renamed to
+drm_of_get_panel_orientation().
+---
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 19 ++++++++++---------
+ 1 file changed, 10 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index 67c0b6772..767dc0187 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -13,8 +13,9 @@
+  * Backport to 6.12 for the t1100 port. Differences from the 6.16 original
+  * (refs/it6112/panel-it6112-boe-tv110xum-lb2.c in t1100-ubuntu):
+  *
+- *  - devm_drm_panel_alloc() does not exist before 6.16: use devm_kzalloc()
+- *    + drm_panel_init() here.
++ *  - devm_drm_panel_alloc() does not exist before 6.16: the 6.12 port used
++ *    devm_kzalloc() + drm_panel_init(), 7.3 has devm_drm_panel_alloc() and
++ *    no drm_panel_init() at all.
+  *  - the DSI peripheral is matched by name (mipi_dsi_device_match(), see
+  *    drivers/gpu/drm/drm_mipi_dsi.c:59), so the DSI driver name must equal
+  *    info.type ("boe-tv110xum-lb2"); the original used
+@@ -49,6 +50,7 @@
+ #include <drm/drm_connector.h>
+ #include <drm/drm_mipi_dsi.h>
+ #include <drm/drm_modes.h>
++#include <drm/drm_of.h>
+ #include <drm/drm_panel.h>
+ 
+ #include <video/mipi_display.h>
+@@ -970,9 +972,11 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 		.node = NULL,
+ 	};
+ 
+-	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
+-	if (!ctx)
+-		return -ENOMEM;
++	ctx = devm_drm_panel_alloc(dev, struct it6112_ctx, base,
++				   &boe_tv110xum_lb2_funcs,
++				   DRM_MODE_CONNECTOR_DSI);
++	if (IS_ERR(ctx))
++		return PTR_ERR(ctx);
+ 
+ 	i2c_mipi_rx = devm_i2c_new_dummy_device(dev, i2c->adapter,
+ 						IT6112_MIPI_RX_I2CADDR);
+@@ -986,9 +990,6 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 
+ 	INIT_DELAYED_WORK(&ctx->dcs_retry, it6112_dcs_retry_work);
+ 
+-	drm_panel_init(&ctx->base, dev, &boe_tv110xum_lb2_funcs,
+-		       DRM_MODE_CONNECTOR_DSI);
+-
+ 	/*
+ 	 * The panel is mounted rotated in the chassis: the device is used in
+ 	 * landscape, the DSI mode (and the glass) is portrait.  The DT
+@@ -997,7 +998,7 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 	 * orientation property, so KWin/Weston rotate the output themselves.
+ 	 */
+ 	ctx->orientation = DRM_MODE_PANEL_ORIENTATION_UNKNOWN;
+-	of_drm_get_panel_orientation(dev->of_node, &ctx->orientation);
++	drm_of_get_panel_orientation(dev->of_node, &ctx->orientation);
+ 
+ 	ctx->regulators[0].supply = "dvdd";
+ 	ctx->regulators[1].supply = "vpos";

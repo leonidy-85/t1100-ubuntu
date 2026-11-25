@@ -1,0 +1,703 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Tue, 10 Nov 2026 20:18:57 +0300
+Subject: [PATCH] input: touchscreen: hx83112b: add HX83102E support, power the
+ rail first
+
+The Fplus T1100 (MT6771) carries a Himax HX83102E digitizer on i2c0 0x48.
+Read over the AHB window the driver already uses for the ICID:
+
+    reg 0x00 = 0x900000d0, reg 0x0c = 0x00, read reg 0x08 -> 0x83102e00
+
+i.e. ID 0x83102e, the same identification register and the same 56-byte
+"protocol type B" frame size as the hx83112b (the vendor driver logs
+"touch_info_size:56"), so it only needs its own chip description - not the
+AHB-indirect event path of the hx83100a (that window answers 0xbb, i.e. no
+such address, on this part).  Cross-checked with the vendor port
+(refs/mt6771-next, patch "input: touchscreen: hx83112b: Add support for
+HX83102E") and with the live controller.
+
+Two board facts that the driver has to respect:
+
+ - the rail (VLDO28 through the GPIO163 load switch) had no consumer at all:
+   the binding allows vdd-supply but the driver ignored it.  Claim it with
+   devm_regulator_get_enable_optional().
+
+ - the supply must be up *before* the reset pulse.  With the analog rail off
+   the chip still answers I2C and its ICID still reads back, but the reset
+   leaves the firmware down: 0x900000a8 never reports the vendor's "FW
+   reload done" value (0x05) and the event stack only returns 0xec filler
+   (56 * 0xec = the sum 0x33a0 the driver was rejecting).  With the rail
+   powered first the same pulse brings the FW up (0xa8 reads 0x05 right
+   after), which is the order the stock kernel uses.
+
+Diagnostics (all off by default) are kept because the frame the controller
+returns still does not parse; see the bring-up report:
+
+  dump_frames=1   hexdump every frame before the checksum test
+  read_path=1     take the frame from the AHB window instead of reg 0x30
+  poll_ms=N       read the stack every N ms independent of the interrupt
+
+Measured with them: reg 0x30 returns all-zero frames when idle and 56 * 0xec
+when the (1 Hz, not touch-driven) interrupt fires, while the register block
+at 0x32..0x3f does change on real touches - so the chip senses, but the
+mainline hx83112b stack layout does not apply to this part as-is.
+---
+ .../input/touchscreen/trivial-touch.yaml      |   2 +
+ drivers/input/touchscreen/himax_hx83112b.c    | 106 +++++-
+ drivers/rtc/rtc-mt6397.c.orig                 | 354 ++++++++++++++++++
+ include/linux/mfd/mt6397/rtc.h.orig           |  81 ++++
+ 4 files changed, 540 insertions(+), 3 deletions(-)
+ create mode 100644 drivers/rtc/rtc-mt6397.c.orig
+ create mode 100644 include/linux/mfd/mt6397/rtc.h.orig
+
+diff --git a/Documentation/devicetree/bindings/input/touchscreen/trivial-touch.yaml b/Documentation/devicetree/bindings/input/touchscreen/trivial-touch.yaml
+index 6316a8d32..de21fe21b 100644
+--- a/Documentation/devicetree/bindings/input/touchscreen/trivial-touch.yaml
++++ b/Documentation/devicetree/bindings/input/touchscreen/trivial-touch.yaml
+@@ -18,6 +18,8 @@ properties:
+       - azoteq,iqs525
+       # Himax hx83100a touchscreen controller
+       - himax,hx83100a
++      # Himax hx83102e touchscreen controller
++      - himax,hx83102e
+       # Himax hx83112b touchscreen controller
+       - himax,hx83112b
+       # Hynitron cstxxx series touchscreen controller
+diff --git a/drivers/input/touchscreen/himax_hx83112b.c b/drivers/input/touchscreen/himax_hx83112b.c
+index 0aa67dfac..3dd40be0c 100644
+--- a/drivers/input/touchscreen/himax_hx83112b.c
++++ b/drivers/input/touchscreen/himax_hx83112b.c
+@@ -21,7 +21,9 @@
+ #include <linux/input/touchscreen.h>
+ #include <linux/interrupt.h>
+ #include <linux/kernel.h>
++#include <linux/mutex.h>
+ #include <linux/regmap.h>
++#include <linux/regulator/consumer.h>
+ 
+ #define HIMAX_MAX_POINTS		10
+ 
+@@ -73,8 +75,28 @@ struct himax_ts_data {
+ 	struct i2c_client *client;
+ 	struct regmap *regmap;
+ 	struct touchscreen_properties props;
++	struct mutex io_lock;			/* serialises event-stack reads */
++	struct delayed_work poll_work;
+ };
+ 
++/*
++ * Bring-up diagnostics for the Fplus T1100 digitizer: the controller answers
++ * I2C and its ICID reads back, but the frame the driver gets from the event
++ * stack does not pass the checksum, so the parser has to be calibrated
++ * against the real bytes.  All of these default to "off".
++ */
++static bool dump_frames;
++module_param(dump_frames, bool, 0644);
++MODULE_PARM_DESC(dump_frames, "hexdump every event frame that is read");
++
++static int read_path;
++module_param(read_path, int, 0644);
++MODULE_PARM_DESC(read_path, "0 = event stack at reg 0x30, 1 = AHB 0x90060000");
++
++static uint poll_ms;
++module_param(poll_ms, uint, 0644);
++MODULE_PARM_DESC(poll_ms, "also read the event stack every N ms, 0 = off");
++
+ static const struct regmap_config himax_regmap_config = {
+ 	.reg_bits = 8,
+ 	.val_bits = 32,
+@@ -268,8 +290,8 @@ static bool himax_verify_checksum(struct himax_ts_data *ts,
+ 		checksum += data[i];
+ 
+ 	if ((checksum & 0x00ff) != 0) {
+-		dev_err(&ts->client->dev, "Wrong event checksum: %04x\n",
+-			checksum);
++		dev_err_ratelimited(&ts->client->dev,
++				    "Wrong event checksum: %04x\n", checksum);
+ 		return false;
+ 	}
+ 
+@@ -293,14 +315,30 @@ static int himax_handle_input(struct himax_ts_data *ts)
+ {
+ 	int error;
+ 	struct himax_event event;
++	size_t i, sum = 0;
+ 
+-	error = ts->chip->read_events(ts, &event, sizeof(event));
++	mutex_lock(&ts->io_lock);
++	if (read_path)
++		error = hx83100a_read_events(ts, &event, sizeof(event));
++	else
++		error = ts->chip->read_events(ts, &event, sizeof(event));
++	mutex_unlock(&ts->io_lock);
+ 	if (error) {
+ 		dev_err(&ts->client->dev, "Failed to read input event: %d\n",
+ 			error);
+ 		return error;
+ 	}
+ 
++	if (dump_frames) {
++		for (i = 0; i < sizeof(event); i++)
++			sum += ((u8 *)&event)[i];
++		dev_info(&ts->client->dev,
++			 "frame path=%d len=%zu sum=0x%02zx\n",
++			 read_path, sizeof(event), sum & 0xff);
++		print_hex_dump(KERN_INFO, "hx: ", DUMP_PREFIX_OFFSET, 16, 1,
++			       &event, sizeof(event), true);
++	}
++
+ 	/*
+ 	 * Only process the current event when it has a valid checksum but
+ 	 * don't consider it a fatal error when it doesn't.
+@@ -311,6 +349,23 @@ static int himax_handle_input(struct himax_ts_data *ts)
+ 	return 0;
+ }
+ 
++/*
++ * Read the event stack on a timer as well: the level IRQ fires about once a
++ * second even without a finger, so the bytes of a real touch can only be
++ * captured by sampling the stack independently of the interrupt.
++ */
++static void himax_poll_work(struct work_struct *work)
++{
++	struct himax_ts_data *ts =
++		container_of(work, struct himax_ts_data, poll_work.work);
++
++	if (poll_ms)
++		himax_handle_input(ts);
++
++	schedule_delayed_work(&ts->poll_work,
++			      msecs_to_jiffies(poll_ms ? poll_ms : 1000));
++}
++
+ static irqreturn_t himax_irq_handler(int irq, void *dev_id)
+ {
+ 	int error;
+@@ -349,6 +404,18 @@ static int himax_probe(struct i2c_client *client)
+ 		return error;
+ 	}
+ 
++	/*
++	 * The controller sits behind its own rail (VLDO28 through the GPIO163
++	 * load switch on the Fplus T1100).  It has to be up before the reset
++	 * pulse: resetting the chip with its analog rail off leaves the
++	 * firmware down (ICID still answers, but 0x900000a8 never reports
++	 * "FW reload done" and the event stack only returns filler), which is
++	 * exactly what the vendor's power-on-then-reset order avoids.
++	 */
++	error = devm_regulator_get_enable_optional(dev, "vdd");
++	if (error)
++		return dev_err_probe(dev, error, "Failed to enable vdd\n");
++
+ 	ts->gpiod_rst = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
+ 	error = PTR_ERR_OR_ZERO(ts->gpiod_rst);
+ 	if (error) {
+@@ -368,6 +435,26 @@ static int himax_probe(struct i2c_client *client)
+ 	if (error)
+ 		return error;
+ 
++	mutex_init(&ts->io_lock);
++	INIT_DELAYED_WORK(&ts->poll_work, himax_poll_work);
++	schedule_delayed_work(&ts->poll_work, msecs_to_jiffies(1000));
++
++	/*
++	 * Bring-up aid: print what the controller says about its own firmware.
++	 * 0x900000a8 is the "FW reload done" flag the vendor driver polls,
++	 * 0x900000e8/0x900000e4 are the version/status words it logs.
++	 */
++	{
++		u32 v;
++
++		if (!himax_bus_read(ts, 0x900000a8, &v, sizeof(v)))
++			dev_info(dev, "reg 0x900000a8 = 0x%08x\n", v);
++		if (!himax_bus_read(ts, 0x900000e8, &v, sizeof(v)))
++			dev_info(dev, "reg 0x900000e8 = 0x%08x\n", v);
++		if (!himax_bus_read(ts, 0x900000e4, &v, sizeof(v)))
++			dev_info(dev, "reg 0x900000e4 = 0x%08x\n", v);
++	}
++
+ 	error = devm_request_threaded_irq(dev, client->irq, NULL,
+ 					  himax_irq_handler, IRQF_ONESHOT,
+ 					  client->name, ts);
+@@ -399,6 +486,17 @@ static const struct himax_chip hx83100a_chip = {
+ 	.read_events = hx83100a_read_events,
+ };
+ 
++/*
++ * HX83102E (in-cell digitizer of the BOE TV110XUM panel): same register
++ * interface as the HX83112B, the ICID is 0x83102e and the touch event stack
++ * is mapped at register 0x30, so himax_read_events() applies unchanged.
++ */
++static const struct himax_chip hx83102e_chip = {
++	.id = 0x83102e,
++	.check_id = himax_check_product_id,
++	.read_events = himax_read_events,
++};
++
+ static const struct himax_chip hx83112b_chip = {
+ 	.id = 0x83112b,
+ 	.check_id = himax_check_product_id,
+@@ -407,6 +505,7 @@ static const struct himax_chip hx83112b_chip = {
+ 
+ static const struct i2c_device_id himax_ts_id[] = {
+ 	{ .name = "hx83100a", .driver_data = (kernel_ulong_t)&hx83100a_chip },
++	{ .name = "hx83102e", .driver_data = (kernel_ulong_t)&hx83102e_chip },
+ 	{ .name = "hx83112b", .driver_data = (kernel_ulong_t)&hx83112b_chip },
+ 	{ /* sentinel */ }
+ };
+@@ -415,6 +514,7 @@ MODULE_DEVICE_TABLE(i2c, himax_ts_id);
+ #ifdef CONFIG_OF
+ static const struct of_device_id himax_of_match[] = {
+ 	{ .compatible = "himax,hx83100a", .data = &hx83100a_chip },
++	{ .compatible = "himax,hx83102e", .data = &hx83102e_chip },
+ 	{ .compatible = "himax,hx83112b", .data = &hx83112b_chip },
+ 	{ /* sentinel */ }
+ };
+diff --git a/drivers/rtc/rtc-mt6397.c.orig b/drivers/rtc/rtc-mt6397.c.orig
+new file mode 100644
+index 000000000..3d857681f
+--- /dev/null
++++ b/drivers/rtc/rtc-mt6397.c.orig
+@@ -0,0 +1,354 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++* Copyright (c) 2014-2015 MediaTek Inc.
++* Author: Tianping.Fang <tianping.fang@mediatek.com>
++*/
++
++#include <linux/err.h>
++#include <linux/interrupt.h>
++#include <linux/mfd/mt6397/core.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <linux/rtc.h>
++#include <linux/mfd/mt6397/rtc.h>
++
++static int mtk_rtc_write_trigger(struct mt6397_rtc *rtc)
++{
++	int ret;
++	u32 data;
++
++	ret = regmap_write(rtc->regmap, rtc->addr_base + rtc->data->wrtgr, 1);
++	if (ret < 0)
++		return ret;
++
++	ret = regmap_read_poll_timeout(rtc->regmap,
++					rtc->addr_base + RTC_BBPU, data,
++					!(data & RTC_BBPU_CBUSY),
++					MTK_RTC_POLL_DELAY_US,
++					MTK_RTC_POLL_TIMEOUT);
++	if (ret < 0)
++		dev_err(rtc->rtc_dev->dev.parent,
++			"failed to write WRTGR: %d\n", ret);
++
++	return ret;
++}
++
++static irqreturn_t mtk_rtc_irq_handler_thread(int irq, void *data)
++{
++	struct mt6397_rtc *rtc = data;
++	u32 irqsta, irqen;
++	int ret;
++
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_IRQ_STA, &irqsta);
++	if ((ret >= 0) && (irqsta & RTC_IRQ_STA_AL)) {
++		rtc_update_irq(rtc->rtc_dev, 1, RTC_IRQF | RTC_AF);
++		irqen = irqsta & ~RTC_IRQ_EN_AL;
++		mutex_lock(&rtc->lock);
++		if (regmap_write(rtc->regmap, rtc->addr_base + RTC_IRQ_EN,
++				 irqen) == 0)
++			mtk_rtc_write_trigger(rtc);
++		mutex_unlock(&rtc->lock);
++
++		return IRQ_HANDLED;
++	}
++
++	return IRQ_NONE;
++}
++
++static int __mtk_rtc_read_time(struct mt6397_rtc *rtc,
++			       struct rtc_time *tm, int *sec)
++{
++	int ret;
++	u16 data[RTC_OFFSET_COUNT];
++
++	mutex_lock(&rtc->lock);
++	ret = regmap_bulk_read(rtc->regmap, rtc->addr_base + RTC_TC_SEC,
++			       data, RTC_OFFSET_COUNT);
++	if (ret < 0)
++		goto exit;
++
++	tm->tm_sec = data[RTC_OFFSET_SEC];
++	tm->tm_min = data[RTC_OFFSET_MIN];
++	tm->tm_hour = data[RTC_OFFSET_HOUR];
++	tm->tm_mday = data[RTC_OFFSET_DOM];
++	tm->tm_wday = data[RTC_OFFSET_DOW];
++	tm->tm_mon = data[RTC_OFFSET_MTH] & RTC_TC_MTH_MASK;
++	tm->tm_year = data[RTC_OFFSET_YEAR];
++
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_TC_SEC, sec);
++exit:
++	mutex_unlock(&rtc->lock);
++	return ret;
++}
++
++static int mtk_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
++	int sec, ret;
++
++	do {
++		ret = __mtk_rtc_read_time(rtc, tm, &sec);
++		if (ret < 0)
++			goto exit;
++	} while (sec < tm->tm_sec);
++
++	/* HW register start mon/wday from one, but tm_mon/tm_wday start from zero. */
++	tm->tm_mon--;
++	tm->tm_wday--;
++
++exit:
++	return ret;
++}
++
++static int mtk_rtc_set_time(struct device *dev, struct rtc_time *tm)
++{
++	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
++	int ret;
++	u16 data[RTC_OFFSET_COUNT];
++
++	tm->tm_mon++;
++	tm->tm_wday++;
++
++	data[RTC_OFFSET_SEC] = tm->tm_sec;
++	data[RTC_OFFSET_MIN] = tm->tm_min;
++	data[RTC_OFFSET_HOUR] = tm->tm_hour;
++	data[RTC_OFFSET_DOM] = tm->tm_mday;
++	data[RTC_OFFSET_DOW] = tm->tm_wday;
++	data[RTC_OFFSET_MTH] = tm->tm_mon;
++	data[RTC_OFFSET_YEAR] = tm->tm_year;
++
++	mutex_lock(&rtc->lock);
++	ret = regmap_bulk_write(rtc->regmap, rtc->addr_base + RTC_TC_SEC,
++				data, RTC_OFFSET_COUNT);
++	if (ret < 0)
++		goto exit;
++
++	/* Time register write to hardware after call trigger function */
++	ret = mtk_rtc_write_trigger(rtc);
++
++exit:
++	mutex_unlock(&rtc->lock);
++	return ret;
++}
++
++static int mtk_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alm)
++{
++	struct rtc_time *tm = &alm->time;
++	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
++	u32 irqen, pdn2;
++	int ret;
++	u16 data[RTC_OFFSET_COUNT];
++
++	mutex_lock(&rtc->lock);
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_IRQ_EN, &irqen);
++	if (ret < 0)
++		goto err_exit;
++	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_PDN2, &pdn2);
++	if (ret < 0)
++		goto err_exit;
++
++	ret = regmap_bulk_read(rtc->regmap, rtc->addr_base + RTC_AL_SEC,
++			       data, RTC_OFFSET_COUNT);
++	if (ret < 0)
++		goto err_exit;
++
++	alm->enabled = !!(irqen & RTC_IRQ_EN_AL);
++	alm->pending = !!(pdn2 & RTC_PDN2_PWRON_ALARM);
++	mutex_unlock(&rtc->lock);
++
++	tm->tm_sec = data[RTC_OFFSET_SEC] & RTC_AL_SEC_MASK;
++	tm->tm_min = data[RTC_OFFSET_MIN] & RTC_AL_MIN_MASK;
++	tm->tm_hour = data[RTC_OFFSET_HOUR] & RTC_AL_HOU_MASK;
++	tm->tm_mday = data[RTC_OFFSET_DOM] & RTC_AL_DOM_MASK;
++	tm->tm_mon = data[RTC_OFFSET_MTH] & RTC_AL_MTH_MASK;
++	tm->tm_year = data[RTC_OFFSET_YEAR] & RTC_AL_YEA_MASK;
++
++	tm->tm_mon--;
++
++	return 0;
++err_exit:
++	mutex_unlock(&rtc->lock);
++	return ret;
++}
++
++static int mtk_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alm)
++{
++	struct rtc_time *tm = &alm->time;
++	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
++	int ret;
++	u16 data[RTC_OFFSET_COUNT];
++
++	tm->tm_mon++;
++
++	mutex_lock(&rtc->lock);
++	ret = regmap_bulk_read(rtc->regmap, rtc->addr_base + RTC_AL_SEC,
++			       data, RTC_OFFSET_COUNT);
++	if (ret < 0)
++		goto exit;
++
++	data[RTC_OFFSET_SEC] = ((data[RTC_OFFSET_SEC] & ~(RTC_AL_SEC_MASK)) |
++				(tm->tm_sec & RTC_AL_SEC_MASK));
++	data[RTC_OFFSET_MIN] = ((data[RTC_OFFSET_MIN] & ~(RTC_AL_MIN_MASK)) |
++				(tm->tm_min & RTC_AL_MIN_MASK));
++	data[RTC_OFFSET_HOUR] = ((data[RTC_OFFSET_HOUR] & ~(RTC_AL_HOU_MASK)) |
++				(tm->tm_hour & RTC_AL_HOU_MASK));
++	data[RTC_OFFSET_DOM] = ((data[RTC_OFFSET_DOM] & ~(RTC_AL_DOM_MASK)) |
++				(tm->tm_mday & RTC_AL_DOM_MASK));
++	data[RTC_OFFSET_MTH] = ((data[RTC_OFFSET_MTH] & ~(RTC_AL_MTH_MASK)) |
++				(tm->tm_mon & RTC_AL_MTH_MASK));
++	data[RTC_OFFSET_YEAR] = ((data[RTC_OFFSET_YEAR] & ~(RTC_AL_YEA_MASK)) |
++				(tm->tm_year & RTC_AL_YEA_MASK));
++
++	if (alm->enabled) {
++		ret = regmap_bulk_write(rtc->regmap,
++					rtc->addr_base + RTC_AL_SEC,
++					data, RTC_OFFSET_COUNT);
++		if (ret < 0)
++			goto exit;
++		ret = regmap_write(rtc->regmap, rtc->addr_base + RTC_AL_MASK,
++				   RTC_AL_MASK_DOW);
++		if (ret < 0)
++			goto exit;
++		ret = regmap_update_bits(rtc->regmap,
++					 rtc->addr_base + RTC_IRQ_EN,
++					 RTC_IRQ_EN_ONESHOT_AL,
++					 RTC_IRQ_EN_ONESHOT_AL);
++		if (ret < 0)
++			goto exit;
++	} else {
++		ret = regmap_update_bits(rtc->regmap,
++					 rtc->addr_base + RTC_IRQ_EN,
++					 RTC_IRQ_EN_ONESHOT_AL, 0);
++		if (ret < 0)
++			goto exit;
++	}
++
++	/* All alarm time register write to hardware after calling
++	 * mtk_rtc_write_trigger. This can avoid race condition if alarm
++	 * occur happen during writing alarm time register.
++	 */
++	ret = mtk_rtc_write_trigger(rtc);
++exit:
++	mutex_unlock(&rtc->lock);
++	return ret;
++}
++
++static const struct rtc_class_ops mtk_rtc_ops = {
++	.read_time  = mtk_rtc_read_time,
++	.set_time   = mtk_rtc_set_time,
++	.read_alarm = mtk_rtc_read_alarm,
++	.set_alarm  = mtk_rtc_set_alarm,
++};
++
++static int mtk_rtc_probe(struct platform_device *pdev)
++{
++	struct resource *res;
++	struct mt6397_chip *mt6397_chip = dev_get_drvdata(pdev->dev.parent);
++	struct mt6397_rtc *rtc;
++	int ret;
++
++	rtc = devm_kzalloc(&pdev->dev, sizeof(struct mt6397_rtc), GFP_KERNEL);
++	if (!rtc)
++		return -ENOMEM;
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return -EINVAL;
++	rtc->addr_base = res->start;
++
++	rtc->data = of_device_get_match_data(&pdev->dev);
++
++	rtc->irq = platform_get_irq(pdev, 0);
++	if (rtc->irq < 0)
++		return rtc->irq;
++
++	rtc->regmap = mt6397_chip->regmap;
++	mutex_init(&rtc->lock);
++
++	platform_set_drvdata(pdev, rtc);
++
++	rtc->rtc_dev = devm_rtc_allocate_device(&pdev->dev);
++	if (IS_ERR(rtc->rtc_dev))
++		return PTR_ERR(rtc->rtc_dev);
++
++	ret = devm_request_threaded_irq(&pdev->dev, rtc->irq, NULL,
++					mtk_rtc_irq_handler_thread,
++					IRQF_ONESHOT | IRQF_TRIGGER_HIGH,
++					"mt6397-rtc", rtc);
++
++	if (ret) {
++		dev_err(&pdev->dev, "Failed to request alarm IRQ: %d: %d\n",
++			rtc->irq, ret);
++		return ret;
++	}
++
++	device_init_wakeup(&pdev->dev, true);
++
++	rtc->rtc_dev->ops = &mtk_rtc_ops;
++	rtc->rtc_dev->range_min = RTC_TIMESTAMP_BEGIN_1900;
++	rtc->rtc_dev->range_max = mktime64(2027, 12, 31, 23, 59, 59);
++	rtc->rtc_dev->start_secs = mktime64(1968, 1, 2, 0, 0, 0);
++	rtc->rtc_dev->set_start_time = true;
++
++	return devm_rtc_register_device(rtc->rtc_dev);
++}
++
++#ifdef CONFIG_PM_SLEEP
++static int mt6397_rtc_suspend(struct device *dev)
++{
++	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
++
++	if (device_may_wakeup(dev))
++		enable_irq_wake(rtc->irq);
++
++	return 0;
++}
++
++static int mt6397_rtc_resume(struct device *dev)
++{
++	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
++
++	if (device_may_wakeup(dev))
++		disable_irq_wake(rtc->irq);
++
++	return 0;
++}
++#endif
++
++static SIMPLE_DEV_PM_OPS(mt6397_pm_ops, mt6397_rtc_suspend,
++			mt6397_rtc_resume);
++
++static const struct mtk_rtc_data mt6358_rtc_data = {
++	.wrtgr = RTC_WRTGR_MT6358,
++};
++
++static const struct mtk_rtc_data mt6397_rtc_data = {
++	.wrtgr = RTC_WRTGR_MT6397,
++};
++
++static const struct of_device_id mt6397_rtc_of_match[] = {
++	{ .compatible = "mediatek,mt6323-rtc", .data = &mt6397_rtc_data },
++	{ .compatible = "mediatek,mt6357-rtc", .data = &mt6358_rtc_data },
++	{ .compatible = "mediatek,mt6358-rtc", .data = &mt6358_rtc_data },
++	{ .compatible = "mediatek,mt6397-rtc", .data = &mt6397_rtc_data },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, mt6397_rtc_of_match);
++
++static struct platform_driver mtk_rtc_driver = {
++	.driver = {
++		.name = "mt6397-rtc",
++		.of_match_table = mt6397_rtc_of_match,
++		.pm = &mt6397_pm_ops,
++	},
++	.probe	= mtk_rtc_probe,
++};
++
++module_platform_driver(mtk_rtc_driver);
++
++MODULE_LICENSE("GPL v2");
++MODULE_AUTHOR("Tianping Fang <tianping.fang@mediatek.com>");
++MODULE_DESCRIPTION("RTC Driver for MediaTek MT6397 PMIC");
+diff --git a/include/linux/mfd/mt6397/rtc.h.orig b/include/linux/mfd/mt6397/rtc.h.orig
+new file mode 100644
+index 000000000..27883af44
+--- /dev/null
++++ b/include/linux/mfd/mt6397/rtc.h.orig
+@@ -0,0 +1,81 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Copyright (C) 2014-2019 MediaTek Inc.
++ *
++ * Author: Tianping.Fang <tianping.fang@mediatek.com>
++ *        Sean Wang <sean.wang@mediatek.com>
++ */
++
++#ifndef _LINUX_MFD_MT6397_RTC_H_
++#define _LINUX_MFD_MT6397_RTC_H_
++
++#include <linux/jiffies.h>
++#include <linux/mutex.h>
++#include <linux/regmap.h>
++#include <linux/rtc.h>
++
++#define RTC_BBPU               0x0000
++#define RTC_BBPU_CBUSY         BIT(6)
++#define RTC_BBPU_KEY            (0x43 << 8)
++
++#define RTC_WRTGR_MT6358       0x003a
++#define RTC_WRTGR_MT6397       0x003c
++#define RTC_WRTGR_MT6323       RTC_WRTGR_MT6397
++
++#define RTC_IRQ_STA            0x0002
++#define RTC_IRQ_STA_AL         BIT(0)
++#define RTC_IRQ_STA_LP         BIT(3)
++
++#define RTC_IRQ_EN             0x0004
++#define RTC_IRQ_EN_AL          BIT(0)
++#define RTC_IRQ_EN_ONESHOT     BIT(2)
++#define RTC_IRQ_EN_LP          BIT(3)
++#define RTC_IRQ_EN_ONESHOT_AL  (RTC_IRQ_EN_ONESHOT | RTC_IRQ_EN_AL)
++
++#define RTC_AL_MASK            0x0008
++#define RTC_AL_MASK_DOW                BIT(4)
++
++#define RTC_TC_SEC             0x000a
++#define RTC_TC_MTH_MASK        0x000f
++/* Min, Hour, Dom... register offset to RTC_TC_SEC */
++#define RTC_OFFSET_SEC         0
++#define RTC_OFFSET_MIN         1
++#define RTC_OFFSET_HOUR                2
++#define RTC_OFFSET_DOM         3
++#define RTC_OFFSET_DOW         4
++#define RTC_OFFSET_MTH         5
++#define RTC_OFFSET_YEAR                6
++#define RTC_OFFSET_COUNT       7
++
++#define RTC_AL_SEC             0x0018
++
++#define RTC_AL_SEC_MASK        0x003f
++#define RTC_AL_MIN_MASK        0x003f
++#define RTC_AL_HOU_MASK        0x001f
++#define RTC_AL_DOM_MASK        0x001f
++#define RTC_AL_DOW_MASK        0x0007
++#define RTC_AL_MTH_MASK        0x000f
++#define RTC_AL_YEA_MASK        0x007f
++
++#define RTC_PDN2               0x002e
++#define RTC_PDN2_PWRON_ALARM   BIT(4)
++
++#define MTK_RTC_POLL_DELAY_US  10
++#define MTK_RTC_POLL_TIMEOUT   (jiffies_to_usecs(HZ))
++
++struct mtk_rtc_data {
++	u32                     wrtgr;
++};
++
++struct mt6397_rtc {
++	struct rtc_device       *rtc_dev;
++
++	/* Protect register access from multiple tasks */
++	struct mutex            lock;
++	struct regmap           *regmap;
++	int                     irq;
++	u32                     addr_base;
++	const struct mtk_rtc_data *data;
++};
++
++#endif /* _LINUX_MFD_MT6397_RTC_H_ */

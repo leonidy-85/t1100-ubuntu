@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 12:38:48 +0300
+Subject: [PATCH] Bluetooth: l2cap: keep the old getsockopt entry point
+
+Project series 0077, so BlueZ can query L2CAP_OPTIONS again.
+---
+ net/bluetooth/l2cap_sock.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/net/bluetooth/l2cap_sock.c b/net/bluetooth/l2cap_sock.c
+index 1796929f6..e388b4ef5 100644
+--- a/net/bluetooth/l2cap_sock.c
++++ b/net/bluetooth/l2cap_sock.c
+@@ -2093,6 +2093,34 @@ static int l2cap_sock_create(struct net *net, struct socket *sock, int protocol,
+ 	return 0;
+ }
+ 
++
++/* T1100: net/socket.c in this tree still uses the old getsockopt ABI, while
++ * l2cap was converted to the iter based one.  Provide the old entry point so
++ * that BlueZ can query L2CAP_OPTIONS again.
++ */
++static int l2cap_sock_getsockopt_compat(struct socket *sock, int level,
++					int optname, char __user *optval,
++					int __user *optlen)
++{
++	struct sockopt opt = { };
++	int len, err;
++
++	if (get_user(len, optlen))
++		return -EFAULT;
++	if (len < 0)
++		return -EINVAL;
++
++	opt.optlen = len;
++	if (optval && len)
++		iov_iter_ubuf(&opt.iter_out, ITER_DEST, optval, len);
++
++	err = l2cap_sock_getsockopt(sock, level, optname, &opt);
++	if (err)
++		return err;
++
++	return put_user(opt.optlen, optlen) ? -EFAULT : 0;
++}
++
+ static const struct proto_ops l2cap_sock_ops = {
+ 	.family		= PF_BLUETOOTH,
+ 	.owner		= THIS_MODULE,
+@@ -2111,6 +2139,7 @@ static const struct proto_ops l2cap_sock_ops = {
+ 	.socketpair	= sock_no_socketpair,
+ 	.shutdown	= l2cap_sock_shutdown,
+ 	.setsockopt	= l2cap_sock_setsockopt,
++	.getsockopt	= l2cap_sock_getsockopt_compat,
+ 	.getsockopt_iter = l2cap_sock_getsockopt
+ };
+ 

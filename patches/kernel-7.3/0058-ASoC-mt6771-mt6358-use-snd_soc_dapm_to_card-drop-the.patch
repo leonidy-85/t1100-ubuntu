@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 12:08:11 +0300
+Subject: [PATCH] ASoC: mt6771-mt6358: use snd_soc_dapm_to_card(), drop the
+ empty PCM ops
+
+struct snd_soc_dapm_context is opaque in 7.3, so w->dapm->card no longer
+compiles; the accessor is exported for exactly this. The startup/shutdown
+hooks became no-ops once the amplifier moved to the DAPM Speaker widget,
+so remove them instead of leaving unused variables behind.
+---
+ sound/soc/mediatek/mt6771/mt6771-mt6358.c | 25 +----------------------
+ 1 file changed, 1 insertion(+), 24 deletions(-)
+
+diff --git a/sound/soc/mediatek/mt6771/mt6771-mt6358.c b/sound/soc/mediatek/mt6771/mt6771-mt6358.c
+index 773de4217..a84a20627 100644
+--- a/sound/soc/mediatek/mt6771/mt6771-mt6358.c
++++ b/sound/soc/mediatek/mt6771/mt6771-mt6358.c
+@@ -21,28 +21,6 @@ struct mt6771_mt6358_priv {
+ 	struct gpio_desc *amp_gpio;
+ };
+ 
+-static int mt6771_mt6358_startup(struct snd_pcm_substream *substream)
+-{
+-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+-	struct snd_soc_card *card = rtd->card;
+-	struct mt6771_mt6358_priv *priv = snd_soc_card_get_drvdata(card);
+-
+-	return 0;
+-}
+-
+-static void mt6771_mt6358_shutdown(struct snd_pcm_substream *substream)
+-{
+-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+-	struct snd_soc_card *card = rtd->card;
+-	struct mt6771_mt6358_priv *priv = snd_soc_card_get_drvdata(card);
+-
+-}
+-
+-static const struct snd_soc_ops mt6771_mt6358_ops = {
+-	.startup = mt6771_mt6358_startup,
+-	.shutdown = mt6771_mt6358_shutdown,
+-};
+-
+ /* FE */
+ SND_SOC_DAILINK_DEFS(playback1,
+ 	DAILINK_COMP_ARRAY(COMP_CPU("DL1")),
+@@ -97,7 +75,6 @@ static struct snd_soc_dai_link mt6771_mt6358_dai_links[] = {
+ 			     SND_SOC_DPCM_TRIGGER_PRE },
+ 		.dynamic = 1,
+ 		.playback_only = 1,
+-		.ops = &mt6771_mt6358_ops,
+ 		SND_SOC_DAILINK_REG(playback1),
+ 	},
+ 	{
+@@ -121,7 +98,7 @@ static struct snd_soc_dai_link mt6771_mt6358_dai_links[] = {
+ static int mt6771_mt6358_amp_event(struct snd_soc_dapm_widget *w,
+ 				    struct snd_kcontrol *kcontrol, int event)
+ {
+-	struct snd_soc_card *card = w->dapm->card;
++	struct snd_soc_card *card = snd_soc_dapm_to_card(w->dapm);
+ 	struct mt6771_mt6358_priv *priv = snd_soc_card_get_drvdata(card);
+ 
+ 	if (!priv->amp_gpio)

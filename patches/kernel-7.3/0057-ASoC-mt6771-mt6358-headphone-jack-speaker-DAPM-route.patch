@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 11:56:04 +0300
+Subject: [PATCH] ASoC: mt6771-mt6358: headphone jack, speaker DAPM routes and
+ amp gate
+
+Series patches 0070 and 0071: the jack and the Speaker widget/routes,
+and the speaker amplifier gated by the DAPM Speaker path instead of the
+PCM startup/shutdown hooks.
+---
+ sound/soc/mediatek/mt6771/mt6771-mt6358.c | 48 ++++++++++++++++++++---
+ 1 file changed, 43 insertions(+), 5 deletions(-)
+
+diff --git a/sound/soc/mediatek/mt6771/mt6771-mt6358.c b/sound/soc/mediatek/mt6771/mt6771-mt6358.c
+index a153e1459..773de4217 100644
+--- a/sound/soc/mediatek/mt6771/mt6771-mt6358.c
++++ b/sound/soc/mediatek/mt6771/mt6771-mt6358.c
+@@ -27,9 +27,6 @@ static int mt6771_mt6358_startup(struct snd_pcm_substream *substream)
+ 	struct snd_soc_card *card = rtd->card;
+ 	struct mt6771_mt6358_priv *priv = snd_soc_card_get_drvdata(card);
+ 
+-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK && priv->amp_gpio)
+-		gpiod_set_value_cansleep(priv->amp_gpio, 1);
+-
+ 	return 0;
+ }
+ 
+@@ -39,8 +36,6 @@ static void mt6771_mt6358_shutdown(struct snd_pcm_substream *substream)
+ 	struct snd_soc_card *card = rtd->card;
+ 	struct mt6771_mt6358_priv *priv = snd_soc_card_get_drvdata(card);
+ 
+-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK && priv->amp_gpio)
+-		gpiod_set_value_cansleep(priv->amp_gpio, 0);
+ }
+ 
+ static const struct snd_soc_ops mt6771_mt6358_ops = {
+@@ -123,11 +118,54 @@ static struct snd_soc_dai_link mt6771_mt6358_dai_links[] = {
+ 	},
+ };
+ 
++static int mt6771_mt6358_amp_event(struct snd_soc_dapm_widget *w,
++				    struct snd_kcontrol *kcontrol, int event)
++{
++	struct snd_soc_card *card = w->dapm->card;
++	struct mt6771_mt6358_priv *priv = snd_soc_card_get_drvdata(card);
++
++	if (!priv->amp_gpio)
++		return 0;
++
++	if (event & SND_SOC_DAPM_PRE_PMU)
++		gpiod_set_value_cansleep(priv->amp_gpio, 1);
++	else if (event & SND_SOC_DAPM_POST_PMD)
++		gpiod_set_value_cansleep(priv->amp_gpio, 0);
++
++	return 0;
++}
++
++static const struct snd_kcontrol_new mt6771_mt6358_controls[] = {
++	SOC_DAPM_PIN_SWITCH("Speaker"),
++};
++
++static const struct snd_soc_dapm_widget mt6771_mt6358_widgets[] = {
++	SND_SOC_DAPM_HP("Headphone Jack", NULL),
++	SND_SOC_DAPM_PGA_E("Speaker Amp", SND_SOC_NOPM, 0, 0, NULL, 0,
++			   mt6771_mt6358_amp_event,
++			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_SPK("Speaker", NULL),
++};
++
++static const struct snd_soc_dapm_route mt6771_mt6358_routes[] = {
++	{ "Headphone Jack", NULL, "Headphone L" },
++	{ "Headphone Jack", NULL, "Headphone R" },
++	{ "Speaker", NULL, "Speaker Amp" },
++	{ "Speaker Amp", NULL, "Headphone L Ext Spk Amp" },
++	{ "Speaker Amp", NULL, "Headphone R Ext Spk Amp" },
++};
++
+ static struct snd_soc_card mt6771_mt6358_card = {
+ 	.name = "mt6771-mt6358",
+ 	.owner = THIS_MODULE,
+ 	.dai_link = mt6771_mt6358_dai_links,
+ 	.num_links = ARRAY_SIZE(mt6771_mt6358_dai_links),
++	.controls = mt6771_mt6358_controls,
++	.num_controls = ARRAY_SIZE(mt6771_mt6358_controls),
++	.dapm_widgets = mt6771_mt6358_widgets,
++	.num_dapm_widgets = ARRAY_SIZE(mt6771_mt6358_widgets),
++	.dapm_routes = mt6771_mt6358_routes,
++	.num_dapm_routes = ARRAY_SIZE(mt6771_mt6358_routes),
+ };
+ 
+ static int mt6771_mt6358_probe(struct platform_device *pdev)

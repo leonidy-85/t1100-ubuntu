@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Fri, 13 Nov 2026 09:34:42 +0300
+Subject: [PATCH] drm/panel: it6112: keep the extra 44 vblank lines (vbp 284)
+
+The WIP experiment kept only 240 back-porch lines, which left the ~2%
+frame shift visible again. Restore the values that were verified on the
+hardware: vsync_end 2176+8+284, vtotal 2476, refresh 58.93 Hz.
+---
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c    | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index e23dc351a..67c0b6772 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -903,15 +903,17 @@ static const struct drm_display_mode boe_tv110xum_lb2_mode = {
+ 	.htotal = 1600 + 14 + 44 + 44,
+ 	.vdisplay = 2176,
+ 	/*
+-	 * EXPERIMENT: the image comes out shifted towards the start of the
+-	 * frame - a ~10% black band on the portrait top edge, content cut off
+-	 * on the opposite edge - so move ~212 lines from the front porch into
+-	 * the back porch.  The vblank total (and the pixel clock) is unchanged,
+-	 * so this only moves the active window inside the frame.
++	 * The panel shows the frame early: with the vendor porches (vsa 8,
++	 * vbp 28, vfp 220) a ~10% black band sits on the portrait top edge and
++	 * the opposite edge is cut off.  Moving 212 lines from the front porch
++	 * into the back porch fixed most of it, and 44 more lines (vbp 284)
++	 * removed the remaining ~2% band.  The vblank total grows from 2432 to
++	 * 2476 lines and the pixel clock stays the same, so the refresh rate
++	 * becomes 58.93 Hz instead of 60 Hz.
+ 	 */
+ 	.vsync_start = 2176 + 8,
+-	.vsync_end = 2176 + 8 + 240,
+-	.vtotal = 2176 + 8 + 240 + 8,
++	.vsync_end = 2176 + 8 + 284,
++	.vtotal = 2176 + 8 + 284 + 8,
+ 	.width_mm = 166,
+ 	.height_mm = 226,
+ };

@@ -1,0 +1,432 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Fri, 6 Nov 2026 23:59:36 +0300
+Subject: [PATCH] drm/panel: it6112: add a switch that leaves the bridge
+ untouched (experiment A)
+
+The stock LK runs the whole IT6112 and panel init itself, so it is worth
+checking whether the panel comes up on the state the bootloader leaves
+behind.  With t1100.it6112_skip_init=1 on the kernel command line the
+driver no longer writes a single TX/RX register:
+
+  - probe: no power sequencing and no reset pulse, the product id read is
+    only informative (the probe no longer fails on it) and the boot state
+    of the bridge is dumped read-only into dmesg.  The panel lines are
+    requested with GPIOD_ASIS, because claiming them as outputs already
+    changes the bootloader state: in the first attempt STBY and EXT_PWR
+    were driven low here and the bridge answered 0x00 to every register
+    (refs/device/dmesg-expA1-skip-init.txt.gz);
+  - prepare: only the panel rails are enabled (dvdd is always-on, vpos/
+    vneg come from the MT6370 DSV);
+  - enable: no RX/TX init, no TX PLL; only the DCS short packets (exit
+    sleep, display on) go through the bridge's packet register 0x73, plus
+    one more attempt from a delayed work 200 ms later once the video
+    stream has been running for a while;
+  - unprepare: nothing is powered down either - the driver never powered
+    the bridge up, so it must not reset it or drop EXT_PWR.
+
+The DCS packet sequence is factored out into it6112_dcs_send() with the
+ECC bytes named; the normal path pushes exactly the same bytes as before.
+Flipping the switch needs a boot.img repack only, not a rebuild.
+
+Signed-off-by: bringup <bringup@t1100.local>
+---
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 268 +++++++++++++++---
+ 1 file changed, 221 insertions(+), 47 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index a44075b25..a4700e001 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -39,10 +39,12 @@
+ #include <linux/delay.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/i2c.h>
++#include <linux/kstrtox.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/of_graph.h>
+ #include <linux/regulator/consumer.h>
++#include <linux/workqueue.h>
+ 
+ #include <drm/drm_connector.h>
+ #include <drm/drm_mipi_dsi.h>
+@@ -69,6 +71,18 @@
+ 
+ #define IT6112_MIPI_RX_INVERSE_MCLK	(1 << 1)
+ 
++/*
++ * ECC bytes of the DCS short packets pushed through the bridge's packet
++ * register 0x73 (length, command, data, ECC, then 0x74/0x75 as the rest of
++ * the packet).  Verified against the MIPI DSI ECC table, see docs/STATUS.md
++ * (03.11): 0x36 = exit sleep, 0x1c = display on, 0x2c = enter sleep,
++ * 0x06 = display off.
++ */
++#define IT6112_ECC_EXIT_SLEEP		0x36
++#define IT6112_ECC_DISPLAY_ON		0x1c
++#define IT6112_ECC_ENTER_SLEEP		0x2c
++#define IT6112_ECC_DISPLAY_OFF		0x06
++
+ /*
+  * The DSI peripheral is attached to the host under this name; it has to be
+  * identical to the mipi_dsi_driver's .driver.name for the name fallback in
+@@ -76,6 +90,40 @@
+  */
+ #define IT6112_DSI_NAME			"boe-tv110xum-lb2"
+ 
++/*
++ * Experiment A (docs/handover.md): the stock LK runs the whole bridge and
++ * panel init itself, so check whether the panel comes up on that state alone
++ * by telling this driver not to touch the IT6112 at all.
++ *
++ * Enabled from the kernel command line:
++ *
++ *	t1100.it6112_skip_init=1
++ *
++ * The driver is built into the kernel on this board, hence __setup() rather
++ * than a module parameter: flipping the switch only needs a boot.img repack
++ * with a different cmdline, no rebuild.
++ *
++ * While set, neither ->prepare() nor ->enable() writes a single TX/RX register:
++ * no power sequencing, no reset pulse, no RX/TX init, no TX PLL.  The only
++ * traffic that is kept is the DCS pass-through (exit sleep / display on via
++ * register 0x73), the panel rails and the backlight, because those are what a
++ * working display needs regardless of who initialised the bridge.
++ */
++static bool it6112_skip_init;
++
++static int __init it6112_skip_init_setup(char *str)
++{
++	bool val = true;
++
++	if (str && kstrtobool(str, &val))
++		return 1;
++
++	it6112_skip_init = val;
++
++	return 1;
++}
++__setup("t1100.it6112_skip_init=", it6112_skip_init_setup);
++
+ struct it6112_ctx {
+ 	struct drm_panel base;
+ 	struct mipi_dsi_device *dsi;
+@@ -85,6 +133,7 @@ struct it6112_ctx {
+ 	struct gpio_desc *reset_gpio;
+ 	struct gpio_desc *stby_gpio;
+ 	struct gpio_desc *ext_pwr_gpio;
++	struct delayed_work dcs_retry;
+ 	unsigned int mclk_khz;
+ };
+ 
+@@ -472,10 +521,72 @@ static void it6112_dump(struct it6112_ctx *ctx, const char *tag)
+ 	it6112_dump_range(ctx, ctx->i2c_mipi_rx, tag, "rx", 0x80, 0xa4);
+ }
+ 
++/*
++ * A DCS short packet is handed to the bridge as five bytes: length, command,
++ * data, ECC in register 0x73, the two remaining packet words in 0x74/0x75.
++ * Note that the packet registers are write-only triggers; never read them.
++ */
++static void it6112_dcs_send(struct it6112_ctx *ctx, u8 cmd, u8 ecc)
++{
++	it6112_mipi_tx_write(ctx, 0x73, 0x05);
++	it6112_mipi_tx_write(ctx, 0x73, cmd);
++	it6112_mipi_tx_write(ctx, 0x73, 0x00);
++	it6112_mipi_tx_write(ctx, 0x73, ecc);
++	it6112_mipi_tx_write(ctx, 0x74, 0x44);
++	it6112_mipi_tx_write(ctx, 0x75, 0x87);
++}
++
++/*
++ * Experiment A: the bridge was not programmed by this driver, so ask the panel
++ * to leave sleep a second time once the video stream has been running for a
++ * while (same idea as the rejected S2 attempt, but without the driver having
++ * touched TX, RX or the PLL in between).
++ */
++static void it6112_dcs_retry_work(struct work_struct *work)
++{
++	struct it6112_ctx *ctx = container_of(work, struct it6112_ctx,
++					      dcs_retry.work);
++
++	dev_info(&ctx->i2c_mipi_tx->dev,
++		 "experiment A: re-sending exit sleep/display on\n");
++
++	it6112_dcs_send(ctx, MIPI_DCS_EXIT_SLEEP_MODE, IT6112_ECC_EXIT_SLEEP);
++	msleep(120);
++	it6112_dcs_send(ctx, MIPI_DCS_SET_DISPLAY_ON, IT6112_ECC_DISPLAY_ON);
++	msleep(20);
++
++	it6112_dump(ctx, "post-dcs-retry");
++}
++
+ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ {
+ 	struct it6112_ctx *ctx = panel_to_it6112(panel);
+ 
++	if (it6112_skip_init) {
++		/*
++		 * Experiment A: the bridge keeps whatever state the bootloader
++		 * left in it.  Only the DSI stream (already started by
++		 * mtk_dsi: ->enable() runs after the bridge chain was enabled)
++		 * and the DCS commands are used.  The clock measurement is
++		 * read-only and kept for the log.
++		 */
++		it6112_mipi_rx_calc_clk(ctx);
++		it6112_dump(ctx, "stream-on");
++
++		it6112_dcs_send(ctx, MIPI_DCS_EXIT_SLEEP_MODE,
++				IT6112_ECC_EXIT_SLEEP);
++		msleep(120);
++		it6112_dcs_send(ctx, MIPI_DCS_SET_DISPLAY_ON,
++				IT6112_ECC_DISPLAY_ON);
++		msleep(20);
++
++		it6112_dump(ctx, "post-dcs");
++
++		schedule_delayed_work(&ctx->dcs_retry, msecs_to_jiffies(200));
++
++		return 0;
++	}
++
+ 	/*
+ 	 * ->enable() runs after the DSI bridge was enabled
+ 	 * (drm_atomic_bridge_chain_enable(), forward order:
+@@ -497,21 +608,11 @@ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ 	msleep(10);
+ 
+ 	/* write dcs exit sleep mode */
+-	it6112_mipi_tx_write(ctx, 0x73, 0x05);
+-	it6112_mipi_tx_write(ctx, 0x73, MIPI_DCS_EXIT_SLEEP_MODE);
+-	it6112_mipi_tx_write(ctx, 0x73, 0x00);
+-	it6112_mipi_tx_write(ctx, 0x73, 0x36);
+-	it6112_mipi_tx_write(ctx, 0x74, 0x44);
+-	it6112_mipi_tx_write(ctx, 0x75, 0x87);
++	it6112_dcs_send(ctx, MIPI_DCS_EXIT_SLEEP_MODE, IT6112_ECC_EXIT_SLEEP);
+ 	mdelay(120);
+ 
+ 	/* write dcs set display on */
+-	it6112_mipi_tx_write(ctx, 0x73, 0x05);
+-	it6112_mipi_tx_write(ctx, 0x73, MIPI_DCS_SET_DISPLAY_ON);
+-	it6112_mipi_tx_write(ctx, 0x73, 0x00);
+-	it6112_mipi_tx_write(ctx, 0x73, 0x1c);
+-	it6112_mipi_tx_write(ctx, 0x74, 0x44);
+-	it6112_mipi_tx_write(ctx, 0x75, 0x87);
++	it6112_dcs_send(ctx, MIPI_DCS_SET_DISPLAY_ON, IT6112_ECC_DISPLAY_ON);
+ 	mdelay(20);
+ 
+ 	it6112_mipi_tx_set_bits(ctx, 0x11, 0x80, 0x00);
+@@ -528,22 +629,15 @@ static int boe_tv110xum_lb2_disable(struct drm_panel *panel)
+ {
+ 	struct it6112_ctx *ctx = panel_to_it6112(panel);
+ 
++	/* the retry worker must not talk to the bridge while it is going away */
++	cancel_delayed_work_sync(&ctx->dcs_retry);
++
+ 	/* write dcs enter sleep mode */
+-	it6112_mipi_tx_write(ctx, 0x73, 0x05);
+-	it6112_mipi_tx_write(ctx, 0x73, MIPI_DCS_ENTER_SLEEP_MODE);
+-	it6112_mipi_tx_write(ctx, 0x73, 0x00);
+-	it6112_mipi_tx_write(ctx, 0x73, 0x2c);
+-	it6112_mipi_tx_write(ctx, 0x74, 0x44);
+-	it6112_mipi_tx_write(ctx, 0x75, 0x87);
++	it6112_dcs_send(ctx, MIPI_DCS_ENTER_SLEEP_MODE, IT6112_ECC_ENTER_SLEEP);
+ 	mdelay(120);
+ 
+ 	/* write dcs set display off */
+-	it6112_mipi_tx_write(ctx, 0x73, 0x05);
+-	it6112_mipi_tx_write(ctx, 0x73, MIPI_DCS_SET_DISPLAY_OFF);
+-	it6112_mipi_tx_write(ctx, 0x73, 0x00);
+-	it6112_mipi_tx_write(ctx, 0x73, 0x06);
+-	it6112_mipi_tx_write(ctx, 0x74, 0x44);
+-	it6112_mipi_tx_write(ctx, 0x75, 0x87);
++	it6112_dcs_send(ctx, MIPI_DCS_SET_DISPLAY_OFF, IT6112_ECC_DISPLAY_OFF);
+ 	mdelay(20);
+ 
+ 	return 0;
+@@ -554,6 +648,27 @@ static int boe_tv110xum_lb2_prepare(struct drm_panel *panel)
+ 	struct it6112_ctx *ctx = panel_to_it6112(panel);
+ 	int ret;
+ 
++	if (it6112_skip_init) {
++		/*
++		 * Experiment A: no power sequencing, no reset pulse and no
++		 * register init - the bridge has to stay exactly as the
++		 * bootloader left it.  Enabling an already enabled rail is a
++		 * no-op, and the panel needs vpos/vneg anyway, so only the
++		 * rails are touched.
++		 */
++		ret = regulator_bulk_enable(ARRAY_SIZE(ctx->regulators),
++					    ctx->regulators);
++		if (ret) {
++			dev_err(&ctx->dsi->dev,
++				"failed to enable the panel rails: %d\n", ret);
++			return ret;
++		}
++
++		it6112_dump(ctx, "pre-stream");
++
++		return 0;
++	}
++
+ 	ret = it6112_power_up(ctx);
+ 	if (ret) {
+ 		dev_err(&ctx->dsi->dev,
+@@ -579,6 +694,14 @@ static int boe_tv110xum_lb2_unprepare(struct drm_panel *panel)
+ 
+ 	boe_tv110xum_lb2_disable(panel);
+ 
++	/*
++	 * Experiment A: this driver never powered the bridge up, so it must not
++	 * power it down either - pulsing reset and dropping EXT_PWR here would
++	 * destroy the bootloader state for good.
++	 */
++	if (it6112_skip_init)
++		return 0;
++
+ 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
+ 
+ 	regulator_bulk_disable(ARRAY_SIZE(ctx->regulators),
+@@ -673,6 +796,8 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 	ctx->i2c_mipi_rx = i2c_mipi_rx;
+ 	i2c_set_clientdata(i2c, ctx);
+ 
++	INIT_DELAYED_WORK(&ctx->dcs_retry, it6112_dcs_retry_work);
++
+ 	drm_panel_init(&ctx->base, dev, &boe_tv110xum_lb2_funcs,
+ 		       DRM_MODE_CONNECTOR_DSI);
+ 
+@@ -684,7 +809,9 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 	if (ret)
+ 		return dev_err_probe(dev, ret, "failed to get regulators\n");
+ 
+-	ctx->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
++	ctx->reset_gpio = devm_gpiod_get(dev, "reset",
++					 it6112_skip_init ? GPIOD_ASIS :
++							    GPIOD_OUT_HIGH);
+ 	if (IS_ERR(ctx->reset_gpio))
+ 		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio),
+ 				     "failed to get reset gpio\n");
+@@ -695,46 +822,91 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 	 * = 1") holds STBY (GPIO44) and EXT_PWR (GPIO175) high for the whole
+ 	 * lifetime of the display; nothing in the mainline port drives them,
+ 	 * so the bridge is left in whatever state the bootloader chose.
++	 *
++	 * Experiment A goes one step further and does not even claim them as
++	 * outputs: requesting a line as GPIOD_OUT_LOW drives it low, which is
++	 * exactly how the first attempt powered the bridge down at probe time
++	 * and made it answer 0x00 to every register (see
++	 * refs/device/dmesg-expA1-skip-init.txt.gz).  GPIOD_ASIS keeps
++	 * direction and level, and the level is logged below.
+ 	 */
+-	ctx->stby_gpio = devm_gpiod_get_optional(dev, "stby", GPIOD_OUT_LOW);
++	ctx->stby_gpio = devm_gpiod_get_optional(dev, "stby",
++						 it6112_skip_init ? GPIOD_ASIS :
++								    GPIOD_OUT_LOW);
+ 	if (IS_ERR(ctx->stby_gpio))
+ 		return dev_err_probe(dev, PTR_ERR(ctx->stby_gpio),
+ 				     "failed to get stby gpio\n");
+ 
+ 	ctx->ext_pwr_gpio = devm_gpiod_get_optional(dev, "ext-pwr",
+-						    GPIOD_OUT_LOW);
++						    it6112_skip_init ? GPIOD_ASIS :
++								       GPIOD_OUT_LOW);
+ 	if (IS_ERR(ctx->ext_pwr_gpio))
+ 		return dev_err_probe(dev, PTR_ERR(ctx->ext_pwr_gpio),
+ 				     "failed to get ext-pwr gpio\n");
+ 
++	if (it6112_skip_init)
++		dev_info(dev, "experiment A: lines as the bootloader left them: reset=%d stby=%d ext-pwr=%d\n",
++			 gpiod_get_value_cansleep(ctx->reset_gpio),
++			 ctx->stby_gpio ?
++				gpiod_get_value_cansleep(ctx->stby_gpio) : -1,
++			 ctx->ext_pwr_gpio ?
++				gpiod_get_value_cansleep(ctx->ext_pwr_gpio) : -1);
++
+ 	/*
+ 	 * The IT6112 only answers on I2C while DVDD and the DSV rails are up.
+ 	 * LK usually leaves them on, but do not depend on that: run the
+ 	 * vendor power-up and reset sequence for the product-id probe and
+ 	 * switch the rails off again. ->prepare() repeats it.
+ 	 */
+-	ret = it6112_power_up(ctx);
+-	if (ret)
+-		return dev_err_probe(dev, ret, "failed to power the bridge up\n");
+-
+-	it6112_reset_pulse(ctx);
+-
+-	pid = it6112_get_pid(ctx);
+-
+-	regulator_bulk_disable(ARRAY_SIZE(ctx->regulators),
+-			       ctx->regulators);
+-	gpiod_set_value_cansleep(ctx->ext_pwr_gpio, 0);
++	if (it6112_skip_init) {
++		/*
++		 * Experiment A: power-cycling the rails and pulsing reset here
++		 * would throw away the state the bootloader left in the bridge,
++		 * which is the whole point of the experiment.  The product-id
++		 * read is only informative, so the probe must not fail on it.
++		 */
++		pid = it6112_get_pid(ctx);
++		if (pid < 0)
++			dev_warn(dev,
++				 "experiment A: bridge does not answer I2C (%d), leaving it alone\n",
++				 pid);
++		else
++			dev_info(dev,
++				 "experiment A: bridge product id 0x%04x (read without touching the bridge)\n",
++				 pid);
++
++		/* Snapshot of the bootloader's bridge state, read-only. */
++		it6112_dump(ctx, "boot");
++	} else {
++		ret = it6112_power_up(ctx);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "failed to power the bridge up\n");
++
++		it6112_reset_pulse(ctx);
++
++		pid = it6112_get_pid(ctx);
++
++		regulator_bulk_disable(ARRAY_SIZE(ctx->regulators),
++				       ctx->regulators);
++		gpiod_set_value_cansleep(ctx->ext_pwr_gpio, 0);
++
++		if (pid < 0)
++			return dev_err_probe(dev, -ENODEV,
++					     "read product id failed: %d\n", pid);
++		if (pid != 0x6112)
++			return dev_err_probe(dev, -ENODEV,
++					     "unknown product id: 0x%x\n", pid);
++	}
+ 
+ 	if (pid < 0)
+-		return dev_err_probe(dev, -ENODEV, "read product id failed: %d\n",
+-				     pid);
+-	if (pid != 0x6112)
+-		return dev_err_probe(dev, -ENODEV, "unknown product id: 0x%x\n",
+-				     pid);
+-
+-	dev_info(dev, "IT6112 bridge found, product id 0x%04x (stby %s, ext-pwr %s)\n",
+-		 pid, ctx->stby_gpio ? "yes" : "absent",
+-		 ctx->ext_pwr_gpio ? "yes" : "absent");
++		dev_info(dev, "IT6112 bridge: product id unreadable, stby %s, ext-pwr %s, skip-init %d\n",
++			 ctx->stby_gpio ? "yes" : "absent",
++			 ctx->ext_pwr_gpio ? "yes" : "absent", it6112_skip_init);
++	else
++		dev_info(dev, "IT6112 bridge found, product id 0x%04x (stby %s, ext-pwr %s, skip-init %d)\n",
++			 pid, ctx->stby_gpio ? "yes" : "absent",
++			 ctx->ext_pwr_gpio ? "yes" : "absent", it6112_skip_init);
+ 
+ 	endpoint = of_graph_get_endpoint_by_regs(dev->of_node, 0, -1);
+ 	if (!endpoint)
+@@ -788,6 +960,8 @@ static void it6112_bridge_remove(struct i2c_client *i2c)
+ {
+ 	struct it6112_ctx *ctx = i2c_get_clientdata(i2c);
+ 
++	cancel_delayed_work_sync(&ctx->dcs_retry);
++
+ 	if (ctx->dsi) {
+ 		mipi_dsi_detach(ctx->dsi);
+ 		mipi_dsi_device_unregister(ctx->dsi);

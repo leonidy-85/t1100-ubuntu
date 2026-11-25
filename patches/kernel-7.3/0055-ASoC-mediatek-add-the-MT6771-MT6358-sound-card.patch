@@ -1,0 +1,749 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 11:55:43 +0300
+Subject: [PATCH] ASoC: mediatek: add the MT6771 + MT6358 sound card
+
+Series patch 0057, ported to 7.3: the platform components are bound by
+of_node (the AFE node lost its unit address when it moved under the
+audiosys syscon) and dpcm_playback/dpcm_capture became
+playback_only/capture_only. The Kconfig entry goes to the end of the
+menu, next to the other machine drivers.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  |  12 +
+ drivers/rtc/rtc-mt6397.c.orig                 | 354 ------------------
+ include/linux/mfd/mt6397/rtc.h.orig           |  81 ----
+ sound/soc/mediatek/Kconfig                    |   9 +
+ sound/soc/mediatek/Makefile                   |   1 +
+ sound/soc/mediatek/mt6771/Makefile            |   3 +
+ sound/soc/mediatek/mt6771/mt6771-mt6358.c     | 213 +++++++++++
+ 7 files changed, 238 insertions(+), 435 deletions(-)
+ delete mode 100644 drivers/rtc/rtc-mt6397.c.orig
+ delete mode 100644 include/linux/mfd/mt6397/rtc.h.orig
+ create mode 100644 sound/soc/mediatek/mt6771/Makefile
+ create mode 100644 sound/soc/mediatek/mt6771/mt6771-mt6358.c
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 087bc594d..1d8451b2f 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -930,3 +930,15 @@ &dsi_out {
+  * kernel command line (ramoops.mem_address=0x54410000, mem_size=0xe0000),
+  * which fs/pstore/ram.c registers from the cmdline parameters.
+  */
++
++/*
++ * Sound: the MT6771 audio subsystem is register compatible with the MT8183
++ * one (same 0x11220000 block), so the mt8183 AFE driver drives it; the codec
++ * is the MT6358 inside the PMIC.  The speaker amplifier enable is GPIO159.
++ */
++&{/} {
++	sound {
++		compatible = "mediatek,mt6771-mt6358";
++		amp-gpios = <&pio 159 GPIO_ACTIVE_HIGH>;
++	};
++};
+diff --git a/drivers/rtc/rtc-mt6397.c.orig b/drivers/rtc/rtc-mt6397.c.orig
+deleted file mode 100644
+index 3d857681f..000000000
+--- a/drivers/rtc/rtc-mt6397.c.orig
++++ /dev/null
+@@ -1,354 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0-only
+-/*
+-* Copyright (c) 2014-2015 MediaTek Inc.
+-* Author: Tianping.Fang <tianping.fang@mediatek.com>
+-*/
+-
+-#include <linux/err.h>
+-#include <linux/interrupt.h>
+-#include <linux/mfd/mt6397/core.h>
+-#include <linux/module.h>
+-#include <linux/mutex.h>
+-#include <linux/of.h>
+-#include <linux/platform_device.h>
+-#include <linux/regmap.h>
+-#include <linux/rtc.h>
+-#include <linux/mfd/mt6397/rtc.h>
+-
+-static int mtk_rtc_write_trigger(struct mt6397_rtc *rtc)
+-{
+-	int ret;
+-	u32 data;
+-
+-	ret = regmap_write(rtc->regmap, rtc->addr_base + rtc->data->wrtgr, 1);
+-	if (ret < 0)
+-		return ret;
+-
+-	ret = regmap_read_poll_timeout(rtc->regmap,
+-					rtc->addr_base + RTC_BBPU, data,
+-					!(data & RTC_BBPU_CBUSY),
+-					MTK_RTC_POLL_DELAY_US,
+-					MTK_RTC_POLL_TIMEOUT);
+-	if (ret < 0)
+-		dev_err(rtc->rtc_dev->dev.parent,
+-			"failed to write WRTGR: %d\n", ret);
+-
+-	return ret;
+-}
+-
+-static irqreturn_t mtk_rtc_irq_handler_thread(int irq, void *data)
+-{
+-	struct mt6397_rtc *rtc = data;
+-	u32 irqsta, irqen;
+-	int ret;
+-
+-	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_IRQ_STA, &irqsta);
+-	if ((ret >= 0) && (irqsta & RTC_IRQ_STA_AL)) {
+-		rtc_update_irq(rtc->rtc_dev, 1, RTC_IRQF | RTC_AF);
+-		irqen = irqsta & ~RTC_IRQ_EN_AL;
+-		mutex_lock(&rtc->lock);
+-		if (regmap_write(rtc->regmap, rtc->addr_base + RTC_IRQ_EN,
+-				 irqen) == 0)
+-			mtk_rtc_write_trigger(rtc);
+-		mutex_unlock(&rtc->lock);
+-
+-		return IRQ_HANDLED;
+-	}
+-
+-	return IRQ_NONE;
+-}
+-
+-static int __mtk_rtc_read_time(struct mt6397_rtc *rtc,
+-			       struct rtc_time *tm, int *sec)
+-{
+-	int ret;
+-	u16 data[RTC_OFFSET_COUNT];
+-
+-	mutex_lock(&rtc->lock);
+-	ret = regmap_bulk_read(rtc->regmap, rtc->addr_base + RTC_TC_SEC,
+-			       data, RTC_OFFSET_COUNT);
+-	if (ret < 0)
+-		goto exit;
+-
+-	tm->tm_sec = data[RTC_OFFSET_SEC];
+-	tm->tm_min = data[RTC_OFFSET_MIN];
+-	tm->tm_hour = data[RTC_OFFSET_HOUR];
+-	tm->tm_mday = data[RTC_OFFSET_DOM];
+-	tm->tm_wday = data[RTC_OFFSET_DOW];
+-	tm->tm_mon = data[RTC_OFFSET_MTH] & RTC_TC_MTH_MASK;
+-	tm->tm_year = data[RTC_OFFSET_YEAR];
+-
+-	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_TC_SEC, sec);
+-exit:
+-	mutex_unlock(&rtc->lock);
+-	return ret;
+-}
+-
+-static int mtk_rtc_read_time(struct device *dev, struct rtc_time *tm)
+-{
+-	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
+-	int sec, ret;
+-
+-	do {
+-		ret = __mtk_rtc_read_time(rtc, tm, &sec);
+-		if (ret < 0)
+-			goto exit;
+-	} while (sec < tm->tm_sec);
+-
+-	/* HW register start mon/wday from one, but tm_mon/tm_wday start from zero. */
+-	tm->tm_mon--;
+-	tm->tm_wday--;
+-
+-exit:
+-	return ret;
+-}
+-
+-static int mtk_rtc_set_time(struct device *dev, struct rtc_time *tm)
+-{
+-	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
+-	int ret;
+-	u16 data[RTC_OFFSET_COUNT];
+-
+-	tm->tm_mon++;
+-	tm->tm_wday++;
+-
+-	data[RTC_OFFSET_SEC] = tm->tm_sec;
+-	data[RTC_OFFSET_MIN] = tm->tm_min;
+-	data[RTC_OFFSET_HOUR] = tm->tm_hour;
+-	data[RTC_OFFSET_DOM] = tm->tm_mday;
+-	data[RTC_OFFSET_DOW] = tm->tm_wday;
+-	data[RTC_OFFSET_MTH] = tm->tm_mon;
+-	data[RTC_OFFSET_YEAR] = tm->tm_year;
+-
+-	mutex_lock(&rtc->lock);
+-	ret = regmap_bulk_write(rtc->regmap, rtc->addr_base + RTC_TC_SEC,
+-				data, RTC_OFFSET_COUNT);
+-	if (ret < 0)
+-		goto exit;
+-
+-	/* Time register write to hardware after call trigger function */
+-	ret = mtk_rtc_write_trigger(rtc);
+-
+-exit:
+-	mutex_unlock(&rtc->lock);
+-	return ret;
+-}
+-
+-static int mtk_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alm)
+-{
+-	struct rtc_time *tm = &alm->time;
+-	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
+-	u32 irqen, pdn2;
+-	int ret;
+-	u16 data[RTC_OFFSET_COUNT];
+-
+-	mutex_lock(&rtc->lock);
+-	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_IRQ_EN, &irqen);
+-	if (ret < 0)
+-		goto err_exit;
+-	ret = regmap_read(rtc->regmap, rtc->addr_base + RTC_PDN2, &pdn2);
+-	if (ret < 0)
+-		goto err_exit;
+-
+-	ret = regmap_bulk_read(rtc->regmap, rtc->addr_base + RTC_AL_SEC,
+-			       data, RTC_OFFSET_COUNT);
+-	if (ret < 0)
+-		goto err_exit;
+-
+-	alm->enabled = !!(irqen & RTC_IRQ_EN_AL);
+-	alm->pending = !!(pdn2 & RTC_PDN2_PWRON_ALARM);
+-	mutex_unlock(&rtc->lock);
+-
+-	tm->tm_sec = data[RTC_OFFSET_SEC] & RTC_AL_SEC_MASK;
+-	tm->tm_min = data[RTC_OFFSET_MIN] & RTC_AL_MIN_MASK;
+-	tm->tm_hour = data[RTC_OFFSET_HOUR] & RTC_AL_HOU_MASK;
+-	tm->tm_mday = data[RTC_OFFSET_DOM] & RTC_AL_DOM_MASK;
+-	tm->tm_mon = data[RTC_OFFSET_MTH] & RTC_AL_MTH_MASK;
+-	tm->tm_year = data[RTC_OFFSET_YEAR] & RTC_AL_YEA_MASK;
+-
+-	tm->tm_mon--;
+-
+-	return 0;
+-err_exit:
+-	mutex_unlock(&rtc->lock);
+-	return ret;
+-}
+-
+-static int mtk_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alm)
+-{
+-	struct rtc_time *tm = &alm->time;
+-	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
+-	int ret;
+-	u16 data[RTC_OFFSET_COUNT];
+-
+-	tm->tm_mon++;
+-
+-	mutex_lock(&rtc->lock);
+-	ret = regmap_bulk_read(rtc->regmap, rtc->addr_base + RTC_AL_SEC,
+-			       data, RTC_OFFSET_COUNT);
+-	if (ret < 0)
+-		goto exit;
+-
+-	data[RTC_OFFSET_SEC] = ((data[RTC_OFFSET_SEC] & ~(RTC_AL_SEC_MASK)) |
+-				(tm->tm_sec & RTC_AL_SEC_MASK));
+-	data[RTC_OFFSET_MIN] = ((data[RTC_OFFSET_MIN] & ~(RTC_AL_MIN_MASK)) |
+-				(tm->tm_min & RTC_AL_MIN_MASK));
+-	data[RTC_OFFSET_HOUR] = ((data[RTC_OFFSET_HOUR] & ~(RTC_AL_HOU_MASK)) |
+-				(tm->tm_hour & RTC_AL_HOU_MASK));
+-	data[RTC_OFFSET_DOM] = ((data[RTC_OFFSET_DOM] & ~(RTC_AL_DOM_MASK)) |
+-				(tm->tm_mday & RTC_AL_DOM_MASK));
+-	data[RTC_OFFSET_MTH] = ((data[RTC_OFFSET_MTH] & ~(RTC_AL_MTH_MASK)) |
+-				(tm->tm_mon & RTC_AL_MTH_MASK));
+-	data[RTC_OFFSET_YEAR] = ((data[RTC_OFFSET_YEAR] & ~(RTC_AL_YEA_MASK)) |
+-				(tm->tm_year & RTC_AL_YEA_MASK));
+-
+-	if (alm->enabled) {
+-		ret = regmap_bulk_write(rtc->regmap,
+-					rtc->addr_base + RTC_AL_SEC,
+-					data, RTC_OFFSET_COUNT);
+-		if (ret < 0)
+-			goto exit;
+-		ret = regmap_write(rtc->regmap, rtc->addr_base + RTC_AL_MASK,
+-				   RTC_AL_MASK_DOW);
+-		if (ret < 0)
+-			goto exit;
+-		ret = regmap_update_bits(rtc->regmap,
+-					 rtc->addr_base + RTC_IRQ_EN,
+-					 RTC_IRQ_EN_ONESHOT_AL,
+-					 RTC_IRQ_EN_ONESHOT_AL);
+-		if (ret < 0)
+-			goto exit;
+-	} else {
+-		ret = regmap_update_bits(rtc->regmap,
+-					 rtc->addr_base + RTC_IRQ_EN,
+-					 RTC_IRQ_EN_ONESHOT_AL, 0);
+-		if (ret < 0)
+-			goto exit;
+-	}
+-
+-	/* All alarm time register write to hardware after calling
+-	 * mtk_rtc_write_trigger. This can avoid race condition if alarm
+-	 * occur happen during writing alarm time register.
+-	 */
+-	ret = mtk_rtc_write_trigger(rtc);
+-exit:
+-	mutex_unlock(&rtc->lock);
+-	return ret;
+-}
+-
+-static const struct rtc_class_ops mtk_rtc_ops = {
+-	.read_time  = mtk_rtc_read_time,
+-	.set_time   = mtk_rtc_set_time,
+-	.read_alarm = mtk_rtc_read_alarm,
+-	.set_alarm  = mtk_rtc_set_alarm,
+-};
+-
+-static int mtk_rtc_probe(struct platform_device *pdev)
+-{
+-	struct resource *res;
+-	struct mt6397_chip *mt6397_chip = dev_get_drvdata(pdev->dev.parent);
+-	struct mt6397_rtc *rtc;
+-	int ret;
+-
+-	rtc = devm_kzalloc(&pdev->dev, sizeof(struct mt6397_rtc), GFP_KERNEL);
+-	if (!rtc)
+-		return -ENOMEM;
+-
+-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+-	if (!res)
+-		return -EINVAL;
+-	rtc->addr_base = res->start;
+-
+-	rtc->data = of_device_get_match_data(&pdev->dev);
+-
+-	rtc->irq = platform_get_irq(pdev, 0);
+-	if (rtc->irq < 0)
+-		return rtc->irq;
+-
+-	rtc->regmap = mt6397_chip->regmap;
+-	mutex_init(&rtc->lock);
+-
+-	platform_set_drvdata(pdev, rtc);
+-
+-	rtc->rtc_dev = devm_rtc_allocate_device(&pdev->dev);
+-	if (IS_ERR(rtc->rtc_dev))
+-		return PTR_ERR(rtc->rtc_dev);
+-
+-	ret = devm_request_threaded_irq(&pdev->dev, rtc->irq, NULL,
+-					mtk_rtc_irq_handler_thread,
+-					IRQF_ONESHOT | IRQF_TRIGGER_HIGH,
+-					"mt6397-rtc", rtc);
+-
+-	if (ret) {
+-		dev_err(&pdev->dev, "Failed to request alarm IRQ: %d: %d\n",
+-			rtc->irq, ret);
+-		return ret;
+-	}
+-
+-	device_init_wakeup(&pdev->dev, true);
+-
+-	rtc->rtc_dev->ops = &mtk_rtc_ops;
+-	rtc->rtc_dev->range_min = RTC_TIMESTAMP_BEGIN_1900;
+-	rtc->rtc_dev->range_max = mktime64(2027, 12, 31, 23, 59, 59);
+-	rtc->rtc_dev->start_secs = mktime64(1968, 1, 2, 0, 0, 0);
+-	rtc->rtc_dev->set_start_time = true;
+-
+-	return devm_rtc_register_device(rtc->rtc_dev);
+-}
+-
+-#ifdef CONFIG_PM_SLEEP
+-static int mt6397_rtc_suspend(struct device *dev)
+-{
+-	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
+-
+-	if (device_may_wakeup(dev))
+-		enable_irq_wake(rtc->irq);
+-
+-	return 0;
+-}
+-
+-static int mt6397_rtc_resume(struct device *dev)
+-{
+-	struct mt6397_rtc *rtc = dev_get_drvdata(dev);
+-
+-	if (device_may_wakeup(dev))
+-		disable_irq_wake(rtc->irq);
+-
+-	return 0;
+-}
+-#endif
+-
+-static SIMPLE_DEV_PM_OPS(mt6397_pm_ops, mt6397_rtc_suspend,
+-			mt6397_rtc_resume);
+-
+-static const struct mtk_rtc_data mt6358_rtc_data = {
+-	.wrtgr = RTC_WRTGR_MT6358,
+-};
+-
+-static const struct mtk_rtc_data mt6397_rtc_data = {
+-	.wrtgr = RTC_WRTGR_MT6397,
+-};
+-
+-static const struct of_device_id mt6397_rtc_of_match[] = {
+-	{ .compatible = "mediatek,mt6323-rtc", .data = &mt6397_rtc_data },
+-	{ .compatible = "mediatek,mt6357-rtc", .data = &mt6358_rtc_data },
+-	{ .compatible = "mediatek,mt6358-rtc", .data = &mt6358_rtc_data },
+-	{ .compatible = "mediatek,mt6397-rtc", .data = &mt6397_rtc_data },
+-	{ }
+-};
+-MODULE_DEVICE_TABLE(of, mt6397_rtc_of_match);
+-
+-static struct platform_driver mtk_rtc_driver = {
+-	.driver = {
+-		.name = "mt6397-rtc",
+-		.of_match_table = mt6397_rtc_of_match,
+-		.pm = &mt6397_pm_ops,
+-	},
+-	.probe	= mtk_rtc_probe,
+-};
+-
+-module_platform_driver(mtk_rtc_driver);
+-
+-MODULE_LICENSE("GPL v2");
+-MODULE_AUTHOR("Tianping Fang <tianping.fang@mediatek.com>");
+-MODULE_DESCRIPTION("RTC Driver for MediaTek MT6397 PMIC");
+diff --git a/include/linux/mfd/mt6397/rtc.h.orig b/include/linux/mfd/mt6397/rtc.h.orig
+deleted file mode 100644
+index 27883af44..000000000
+--- a/include/linux/mfd/mt6397/rtc.h.orig
++++ /dev/null
+@@ -1,81 +0,0 @@
+-/* SPDX-License-Identifier: GPL-2.0 */
+-/*
+- * Copyright (C) 2014-2019 MediaTek Inc.
+- *
+- * Author: Tianping.Fang <tianping.fang@mediatek.com>
+- *        Sean Wang <sean.wang@mediatek.com>
+- */
+-
+-#ifndef _LINUX_MFD_MT6397_RTC_H_
+-#define _LINUX_MFD_MT6397_RTC_H_
+-
+-#include <linux/jiffies.h>
+-#include <linux/mutex.h>
+-#include <linux/regmap.h>
+-#include <linux/rtc.h>
+-
+-#define RTC_BBPU               0x0000
+-#define RTC_BBPU_CBUSY         BIT(6)
+-#define RTC_BBPU_KEY            (0x43 << 8)
+-
+-#define RTC_WRTGR_MT6358       0x003a
+-#define RTC_WRTGR_MT6397       0x003c
+-#define RTC_WRTGR_MT6323       RTC_WRTGR_MT6397
+-
+-#define RTC_IRQ_STA            0x0002
+-#define RTC_IRQ_STA_AL         BIT(0)
+-#define RTC_IRQ_STA_LP         BIT(3)
+-
+-#define RTC_IRQ_EN             0x0004
+-#define RTC_IRQ_EN_AL          BIT(0)
+-#define RTC_IRQ_EN_ONESHOT     BIT(2)
+-#define RTC_IRQ_EN_LP          BIT(3)
+-#define RTC_IRQ_EN_ONESHOT_AL  (RTC_IRQ_EN_ONESHOT | RTC_IRQ_EN_AL)
+-
+-#define RTC_AL_MASK            0x0008
+-#define RTC_AL_MASK_DOW                BIT(4)
+-
+-#define RTC_TC_SEC             0x000a
+-#define RTC_TC_MTH_MASK        0x000f
+-/* Min, Hour, Dom... register offset to RTC_TC_SEC */
+-#define RTC_OFFSET_SEC         0
+-#define RTC_OFFSET_MIN         1
+-#define RTC_OFFSET_HOUR                2
+-#define RTC_OFFSET_DOM         3
+-#define RTC_OFFSET_DOW         4
+-#define RTC_OFFSET_MTH         5
+-#define RTC_OFFSET_YEAR                6
+-#define RTC_OFFSET_COUNT       7
+-
+-#define RTC_AL_SEC             0x0018
+-
+-#define RTC_AL_SEC_MASK        0x003f
+-#define RTC_AL_MIN_MASK        0x003f
+-#define RTC_AL_HOU_MASK        0x001f
+-#define RTC_AL_DOM_MASK        0x001f
+-#define RTC_AL_DOW_MASK        0x0007
+-#define RTC_AL_MTH_MASK        0x000f
+-#define RTC_AL_YEA_MASK        0x007f
+-
+-#define RTC_PDN2               0x002e
+-#define RTC_PDN2_PWRON_ALARM   BIT(4)
+-
+-#define MTK_RTC_POLL_DELAY_US  10
+-#define MTK_RTC_POLL_TIMEOUT   (jiffies_to_usecs(HZ))
+-
+-struct mtk_rtc_data {
+-	u32                     wrtgr;
+-};
+-
+-struct mt6397_rtc {
+-	struct rtc_device       *rtc_dev;
+-
+-	/* Protect register access from multiple tasks */
+-	struct mutex            lock;
+-	struct regmap           *regmap;
+-	int                     irq;
+-	u32                     addr_base;
+-	const struct mtk_rtc_data *data;
+-};
+-
+-#endif /* _LINUX_MFD_MT6397_RTC_H_ */
+diff --git a/sound/soc/mediatek/Kconfig b/sound/soc/mediatek/Kconfig
+index 224746e76..792b81a88 100644
+--- a/sound/soc/mediatek/Kconfig
++++ b/sound/soc/mediatek/Kconfig
+@@ -393,4 +393,13 @@ config SND_SOC_MT8196_NAU8825
+ 	  Select Y if you have such device.
+ 	  If unsure select "N".
+ 
++config SND_SOC_MT6771_MT6358
++	tristate "ASoC Audio driver for MT6771 with MT6358 codec"
++	depends on SND_SOC_MT8183 && SND_SOC_MT6358
++	help
++	  This adds ASoC driver support for MediaTek MT6771 sound cards
++	  with the MT6358 PMIC codec (Fplus T1100 tablet).
++	  The MT6771 audio block is register compatible with the MT8183 one,
++	  so the mt8183 AFE platform driver drives it.
++
+ endmenu
+diff --git a/sound/soc/mediatek/Makefile b/sound/soc/mediatek/Makefile
+index a6815a3c5..aa82e7a4b 100644
+--- a/sound/soc/mediatek/Makefile
++++ b/sound/soc/mediatek/Makefile
+@@ -4,6 +4,7 @@ obj-$(CONFIG_SND_SOC_MT2701) += mt2701/
+ obj-$(CONFIG_SND_SOC_MT6797) += mt6797/
+ obj-$(CONFIG_SND_SOC_MT7986) += mt7986/
+ obj-$(CONFIG_SND_SOC_MT8173) += mt8173/
++obj-$(CONFIG_SND_SOC_MT6771_MT6358) += mt6771/
+ obj-$(CONFIG_SND_SOC_MT8183) += mt8183/
+ obj-$(CONFIG_SND_SOC_MT8186) += mt8186/
+ obj-$(CONFIG_SND_SOC_MT8188) += mt8188/
+diff --git a/sound/soc/mediatek/mt6771/Makefile b/sound/soc/mediatek/mt6771/Makefile
+new file mode 100644
+index 000000000..30584e1eb
+--- /dev/null
++++ b/sound/soc/mediatek/mt6771/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0
++snd-soc-mt6771-mt6358-objs := mt6771-mt6358.o
++obj-$(CONFIG_SND_SOC_MT6771_MT6358) += snd-soc-mt6771-mt6358.o
+diff --git a/sound/soc/mediatek/mt6771/mt6771-mt6358.c b/sound/soc/mediatek/mt6771/mt6771-mt6358.c
+new file mode 100644
+index 000000000..a153e1459
+--- /dev/null
++++ b/sound/soc/mediatek/mt6771/mt6771-mt6358.c
+@@ -0,0 +1,213 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Fplus T1100 (MT6771) sound card: MTKF AFE <-> MT6358 codec.
++ *
++ * The board has no external I2S codec: the speaker is driven by the MT6358
++ * DAC through an analog amplifier whose enable line is a GPIO, and the
++ * headset is wired to the MT6358 as well.  This is the minimal machine driver
++ * for that wiring (playback through DL1/ADDA, capture through UL1/ADDA).
++ */
++
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_platform.h>
++#include <linux/platform_device.h>
++#include <sound/soc.h>
++
++#define DRV_NAME "mt6771-mt6358"
++
++struct mt6771_mt6358_priv {
++	struct gpio_desc *amp_gpio;
++};
++
++static int mt6771_mt6358_startup(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
++	struct snd_soc_card *card = rtd->card;
++	struct mt6771_mt6358_priv *priv = snd_soc_card_get_drvdata(card);
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK && priv->amp_gpio)
++		gpiod_set_value_cansleep(priv->amp_gpio, 1);
++
++	return 0;
++}
++
++static void mt6771_mt6358_shutdown(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
++	struct snd_soc_card *card = rtd->card;
++	struct mt6771_mt6358_priv *priv = snd_soc_card_get_drvdata(card);
++
++	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK && priv->amp_gpio)
++		gpiod_set_value_cansleep(priv->amp_gpio, 0);
++}
++
++static const struct snd_soc_ops mt6771_mt6358_ops = {
++	.startup = mt6771_mt6358_startup,
++	.shutdown = mt6771_mt6358_shutdown,
++};
++
++/* FE */
++SND_SOC_DAILINK_DEFS(playback1,
++	DAILINK_COMP_ARRAY(COMP_CPU("DL1")),
++	DAILINK_COMP_ARRAY(COMP_DUMMY()),
++	DAILINK_COMP_ARRAY(COMP_EMPTY()));
++
++SND_SOC_DAILINK_DEFS(capture1,
++	DAILINK_COMP_ARRAY(COMP_CPU("UL1")),
++	DAILINK_COMP_ARRAY(COMP_DUMMY()),
++	DAILINK_COMP_ARRAY(COMP_EMPTY()));
++
++/* BE */
++SND_SOC_DAILINK_DEFS(primary_codec,
++	DAILINK_COMP_ARRAY(COMP_CPU("ADDA")),
++	DAILINK_COMP_ARRAY(COMP_CODEC("mt6358-sound", "mt6358-snd-codec-aif1")),
++	DAILINK_COMP_ARRAY(COMP_EMPTY()));
++
++
++/*
++ * 6.12 DPCM only sends SND_SOC_DAPM_STREAM_START to the front end, so the
++ * backend widgets (codec AIF, DAC and its supplies) never get active and the
++ * whole DAPM path stays off.  Flip them on explicitly for the backend.
++ */
++static int mt6771_mt6358_be_prepare(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
++
++	snd_soc_dapm_stream_event(rtd, substream->stream,
++				  SND_SOC_DAPM_STREAM_START);
++
++	return 0;
++}
++
++static void mt6771_mt6358_be_shutdown(struct snd_pcm_substream *substream)
++{
++	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
++
++	snd_soc_dapm_stream_event(rtd, substream->stream,
++				  SND_SOC_DAPM_STREAM_STOP);
++}
++
++static const struct snd_soc_ops mt6771_mt6358_be_ops = {
++	.prepare = mt6771_mt6358_be_prepare,
++	.shutdown = mt6771_mt6358_be_shutdown,
++};
++
++static struct snd_soc_dai_link mt6771_mt6358_dai_links[] = {
++	{
++		.name = "Playback_1",
++		.stream_name = "Playback_1",
++		.trigger = { SND_SOC_DPCM_TRIGGER_PRE,
++			     SND_SOC_DPCM_TRIGGER_PRE },
++		.dynamic = 1,
++		.playback_only = 1,
++		.ops = &mt6771_mt6358_ops,
++		SND_SOC_DAILINK_REG(playback1),
++	},
++	{
++		.name = "Capture_1",
++		.stream_name = "Capture_1",
++		.trigger = { SND_SOC_DPCM_TRIGGER_PRE,
++			     SND_SOC_DPCM_TRIGGER_PRE },
++		.dynamic = 1,
++		.capture_only = 1,
++		SND_SOC_DAILINK_REG(capture1),
++	},
++	{
++		.name = "Primary Codec",
++		.no_pcm = 1,
++		.ignore_suspend = 1,
++		.ops = &mt6771_mt6358_be_ops,
++		SND_SOC_DAILINK_REG(primary_codec),
++	},
++};
++
++static struct snd_soc_card mt6771_mt6358_card = {
++	.name = "mt6771-mt6358",
++	.owner = THIS_MODULE,
++	.dai_link = mt6771_mt6358_dai_links,
++	.num_links = ARRAY_SIZE(mt6771_mt6358_dai_links),
++};
++
++static int mt6771_mt6358_probe(struct platform_device *pdev)
++{
++	struct snd_soc_card *card = &mt6771_mt6358_card;
++	struct mt6771_mt6358_priv *priv;
++	struct device_node *np;
++	int ret;
++	int i;
++
++	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++
++	priv->amp_gpio = devm_gpiod_get_optional(&pdev->dev, "amp",
++						 GPIOD_OUT_LOW);
++	if (IS_ERR(priv->amp_gpio))
++		return dev_err_probe(&pdev->dev, PTR_ERR(priv->amp_gpio),
++				     "failed to get the amplifier GPIO\n");
++
++	/*
++	 * The card is built in and probes before the AFE does (the AFE itself
++	 * defers until its clocks are available).  Wait for it, otherwise the
++	 * FE links have no CPU DAI and registration fails with -EINVAL.
++	 */
++	np = of_find_compatible_node(NULL, NULL, "mediatek,mt8183-audio");
++	if (np) {
++		struct platform_device *afe = of_find_device_by_node(np);
++
++		if (afe) {
++			bool bound = afe->dev.driver != NULL;
++
++			put_device(&afe->dev);
++			if (!bound) {
++				of_node_put(np);
++				return -EPROBE_DEFER;
++			}
++		}
++	}
++
++	card->dev = &pdev->dev;
++	snd_soc_card_set_drvdata(card, priv);
++	platform_set_drvdata(pdev, card);
++
++	/*
++	 * Since 6.16 the AFE node is a child of the audiosys syscon and has no
++	 * unit address of its own, so there is no stable platform name to match
++	 * on.  Bind the platform components by of_node, like the mt8183 machine
++	 * drivers do.
++	 */
++	for (i = 0; i < card->num_links; i++) {
++		struct snd_soc_dai_link *link = &card->dai_link[i];
++
++		if (!link->platforms->name)
++			link->platforms->of_node = np;
++	}
++
++	ret = devm_snd_soc_register_card(&pdev->dev, card);
++	of_node_put(np);
++	if (ret)
++		return dev_err_probe(&pdev->dev, ret, "failed to register card\n");
++
++	return 0;
++}
++
++static const struct of_device_id mt6771_mt6358_of_match[] = {
++	{ .compatible = "mediatek,mt6771-mt6358" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, mt6771_mt6358_of_match);
++
++static struct platform_driver mt6771_mt6358_driver = {
++	.driver = {
++		.name = DRV_NAME,
++		.of_match_table = mt6771_mt6358_of_match,
++		.pm = &snd_soc_pm_ops,
++	},
++	.probe = mt6771_mt6358_probe,
++};
++module_platform_driver(mt6771_mt6358_driver);
++
++MODULE_DESCRIPTION("Fplus T1100 (MT6771) MT6358 sound card");
++MODULE_LICENSE("GPL");

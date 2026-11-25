@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Wed, 25 Nov 2026 12:47:32 +0300
+Subject: [PATCH] drm/panel: it6112: recover the bridge after the DSI stream
+ stopped
+
+The bridge keeps its register map when the input stream disappears, but the
+TX video state machine loses the output timing and the panel comes back with
+coloured stripes. Refcount the rails, remember whether this driver owns the
+bridge and whether ->enable() already ran once, and add t1100.it6112_resume=
+(none/pulse/full, full by default): "full" re-runs the reset pulse and the
+RX/TX init in ->prepare(), the vendor TX 0x05 fe->00 pulse in ->enable()
+re-syncs the output. The first bring-up still leaves the bootloader state
+alone.
+---
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 190 ++++++++++++++----
+ 1 file changed, 146 insertions(+), 44 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index 767dc0187..c6aa1909c 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -34,6 +34,13 @@
+  *    sequence come from the stock LK's lcm_get_params and panel init, not
+  *    from the 6.16 original: see boe_tv110xum_lb2_mode,
+  *    it6112_power_up() and it6112_reset_pulse().
++ *  - system resume / DPMS re-enable recovery: the bridge keeps its register
++ *    map when the DSI stream stops, but its TX video state machine loses the
++ *    output timing and the panel then shows coloured stripes.  The vendor TX
++ *    "on" pulse (TX 0x05 = 0xfe -> 0x00) brings the picture back; "full"
++ *    mode additionally re-runs the reset pulse and the RX/TX init before the
++ *    stream is started again.  See it6112_resume_setup() and
++ *    boe_tv110xum_lb2_enable().
+  */
+ 
+ #include <linux/backlight.h>
+@@ -201,6 +208,48 @@ static int __init it6112_keep_setup(char *str)
+ }
+ __setup("t1100.it6112_keep=", it6112_keep_setup);
+ 
++/*
++ * Recovery after the DSI stream was stopped (DPMS off, system suspend with the
++ * screen blanked).  On the running board the bridge keeps answering I2C and its
++ * register map is byte for byte the one the working state has, but the picture
++ * comes back with coloured stripes: the TX block lost the output timing when
++ * its input stream disappeared, and only the vendor's TX "on" pulse
++ * (TX 0x05 = 0xfe -> 0x00) re-syncs it.  Verified twice on the live bridge
++ * (2026-11-12 after a DPMS off/on, 2026-11-15 after a 10 minute s2idle cycle):
++ * the pulse restores the picture immediately.
++ *
++ *	t1100.it6112_resume=pulse	TX pulse before the DCS commands
++ *	t1100.it6112_resume=full	reset pulse + RX/TX init before the
++ *					stream starts, then the TX pulse
++ *	t1100.it6112_resume=none	keep the pre-recovery behaviour
++ *
++ * "full" is the default: it also recovers the bridge if the state machine is
++ * left in a worse state than the pulse alone can fix.  The boot path is not
++ * affected: the "skip_init" experiment still leaves the bootloader's state
++ * alone on the first enable.
++ */
++#define IT6112_RESUME_NONE	0
++#define IT6112_RESUME_PULSE	1
++#define IT6112_RESUME_FULL	2
++
++static unsigned int it6112_resume_mode = IT6112_RESUME_FULL;
++
++static int __init it6112_resume_setup(char *str)
++{
++	if (!str || !*str)
++		return 1;
++
++	if (!strcmp(str, "none") || !strcmp(str, "0"))
++		it6112_resume_mode = IT6112_RESUME_NONE;
++	else if (!strcmp(str, "pulse") || !strcmp(str, "1"))
++		it6112_resume_mode = IT6112_RESUME_PULSE;
++	else if (!strcmp(str, "full") || !strcmp(str, "2"))
++		it6112_resume_mode = IT6112_RESUME_FULL;
++
++	return 1;
++}
++__setup("t1100.it6112_resume=", it6112_resume_setup);
++
+ struct it6112_ctx {
+ 	struct drm_panel base;
+ 	struct mipi_dsi_device *dsi;
+@@ -213,6 +262,11 @@ struct it6112_ctx {
+ 	struct delayed_work dcs_retry;
+ 	unsigned int mclk_khz;
+ 	enum drm_panel_orientation orientation;
++	bool rails_on;
++	/* this driver has programmed the bridge (normal init / resume "full") */
++	bool bridge_owned;
++	/* at least one ->enable() completed, i.e. the next one is a re-enable */
++	bool enabled_once;
+ };
+ 
+ static struct it6112_ctx *panel_to_it6112(struct drm_panel *panel)
+@@ -306,6 +360,38 @@ static void it6112_mipi_rx_set_bits(struct it6112_ctx *ctx, u8 reg,
+ 	it6112_mipi_rx_write(ctx, reg, temp);
+ }
+ 
++/*
++ * Rails are refcounted by the regulator core, so enable/disable them exactly
++ * once per power-up: the "experiment A" path enables them in ->prepare() and
++ * never powers down, and a resume recovery re-uses the same already enabled
++ * rails.
++ */
++static int it6112_rails_enable(struct it6112_ctx *ctx)
++{
++	int ret;
++
++	if (ctx->rails_on)
++		return 0;
++
++	ret = regulator_bulk_enable(ARRAY_SIZE(ctx->regulators),
++				    ctx->regulators);
++	if (ret)
++		return ret;
++
++	ctx->rails_on = true;
++
++	return 0;
++}
++
++static void it6112_rails_disable(struct it6112_ctx *ctx)
++{
++	if (!ctx->rails_on)
++		return;
++
++	regulator_bulk_disable(ARRAY_SIZE(ctx->regulators), ctx->regulators);
++	ctx->rails_on = false;
++}
++
+ /*
+  * Vendor power-up order, from the stock LK (lk-verified.img):
+  *
+@@ -327,8 +413,7 @@ static int it6112_power_up(struct it6112_ctx *ctx)
+ 	gpiod_set_value_cansleep(ctx->ext_pwr_gpio, 1);
+ 	msleep(200);
+ 
+-	ret = regulator_bulk_enable(ARRAY_SIZE(ctx->regulators),
+-				    ctx->regulators);
++	ret = it6112_rails_enable(ctx);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -700,31 +785,7 @@ static void it6112_dcs_retry_work(struct work_struct *work)
+ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ {
+ 	struct it6112_ctx *ctx = panel_to_it6112(panel);
+-
+-	if (it6112_skip_init) {
+-		/*
+-		 * Experiment A: the bridge keeps whatever state the bootloader
+-		 * left in it.  Only the DSI stream (already started by
+-		 * mtk_dsi: ->enable() runs after the bridge chain was enabled)
+-		 * and the DCS commands are used.  The clock measurement is
+-		 * read-only and kept for the log.
+-		 */
+-		it6112_mipi_rx_calc_clk(ctx);
+-		it6112_dump(ctx, "stream-on");
+-
+-		it6112_dcs_send(ctx, MIPI_DCS_EXIT_SLEEP_MODE,
+-				IT6112_ECC_EXIT_SLEEP);
+-		msleep(120);
+-		it6112_dcs_send(ctx, MIPI_DCS_SET_DISPLAY_ON,
+-				IT6112_ECC_DISPLAY_ON);
+-		msleep(20);
+-
+-		it6112_dump(ctx, "post-dcs");
+-
+-		schedule_delayed_work(&ctx->dcs_retry, msecs_to_jiffies(200));
+-
+-		return 0;
+-	}
++	bool resync;
+ 
+ 	/*
+ 	 * ->enable() runs after the DSI bridge was enabled
+@@ -737,10 +798,14 @@ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ 	 * free-running clock.
+ 	 *
+ 	 * LK measures the clocks, programs 0x22/0x1f from them and only then
+-	 * pushes the DCS commands, so do the same here.
++	 * pushes the DCS commands, so do the same here.  The RX measurement is
++	 * read-only while the "experiment A" bring-up leaves the bridge alone;
++	 * once this driver owns the bridge (normal init, or a "full" resume
++	 * recovery) the TX timing registers are computed from it.
+ 	 */
+ 	it6112_mipi_rx_calc_clk(ctx);
+-	it6112_tx_calc_clk(ctx);
++	if (ctx->bridge_owned)
++		it6112_tx_calc_clk(ctx);
+ 	it6112_dump(ctx, "stream-on");
+ 
+ 	/*
+@@ -761,6 +826,13 @@ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ 	 *
+ 	 *	write(0x05, 0xfe); write(0x05, 0x00)
+ 	 *
++	 * The same pulse is also what the bridge needs after its input stream
++	 * was stopped: its register map is intact, but the TX video state
++	 * machine no longer produces the output timing, and the panel shows
++	 * coloured stripes.  The "experiment A" bring-up keeps the bootloader
++	 * state on the first enable and only sends the pulse from the second
++	 * one on (see it6112_resume_setup()).
++	 *
+ 	 * NOTE on TX 0x06 bit2: the routine at 0x5601f124 in the LK dump does
+ 	 * insert a set_bits(0x06, 0x04, 0x04) between those two writes, and the
+ 	 * first version of this fix copied it.  It must not be copied:
+@@ -780,9 +852,13 @@ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ 	 *
+ 	 * So bit2 is left alone: this driver never writes 0x06 at all.
+ 	 */
+-	it6112_mipi_tx_write(ctx, 0x05, 0xfe);
+-	it6112_mipi_tx_write(ctx, 0x05, 0x00);
+-	msleep(10);
++	resync = ctx->bridge_owned ||
++		 (it6112_resume_mode != IT6112_RESUME_NONE && ctx->enabled_once);
++	if (resync) {
++		it6112_mipi_tx_write(ctx, 0x05, 0xfe);
++		it6112_mipi_tx_write(ctx, 0x05, 0x00);
++		msleep(10);
++	}
+ 
+ 	/* write dcs exit sleep mode */
+ 	it6112_dcs_send(ctx, MIPI_DCS_EXIT_SLEEP_MODE, IT6112_ECC_EXIT_SLEEP);
+@@ -794,6 +870,16 @@ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ 
+ 	it6112_dump(ctx, "post-dcs");
+ 
++	/*
++	 * Experiment A only: on the first bring-up the panel was woken by the
++	 * bootloader, so re-send exit sleep/display on once more after the
++	 * stream has settled.
++	 */
++	if (!ctx->bridge_owned)
++		schedule_delayed_work(&ctx->dcs_retry, msecs_to_jiffies(200));
++
++	ctx->enabled_once = true;
++
+ 	return 0;
+ }
+ 
+@@ -822,20 +908,34 @@ static int boe_tv110xum_lb2_prepare(struct drm_panel *panel)
+ 
+ 	if (it6112_skip_init) {
+ 		/*
+-		 * Experiment A: no power sequencing, no reset pulse and no
+-		 * register init - the bridge has to stay exactly as the
+-		 * bootloader left it.  Enabling an already enabled rail is a
+-		 * no-op, and the panel needs vpos/vneg anyway, so only the
+-		 * rails are touched.
++		 * Experiment A: on the first bring-up there is no power
++		 * sequencing, no reset pulse and no register init - the bridge
++		 * has to stay exactly as the bootloader left it.  The panel
++		 * needs vpos/vneg anyway, so only the rails are touched.
++		 *
++		 * Every later ->prepare() follows a stream stop (DPMS off or a
++		 * system suspend with the screen blanked) and is where the
++		 * resume recovery happens: "full" re-runs the vendor reset
++		 * pulse and re-initialises both halves of the bridge before
++		 * the DSI stream is started again.  "pulse" leaves that to the
++		 * TX pulse in ->enable().
+ 		 */
+-		ret = regulator_bulk_enable(ARRAY_SIZE(ctx->regulators),
+-					    ctx->regulators);
++		ret = it6112_rails_enable(ctx);
+ 		if (ret) {
+ 			dev_err(&ctx->dsi->dev,
+ 				"failed to enable the panel rails: %d\n", ret);
+ 			return ret;
+ 		}
+ 
++		if (ctx->enabled_once &&
++		    it6112_resume_mode == IT6112_RESUME_FULL) {
++			it6112_reset_pulse(ctx);
++			it6112_bridge_init(ctx);
++			ctx->bridge_owned = true;
++			dev_info(&ctx->i2c_mipi_tx->dev,
++				 "bridge re-initialised for resume\n");
++		}
++
+ 		it6112_dump(ctx, "pre-stream");
+ 
+ 		return 0;
+@@ -851,6 +951,7 @@ static int boe_tv110xum_lb2_prepare(struct drm_panel *panel)
+ 	it6112_reset_pulse(ctx);
+ 
+ 	it6112_bridge_init(ctx);
++	ctx->bridge_owned = true;
+ 
+ 	dev_info(&ctx->i2c_mipi_tx->dev, "bridge initialised\n");
+ 
+@@ -869,15 +970,17 @@ static int boe_tv110xum_lb2_unprepare(struct drm_panel *panel)
+ 	/*
+ 	 * Experiment A: this driver never powered the bridge up, so it must not
+ 	 * power it down either - pulsing reset and dropping EXT_PWR here would
+-	 * destroy the bootloader state for good.
++	 * destroy the bootloader state for good.  The same holds after a "full"
++	 * resume recovery: the vendor keeps the bridge powered for the whole
++	 * system lifetime and only re-initialises it, so leave the rails on and
++	 * let ->prepare() re-init the chip.
+ 	 */
+ 	if (it6112_skip_init)
+ 		return 0;
+ 
+ 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
+ 
+-	regulator_bulk_disable(ARRAY_SIZE(ctx->regulators),
+-			       ctx->regulators);
++	it6112_rails_disable(ctx);
+ 
+ 	/* LK powers down the other way round: DVDD first, 23 ms, EXT_PWR. */
+ 	msleep(23);
+@@ -1086,8 +1189,7 @@ static int it6112_bridge_probe(struct i2c_client *i2c)
+ 
+ 		pid = it6112_get_pid(ctx);
+ 
+-		regulator_bulk_disable(ARRAY_SIZE(ctx->regulators),
+-				       ctx->regulators);
++		it6112_rails_disable(ctx);
+ 		gpiod_set_value_cansleep(ctx->ext_pwr_gpio, 0);
+ 
+ 		if (pid < 0)

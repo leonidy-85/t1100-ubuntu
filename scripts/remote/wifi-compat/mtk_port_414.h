@@ -73,4 +73,13 @@ static inline int rtc_gpio_enable_32k(int user)
 	return 0;
 }
 
+/*
+ * 7.3 fbdev notifier no longer defines FB_EVENT_BLANK (only FB_REGISTERED /
+ * FB_UNREGISTERED).  The WMT early-suspend hook only cares about blank
+ * events, so give it an unused id: the callback stays registered but inert.
+ */
+#ifndef FB_EVENT_BLANK
+#define FB_EVENT_BLANK			0x07
+#endif
+
 #endif /* __MTK_WIFI_PORT_414_H__ */

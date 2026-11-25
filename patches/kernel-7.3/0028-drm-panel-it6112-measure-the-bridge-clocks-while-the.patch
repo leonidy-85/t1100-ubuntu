@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Mon, 2 Nov 2026 22:00:52 +0300
+Subject: [PATCH] drm/panel: it6112: measure the bridge clocks while the stream
+ is running
+
+The reference driver measures RCLK/MCLK at the end of ->prepare(). That
+cannot say anything about the DSI link: drm_atomic_bridge_chain_pre_enable()
+walks the bridge chain in reverse (drivers/gpu/drm/drm_bridge.c:746), so the
+panel's ->prepare() runs *before* mtk_dsi_bridge_atomic_pre_enable() powers
+the MTK PHY and long before mtk_dsi_bridge_atomic_enable() starts the video
+stream. The 199 MHz reported on the T1100 is therefore a free-running
+number, not the received byte clock.
+
+Move the measurement to the start of ->enable(), which the atomic helper
+calls after the DSI bridge was enabled (forward order, same file), so RCLK
+and MCLK now describe the bridge with a live 4-lane stream. With
+1600x2176@60 RGB888 at 1534788 kbps per lane the RX byte clock is
+1534788/8 = 191.8 MHz; a value far away from that - or one that does not
+change when the stream starts - means the RX half is not tracking the link.
+
+Also dump the register blocks the driver writes (tx 0x00-0x2c, 0x44-0x47,
+0xb0; rx 0x00-0x2c, 0x80-0xa4) at three points: after ->prepare() (no
+stream), when ->enable() starts (stream up) and after the DCS packets.
+There is no public IT6112 register map, so this readback is the only way
+to tell whether the init stuck, and the pre-stream/post-stream diff shows
+which RX registers move once the link is alive.
+
+The DSI packet path (0x70-0x77) is not dumped on purpose: 0x73 is a
+byte FIFO that takes the 4-byte short packet header (DI, data0, data1,
+ECC) and 0x74/0x75 are the send trigger; reading it may consume a packet.
+---
+ .../drm/panel/panel-it6112-boe-tv110xum-lb2.c | 61 ++++++++++++++++++-
+ 1 file changed, 60 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+index 80f29a83f..d8880d2cf 100644
+--- a/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
++++ b/drivers/gpu/drm/panel/panel-it6112-boe-tv110xum-lb2.c
+@@ -267,13 +267,67 @@ static void it6112_bridge_init(struct it6112_ctx *ctx)
+ 	it6112_mipi_power_on(ctx);
+ 	it6112_tv110xum_lb2_init_rx(ctx);
+ 	it6112_tv110xum_lb2_init_tx(ctx);
+-	it6112_mipi_rx_calc_clk(ctx);
++}
++
++/*
++ * Read back a register block of one half of the bridge.
++ *
++ * There is no public IT6112 datasheet, so the only way to tell a bridge that
++ * accepted the init from one that never latched it is to compare what the
++ * registers read with what the driver wrote. Registers 0x70..0x77 (the DSI
++ * packet path used for DCS) are deliberately not dumped: they behave like a
++ * FIFO/trigger and a read may consume or clear a pending packet.
++ */
++static void it6112_dump_range(struct it6112_ctx *ctx, struct i2c_client *client,
++			      const char *tag, const char *what, u8 first,
++			      u8 last)
++{
++	u8 buf[64];
++	int i, ret, len = last - first + 1;
++
++	if (len > sizeof(buf))
++		return;
++
++	for (i = 0; i < len; i++) {
++		ret = i2c_smbus_read_byte_data(client, first + i);
++		if (ret < 0) {
++			dev_warn(&client->dev, "%s: %s %02x..%02x unreadable (%d)\n",
++				 tag, what, first, last, ret);
++			return;
++		}
++		buf[i] = ret;
++	}
++
++	dev_info(&client->dev, "%s: %s %02x-%02x: %*ph\n", tag, what, first,
++		 last, len, buf);
++}
++
++static void it6112_dump(struct it6112_ctx *ctx, const char *tag)
++{
++	it6112_dump_range(ctx, ctx->i2c_mipi_tx, tag, "tx", 0x00, 0x2c);
++	it6112_dump_range(ctx, ctx->i2c_mipi_tx, tag, "tx", 0x44, 0x47);
++	it6112_dump_range(ctx, ctx->i2c_mipi_tx, tag, "tx", 0xb0, 0xb0);
++	it6112_dump_range(ctx, ctx->i2c_mipi_rx, tag, "rx", 0x00, 0x2c);
++	it6112_dump_range(ctx, ctx->i2c_mipi_rx, tag, "rx", 0x80, 0xa4);
+ }
+ 
+ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ {
+ 	struct it6112_ctx *ctx = panel_to_it6112(panel);
+ 
++	/*
++	 * ->enable() runs after the DSI bridge was enabled
++	 * (drm_atomic_bridge_chain_enable(), forward order:
++	 * drivers/gpu/drm/drm_bridge.c), i.e. the SoC is already sending the
++	 * video stream here. Measuring the bridge clocks in ->prepare() - as
++	 * the reference driver did - is useless: ->prepare() runs *before*
++	 * mtk_dsi powers its PHY on (drm_atomic_bridge_chain_pre_enable()
++	 * walks the chain in reverse), so the counters only ever see a
++	 * free-running clock.
++	 */
++	it6112_dump(ctx, "stream-on");
++	it6112_mipi_rx_calc_clk(ctx);
++
+ 	it6112_mipi_tx_set_bits(ctx, 0x11, 0x80, 0x80);
+ 	msleep(10);
+ 
+@@ -300,6 +354,8 @@ static int boe_tv110xum_lb2_enable(struct drm_panel *panel)
+ 	it6112_mipi_tx_write(ctx, 0x05, 0xfe);
+ 	it6112_mipi_tx_write(ctx, 0x05, 0x00);
+ 
++	it6112_dump(ctx, "post-dcs");
++
+ 	return 0;
+ }
+ 
+@@ -356,6 +412,9 @@ static int boe_tv110xum_lb2_prepare(struct drm_panel *panel)
+ 
+ 	dev_info(&ctx->i2c_mipi_tx->dev, "bridge initialised\n");
+ 
++	/* No DSI stream yet (see ->enable()): this is the "idle" snapshot. */
++	it6112_dump(ctx, "pre-stream");
++
+ 	return 0;
+ }
+ 

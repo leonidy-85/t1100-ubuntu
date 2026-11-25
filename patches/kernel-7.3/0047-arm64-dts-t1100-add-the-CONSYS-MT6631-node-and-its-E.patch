@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonid <leonidy.1985@yandex.ru>
+Date: Fri, 13 Nov 2026 10:41:47 +0300
+Subject: [PATCH] arm64: dts: t1100: add the CONSYS (MT6631) node and its EMI
+ reserve
+
+The vendor WMT stack (out-of-tree, patches/wifi in t1100-ubuntu) binds to
+mediatek,mt6771-consys and takes all of its addresses from that node: the
+CONN MCU window at 0x18070000 (chip id 0x18070008, MCR doorbell, ROM_DESEL),
+TOP_RGU 0x10007000 (CPU SW reset), INFRACFG_AO 0x10001000 (AXI bus protect)
+and SPM 0x10006000 (CONN power domain, 0x1000632c).
+
+Without the node the driver never probes, and without memory-region it has no
+place to put the ROM patch and firmware, so the chip stays in ROM (cpupcr
+0x1170, chip id never reads 0x788).
+
+The 2 MiB CONNSYS shared RAM is an alloc-ranges region, not a 'reg': LK spins
+forever in reserved_memory_conflict_check when a /reserved-memory child
+overlaps a region it reserved itself (docs/lk-dtb-rules.md).
+
+Values match the stock DTB (refs/stock-mt6771.dts) and the MT6771 node in the
+Unihertz Titan ALPS tree.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 60 +++++++++++++++++++
+ 1 file changed, 60 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 4d389bd23..3f42cc84c 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -756,6 +756,66 @@ &mt6358_vcn33_reg {
+ 	regulator-boot-on;
+ };
+ 
++/*
++ * CONNSYS (MT6631 combo, CONSYS_6771) — the node the vendor WMT stack binds to.
++ *
++ * Neither mainline 6.12 nor our port has a driver for this block in-tree: it
++ * comes from the out-of-tree vendor stack (patches/wifi/, docs/wifi-port.md).
++ * The node is still needed, because that stack takes everything from it:
++ *
++ *   reg[0] 0x18070000  CONN_MCU_CONFIG  - chip id (0x18070008 = 0x0788), MCR,
++ *                                         WFDMA doorbell, ROM_DESEL
++ *   reg[1] 0x10007000  TOP_RGU          - CPU SW reset (bit 12, key 0x88)
++ *   reg[2] 0x10001000  INFRACFG_AO      - AXI bus protect (0x100012a4)
++ *   reg[3] 0x10006000  SPM              - CONN power domain (0x1000632c)
++ *
++ * The addresses, IRQs and the memory-region shape are the ones the stock DTB
++ * uses (refs/stock-mt6771.dts) and they match the MT6771 node published in the
++ * Unihertz Titan ALPS tree, i.e. they are not guessed.
++ *
++ * Supplies: vcn18/vcn28 - the combo's 1.8 V and 2.8 V rails; vcn33 is already
++ * kept on above (BT/Wi-Fi selector on the shared MT6358 LDO).
++ *
++ * No "conn" clock here on purpose: see above - mainline has no such provider
++ * and listing a phandle that does not exist would only break the build.
++ */
++/ {
++	consys: consys@18070000 {
++		compatible = "mediatek,mt6771-consys";
++		reg = <0 0x18070000 0 0x1000>,
++		      <0 0x10007000 0 0x100>,
++		      <0 0x10001000 0 0x1000>,
++		      <0 0x10006000 0 0x1000>;
++		interrupts = <GIC_SPI 289 IRQ_TYPE_LEVEL_LOW>,
++			     <GIC_SPI 291 IRQ_TYPE_LEVEL_LOW>;
++		vcn18-supply = <&mt6358_vcn18_reg>;
++		vcn28-supply = <&mt6358_vcn28_reg>;
++		vcn33-supply = <&mt6358_vcn33_reg>;
++		memory-region = <&consys_reserve_memory>;
++		status = "okay";
++	};
++};
++
++/*
++ * CONNSYS shared RAM: 2 MiB, 2 MiB aligned, no fixed address - the kernel picks
++ * one inside the window the stock DT gives (0x40000000-0xc0000000; the stock
++ * boot landed on 0xbfc00000). It is deliberately an alloc-ranges region and not
++ * a `reg': LK runs reserved_memory_conflict_check over /reserved-memory children
++ * and spins forever if one of them overlaps a region it reserved itself
++ * (docs/lk-dtb-rules.md, and the ramoops note at the bottom of this file).
++ * Without this region the WMT stack has nowhere to load the ROM patch and the
++ * firmware, and the chip never leaves ROM (cpupcr stays 0x1170).
++ */
++&{/reserved-memory} {
++	consys_reserve_memory: consys-reserve-memory {
++		compatible = "mediatek,consys-reserve-memory";
++		no-map;
++		size = <0 0x200000>;
++		alignment = <0 0x200000>;
++		alloc-ranges = <0 0x40000000 0 0x80000000>;
++	};
++};
++
+ &mt6358regulator {
+ 	vsys-ldo1-supply = <&reg_vsys>;
+ 	vsys-ldo2-supply = <&reg_vsys>;

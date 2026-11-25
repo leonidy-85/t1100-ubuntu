@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: bringup <bringup@t1100.local>
+Date: Fri, 30 Oct 2026 23:11:00 +0300
+Subject: [PATCH] arm64: dts: t1100: own non-nomap ramoops region at 0x70000000
+
+LK's pstore block is nomap, so mainline ramoops cannot memremap() it and
+/sys/fs/pstore stayed empty. A 1 MiB reserved region inside System RAM that
+does not overlap any LK reservation (validated) restores the log channel.
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 21 +++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index 10097d7ca..9aa12a342 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -620,3 +620,24 @@ &dsi_out {
+  * LK compatibility layer: must be included last (docs/lk-dtb-rules.md).
+  */
+ #include "mt6771-fplus-t1100-lk-compat.dtsi"
++
++/*
++ * Own pstore/ramoops region. LK reserves its ram_console/ramoops blocks as
++ * `nomap`, and mainline ramoops cannot memremap() a nomap region, so
++ * /sys/fs/pstore stays empty. This 1 MiB block sits inside System RAM, does
++ * not overlap any LK reservation (checked by check-lk-dtb.py) and is not
++ * nomap, so pstore works and survives a warm reboot.
++ */
++&{/reserved-memory} {
++	#address-cells = <2>;
++	#size-cells = <2>;
++	ranges;
++
++	ramoops@70000000 {
++		compatible = "ramoops";
++		reg = <0 0x70000000 0 0x100000>;
++		record-size  = <0x20000>;
++		console-size = <0x80000>;
++		pmsg-size    = <0x20000>;
++	};
++};

@@ -1,0 +1,99 @@
+diff --git a/common_main/core/wmt_ctrl.c b/common_main/core/wmt_ctrl.c
+--- a/common_main/core/wmt_ctrl.c
++++ b/common_main/core/wmt_ctrl.c
+@@ -441,7 +441,7 @@
+ #if 0
+ 	INIT_COMPLETION(pWmtDev->cmd_comp);
+ 	pWmtDev->cmd_result = -1;
+-	strncpy(pWmtDev->cCmd, pCmdStr, NAME_MAX);
++	strscpy(pWmtDev->cCmd, pCmdStr, NAME_MAX);
+ 	pWmtDev->cCmd[NAME_MAX] = '\0';
+ 	wake_up_interruptible(&pWmtDev->cmd_wq);
+ #endif
+diff --git a/common_main/linux/osal.c b/common_main/linux/osal.c
+--- a/common_main/linux/osal.c
++++ b/common_main/linux/osal.c
+@@ -119,12 +119,12 @@
+ 
+ PINT8 osal_strcpy(PINT8 dst, const PINT8 src)
+ {
+-	return strncpy(dst, src, strlen(src)+1);
++	return memcpy(dst, src, strlen(src)+1);
+ }
+ 
+ PINT8 osal_strncpy(PINT8 dst, const PINT8 src, UINT32 len)
+ {
+-	return strncpy(dst, src, len);
++	strscpy(dst, src, len); return dst;
+ }
+ 
+ PINT8 osal_strcat(PINT8 dst, const PINT8 src)
+@@ -788,7 +788,7 @@
+ 
+ static VOID osal_timer_timeout(struct timer_list *timer)
+ {
+-	P_OSAL_TIMER pTimer = from_timer(pTimer, timer, timer);
++	P_OSAL_TIMER pTimer = timer_container_of(pTimer, timer, timer);
+ 
+ 	if (pTimer->timeoutHandler)
+ 		pTimer->timeoutHandler(pTimer->timeroutHandlerData);
+@@ -818,7 +818,7 @@
+ {
+ 	struct timer_list *timer = &pTimer->timer;
+ 
+-	del_timer(timer);
++	timer_delete(timer);
+ 	return 0;
+ }
+ 
+@@ -826,7 +826,7 @@
+ {
+ 	struct timer_list *timer = &pTimer->timer;
+ 
+-	del_timer_sync(timer);
++	timer_delete_sync(timer);
+ 	return 0;
+ }
+ 
+diff --git a/debug_utility/connsys_debug_utility.c b/debug_utility/connsys_debug_utility.c
+--- a/debug_utility/connsys_debug_utility.c
++++ b/debug_utility/connsys_debug_utility.c
+@@ -144,7 +144,7 @@
+ 
+ /* connlog when suspend */
+ static int connlog_alarm_init(void);
+-static enum alarmtimer_restart alarm_timer_handler(struct alarm *alarm, ktime_t);
++static void alarm_timer_handler(struct alarm *alarm, ktime_t);
+ static inline bool connlog_is_alarm_enable(void);
+ static int connlog_set_alarm_timer(void);
+ static int connlog_cancel_alarm_timer(void);
+@@ -536,7 +536,7 @@
+ 	ktime_t kt;
+ 
+ 	kt = ktime_set(gDev.log_alarm.alarm_sec, 0);
+-	alarm_start_relative(&gDev.log_alarm.alarm_timer, kt);
++	alarm_start_timer(&gDev.log_alarm.alarm_timer, kt, true);
+ 
+ 	pr_info("[connsys_log_alarm] alarm timer enabled timeout=[%d]", gDev.log_alarm.alarm_sec);
+ 	return 0;
+@@ -658,7 +658,7 @@
+ * RETURNS
+ *  void
+ *****************************************************************************/
+-static enum alarmtimer_restart alarm_timer_handler(struct alarm *alarm,
++static void alarm_timer_handler(struct alarm *alarm,
+ 	ktime_t now)
+ {
+ 	ktime_t kt;
+@@ -675,10 +675,9 @@
+ 
+ 	spin_lock_irqsave(&gDev.log_alarm.alarm_lock, gDev.log_alarm.flags);
+ 	kt = ktime_set(gDev.log_alarm.alarm_sec, 0);
+-	alarm_start_relative(&gDev.log_alarm.alarm_timer, kt);
++	alarm_start_timer(&gDev.log_alarm.alarm_timer, kt, true);
+ 	spin_unlock_irqrestore(&gDev.log_alarm.alarm_lock, gDev.log_alarm.flags);
+ 
+-	return ALARMTIMER_NORESTART;
+ }
+ 
+ /*****************************************************************************

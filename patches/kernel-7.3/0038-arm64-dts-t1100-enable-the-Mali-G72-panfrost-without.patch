@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: gpu-mesa <gpu-mesa@t1100.local>
+Date: Mon, 9 Nov 2026 21:15:35 +0300
+Subject: [PATCH] arm64: dts: t1100: enable the Mali-G72 (panfrost), without
+ GPU DVFS
+
+The GPU node comes from mt8183.dtsi and was only switched off in the board
+DTS: gpu@13040000 with "mediatek,mt8183b-mali", the mfgcfg clock gate
+(CLK_MFG_BG3D at 0x13000000), the three MFG power domains ("core0",
+"core1", "core2") and the mt8183 GPU OPP table.  Nothing else is needed for
+panfrost to bind - it has its own MMU (no iommus/iommu node), resets are
+optional (the node has none, as on mt8183) and the "speed-bin" nvmem cell
+is optional too (panfrost_read_speedbin(): -ENOENT means "no speedbins").
+
+Cross-checks for MT6771:
+ - GPU 0x13040000, SPI 278 (job), 279 (mmu), 280 (gpu) and mfgcfg
+   0x13000000 match the stock device tree
+   (refs/stock-mt6771.dts, "mali@13040000" / "mfgcfg@13000000") and
+   docs/research.md;
+ - the vendor gpufreq node lists exactly the five MTCMOS of mt8183's MFG
+   hierarchy - mtcmos_mfg_async, mtcmos_mfg, mtcmos_mfg_core0,
+   mtcmos_mfg_core1, mtcmos_mfg_core2 - which is the strongest available
+   evidence that the mt8183 scpsys domain IDs and offsets apply here
+   (there is no public MT6771 TRM);
+ - the MFG_2D bus protection writes the same infracfg registers
+   (TOP_AXI_PROT_EN_1_*/EN_*) that the already working DISP domain uses;
+ - refs/affenull-mt6771 (upstream MT6771 port, PennyOS on Planet Cosmo) and
+   refs/mt6771-next (Arseniy Velikanov's port of this very tablet) both
+   leave &gpu enabled with nothing but mali-supply.
+
+DVFS: operating-points-v2 is dropped on purpose.  The vendor driver keeps
+VSRAM_GPU exactly 100 mV above VGPU and changes both together (stock 4.14
+log, refs/device/dmesg-stock.txt.gz: "VGPU is enabled = 1 (900 mV),
+VSRAM_GPU is enabled = 1 (1000 mV)" and "current freq = 800000 KHz,
+current volt = 825000 uV ... g_cur_opp_vsram_volt = 92500").  panfrost's
+mt8183b variant knows a single supply and the generic regulator coupler
+cannot be used on this PMIC (it needs always-on rails and mt6358's probe
+aborts on -ENOTSUPP), so letting the OPP table drive VGPU down to 625 mV
+would leave VSRAM at 1000 mV - a 375 mV split where the hardware allows
+100 mV.  Without an OPP table panfrost skips devfreq
+(panfrost_devfreq_init() returns after -ENODEV) and only enables VGPU at
+the voltage the bootloader left; the GPU runs at the rate the mfg mux
+already has (512 MHz in the stock log, before gpufreq raised it to 800),
+which is enough for GBM/EGL bring-up.  sram-supply goes away with it: the
+mt8183b variant never requests it (the binding only allows it for the
+non-b "mediatek,mt8183-mali" compatible,
+Documentation/devicetree/bindings/gpu/arm,mali-bifrost.yaml), and VSRAM_GPU
+is kept alive by regulator-always-on instead.
+
+Not verified on hardware yet: this image has not been flashed.
+
+Signed-off-by: gpu-mesa <gpu-mesa@t1100.local>
+---
+ .../boot/dts/mediatek/mt6771-fplus-t1100.dts  | 63 ++++++++++++++-----
+ 1 file changed, 46 insertions(+), 17 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+index b3479760c..d8213b5bb 100644
+--- a/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6771-fplus-t1100.dts
+@@ -595,29 +595,51 @@ &u2port0 {
+ };
+ 
+ /*
+- * GPU: Mali-G72 MP3, identical core to MT8183, so panfrost binds through
+- * "mediatek,mt8183b-mali". VGPU is the buck that feeds the shader cores,
+- * VSRAM_GPU its SRAM rail; panfrost enables sram first and raises VGPU
+- * afterwards (panfrost_regulator_init()), which is why the two rails are
+- * described as separate supplies instead of being tied together with
+- * regulator-coupled-with. The generic coupler only accepts *always-on*
+- * regulators (drivers/regulator/core.c: "Coupling of a non always-on
+- * regulator is unimplemented"), and mt6358_regulator_probe() aborts on the
+- * first rail it cannot register - one -ENOTSUPP for VGPU therefore removed
+- * *every* MT6358 rail, which is what kept eMMC, USB and the whole MM stack
+- * in deferred probe. Same wiring as refs/affenull-mt6771 (MT6771 upstream
+- * port) and mt8183-kukui.dtsi.
++ * GPU: Mali-G72 MP3, the same Bifrost core as MT8183, so panfrost binds
++ * through "mediatek,mt8183b-mali" inherited from mt8183.dtsi. That variant
++ * consumes a single supply, "mali" (VGPU), and expects the three MFG power
++ * domains ("core0", "core1", "core2", with MFG_ASYNC and MFG as their
++ * parents). VSRAM_GPU is the SRAM rail of the same block: it is *not*
++ * requested by the driver, so it is kept on with regulator-always-on below -
++ * drop that and regulator_late_cleanup() kills the GPU SRAM.
+  *
+- * Still off: enabling the GPU powers up MFG, which is not needed for
+- * eMMC/USB/KDE bring-up and is the only consumer that writes the MFG
+- * registers nobody has verified on MT6771 yet.
++ * Regulator coupling is deliberately not used: the generic coupler only
++ * accepts *always-on* regulators (drivers/regulator/core.c, "Coupling of a
++ * non always-on regulator is unimplemented") and mt6358_regulator_probe()
++ * aborts on the first rail it cannot register, so one -ENOTSUPP for VGPU
++ * removed *every* MT6358 rail and kept eMMC, USB and the whole MM stack in
++ * deferred probe (docs/bringup-log.md, 30.10).
++ *
++ * DVFS is off for the first bring-up: without operating-points-v2 panfrost
++ * skips devfreq/OPP entirely (panfrost_devfreq_init() -> -ENODEV -> "continue
++ * without devfreq") and only enables VGPU through panfrost_regulator_init(),
++ * leaving both rails at the boot values the bootloader and the vendor
++ * gpufreq driver leave behind. The stock 4.14 log (refs/device/dmesg-stock)
++ * prints those values and the reason they must not be moved independently:
++ *
++ *   VGPU is enabled = 1 (900 mV), VSRAM_GPU is enabled = 1 (1000 mV)
++ *   current freq = 800000 KHz, current volt = 825000 uV
++ *        g_cur_opp_volt = 82500, g_cur_opp_vsram_volt = 92500
++ *
++ * i.e. the vendor keeps VSRAM exactly 100 mV above VGPU (the limit
++ * mt8183-kukui encodes as regulator-coupled-max-spread = <100000>) and moves
++ * both rails together. We cannot: one supply per driver + no coupler, so an
++ * OPP-driven VGPU drop to 625-825 mV would leave VSRAM at 1000 mV, i.e. up to
++ * 375 mV apart. At probe the mfg mux reads 512 MHz (the vendor driver read
++ * 512001 kHz before it raised the rate to 800 MHz), which is a perfectly
++ * usable GPU clock, so nothing is lost by not touching it: the GPU runs at
++ * the rate the bootloader left. Revisit DVFS once VSRAM can be driven
++ * together with VGPU (always-on coupling or a OPP table with both rails).
+  */
+ &gpu {
+ 	mali-supply = <&mt6358_vgpu_reg>;
+-	sram-supply = <&mt6358_vsram_gpu_reg>;
+-	status = "disabled";
++	/delete-property/ operating-points-v2;
++	status = "okay";
+ };
+ 
++/* Only the GPU used it; leaving it behind would invite a DVFS enable by accident. */
++/delete-node/ &gpu_opp_table;
++
+ /*
+  * The two MFG power domains carry MTK_SCPD_DOMAIN_SUPPLY, and since 6.12
+  * mtk-pm-domains looks the regulator up in the *domain* node itself
+@@ -635,6 +657,13 @@ &mfg {
+ 	domain-supply = <&mt6358_vgpu_reg>;
+ };
+ 
++/*
++ * Bounds from the vendor tables: the GPU OPPs top out at 800 MHz / 825 mV
++ * VGPU, the bootloader hands the kernel 900 mV VGPU and 1000 mV VSRAM_GPU
++ * (both printed by the stock gpufreq probe, see &gpu above). Nothing in the
++ * mainline tree writes these rails today - panfrost only enables VGPU - but
++ * the limits keep a future DVFS table from going outside the PMIC's range.
++ */
+ &mt6358_vgpu_reg {
+ 	regulator-min-microvolt = <625000>;
+ 	regulator-max-microvolt = <900000>;
